@@ -1,0 +1,4 @@
+github.com/openkvlab/boltdb v0.0.0-20251208110043-2c67ff523b74 h1:HzmgtN2SmdJeH0E90F9lAVYQEClZ4debNDPC8uW6TTU=
+github.com/openkvlab/boltdb v0.0.0-20251208110043-2c67ff523b74/go.mod h1:e9ry30UeKge8eev4O7tflV45xf4LSb4uInJoAJFl8oI=
+golang.org/x/sys v0.38.0 h1:3yZWxaJjBmCWXqhN1qh02AkOnCQ1poK6oF+a7xWL6Gc=
+golang.org/x/sys v0.38.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=

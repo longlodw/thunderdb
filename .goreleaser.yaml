@@ -1,0 +1,20 @@
+# .goreleaser.yaml
+version: 2
+
+project_name: thunder
+
+# This is a library, so we skip building binaries.
+builds:
+  - skip: true
+
+# Disable checksums as there are no artifacts.
+checksum:
+  disable: true
+
+# Generate a changelog for the release.
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
