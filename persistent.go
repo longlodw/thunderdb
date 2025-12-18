@@ -1,4 +1,4 @@
-package relations
+package thunder
 
 import (
 	"fmt"
@@ -6,12 +6,11 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/longlodw/thunder"
 	"github.com/openkvlab/boltdb"
 	"github.com/openkvlab/boltdb/errors"
 )
 
-// PersistentRelation represents an object relation in the database.
+// Persistent represents an object relation in the database.
 type Persistent struct {
 	data        *dataStorage
 	indexes     *indexStorage
@@ -24,7 +23,7 @@ type Persistent struct {
 func CreatePersistent(
 	tnx *boltdb.Tx,
 	relation string,
-	maUn thunder.MarshalUnmarshaler,
+	maUn MarshalUnmarshaler,
 	columns []string,
 	indexes map[string][]string,
 ) (*Persistent, error) {
@@ -85,7 +84,7 @@ func CreatePersistent(
 func LoadPersistent(
 	tnx *boltdb.Tx,
 	relation string,
-	maUn thunder.MarshalUnmarshaler,
+	maUn MarshalUnmarshaler,
 ) (*Persistent, error) {
 	bucket := tnx.Bucket([]byte(relation))
 	if bucket == nil {
@@ -109,15 +108,15 @@ func LoadPersistent(
 		return nil, err
 	}
 
-	indexesStore, err := newIndex(bucket, maUn)
+	indexesStore, err := loadIndex(bucket, maUn)
 	if err != nil {
 		return nil, err
 	}
-	reverseIdxStore, err := newReverseIndex(bucket, maUn)
+	reverseIdxStore, err := loadReverseIndex(bucket, maUn)
 	if err != nil {
 		return nil, err
 	}
-	dataStore, err := newData(bucket, maUn)
+	dataStore, err := loadData(bucket, maUn)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +129,13 @@ func LoadPersistent(
 		columns:     columns,
 		relation:    relation,
 	}, nil
+}
+
+func DeletePersistent(tnx *boltdb.Tx, relation string) error {
+	if err := tnx.DeleteBucket([]byte(relation)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (pr *Persistent) Insert(obj map[string]any) error {
@@ -165,7 +171,7 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 	return nil
 }
 
-func (pr *Persistent) Delete(ops ...thunder.Op) error {
+func (pr *Persistent) Delete(ops ...Op) error {
 	iterEntries, err := pr.iter(ops...)
 	if err != nil {
 		return err
@@ -203,7 +209,7 @@ func (pr *Persistent) Delete(ops ...thunder.Op) error {
 	return nil
 }
 
-func (pr *Persistent) Select(ops ...thunder.Op) (iter.Seq2[map[string]any, error], error) {
+func (pr *Persistent) Select(ops ...Op) (iter.Seq2[map[string]any, error], error) {
 	iterEntries, err := pr.iter(ops...)
 	if err != nil {
 		return nil, err
@@ -218,13 +224,28 @@ func (pr *Persistent) Select(ops ...thunder.Op) (iter.Seq2[map[string]any, error
 	}, nil
 }
 
-func (pr *Persistent) iter(ops ...thunder.Op) (iter.Seq2[entry, error], error) {
+func (pr *Persistent) Name() string {
+	return pr.relation
+}
+
+func (pr *Persistent) Columns() []string {
+	return pr.columns
+}
+
+func (pr *Persistent) Project(mapping map[string]string) (*Projection, error) {
+	return newProjection(pr, mapping)
+}
+
+func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 	idsSet := make(map[string]int)
 	indexCount := 0
-	nonIndexedOps := make([]thunder.Op, 0, len(ops))
+	nonIndexedOps := make([]Op, 0, len(ops))
 	for _, op := range ops {
 		if _, ok := pr.indexesMeta[op.Field]; !ok {
 			nonIndexedOps = append(nonIndexedOps, op)
+			if !slices.Contains(pr.columns, op.Field) {
+				return nil, fmt.Errorf("field %s not found in columns", op.Field)
+			}
 			continue
 		}
 		indexCount++
@@ -238,14 +259,51 @@ func (pr *Persistent) iter(ops ...thunder.Op) (iter.Seq2[entry, error], error) {
 		}
 		for idBytes := range iterIds {
 			idStr := string(idBytes)
-			if _, exists := idsSet[idStr]; exists {
-				idsSet[idStr]++
-			} else {
-				idsSet[idStr] = 1
-			}
+			idsSet[idStr]++
 		}
 	}
 	return func(yield func(entry, error) bool) {
+		if indexCount == 0 {
+			c := pr.data.bucket.Cursor()
+			for k, v := c.First(); k != nil; k, v = c.Next() {
+				var value map[string]any
+				if err := pr.data.maUn.Unmarshal(v, &value); err != nil {
+					if !yield(entry{}, err) {
+						return
+					}
+					continue
+				}
+
+				matches := true
+				for _, op := range nonIndexedOps {
+					fieldValue, ok := value[op.Field]
+					if !ok {
+						matches = false
+						break
+					}
+					match, err := apply(fieldValue, op)
+					if err != nil {
+						if !yield(entry{}, err) {
+							return
+						}
+						matches = false
+						break
+					}
+					if !match {
+						matches = false
+						break
+					}
+				}
+				if matches && !yield(entry{
+					id:    k,
+					value: value,
+				}, nil) {
+					return
+				}
+			}
+			return
+		}
+
 		for idStr, count := range idsSet {
 			if count != indexCount {
 				continue
@@ -288,83 +346,63 @@ func (pr *Persistent) iter(ops ...thunder.Op) (iter.Seq2[entry, error], error) {
 	}, nil
 }
 
-func toKey(
-	maUn thunder.MarshalUnmarshaler,
-	keyFields []string,
-	objInt map[string]any,
-) ([]byte, error) {
-	keyObj := make([]any, len(keyFields))
-	for i, k := range keyFields {
-		if val, ok := objInt[k]; ok {
-			keyObj[i] = val
-		} else {
-			return nil, fmt.Errorf("key field %d not found in object", k)
-		}
-	}
-	keyBytes, err := maUn.Marshal(keyObj)
-	if err != nil {
-		return nil, err
-	}
-	return keyBytes, nil
-}
-
-func apply(value any, o thunder.Op) (bool, error) {
+func apply(value any, o Op) (bool, error) {
 	if reflect.TypeOf(value) != reflect.TypeOf(o.Value) {
 		return false, fmt.Errorf("type mismatch: %T vs %T", value, o.Value)
 	}
 	switch o.Type {
-	case thunder.OpEq:
+	case OpEq:
 		if !reflect.ValueOf(value).Comparable() {
 			return false, fmt.Errorf("value is not comparable")
 		}
 		return value == o.Value, nil
-	case thunder.OpNe:
+	case OpNe:
 		if !reflect.ValueOf(value).Comparable() {
 			return false, fmt.Errorf("value is not comparable")
 		}
 		return value != o.Value, nil
-	case thunder.OpGt:
+	case OpGt:
 		if !isOrdered(value) {
 			return false, fmt.Errorf("value is not ordered")
 		}
 		return reflect.ValueOf(value).Interface().(interface {
 			GreaterThan(any) bool
 		}).GreaterThan(o.Value), nil
-	case thunder.OpLt:
+	case OpLt:
 		if !isOrdered(value) {
 			return false, fmt.Errorf("value is not ordered")
 		}
 		return reflect.ValueOf(value).Interface().(interface {
 			LessThan(any) bool
 		}).LessThan(o.Value), nil
-	case thunder.OpGe:
+	case OpGe:
 		if !isOrdered(value) {
 			return false, fmt.Errorf("value is not ordered")
 		}
-		gt, err := apply(value, thunder.Gt(o.Value))
+		gt, err := apply(value, Gt(o.Value))
 		if err != nil {
 			return false, err
 		}
-		eq, err := apply(value, thunder.Eq(o.Value))
+		eq, err := apply(value, Eq(o.Value))
 		if err != nil {
 			return false, err
 		}
 		return gt || eq, nil
-	case thunder.OpLe:
+	case OpLe:
 		if !isOrdered(value) {
 			return false, fmt.Errorf("value is not ordered")
 		}
-		lt, err := apply(value, thunder.Lt(o.Value))
+		lt, err := apply(value, Lt(o.Value))
 		if err != nil {
 			return false, err
 		}
-		eq, err := apply(value, thunder.Eq(o.Value))
+		eq, err := apply(value, Eq(o.Value))
 		if err != nil {
 			return false, err
 		}
 		return lt || eq, nil
 	default:
-		return false, fmt.Errorf("unsupported operator: %s", o.Type)
+		return false, fmt.Errorf("unsupported operator: %d", o.Type)
 	}
 }
 

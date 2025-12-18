@@ -1,22 +1,35 @@
-package relations
+package thunder
 
 import (
-	"github.com/longlodw/thunder"
 	"github.com/openkvlab/boltdb"
 )
 
 type dataStorage struct {
 	bucket *boltdb.Bucket
-	maUn   thunder.MarshalUnmarshaler
+	maUn   MarshalUnmarshaler
 }
 
 func newData(
 	parentBucket *boltdb.Bucket,
-	maUn thunder.MarshalUnmarshaler,
+	maUn MarshalUnmarshaler,
 ) (*dataStorage, error) {
 	bucket, err := parentBucket.CreateBucketIfNotExists([]byte("data"))
 	if err != nil {
 		return nil, err
+	}
+	return &dataStorage{
+		bucket: bucket,
+		maUn:   maUn,
+	}, nil
+}
+
+func loadData(
+	parentBucket *boltdb.Bucket,
+	maUn MarshalUnmarshaler,
+) (*dataStorage, error) {
+	bucket := parentBucket.Bucket([]byte("data"))
+	if bucket == nil {
+		return nil, nil
 	}
 	return &dataStorage{
 		bucket: bucket,

@@ -1,25 +1,38 @@
-package relations
+package thunder
 
 import (
 	"bytes"
 	"iter"
 
-	"github.com/longlodw/thunder"
 	"github.com/openkvlab/boltdb"
 )
 
 type indexStorage struct {
 	bucket *boltdb.Bucket
-	maUn   thunder.MarshalUnmarshaler
+	maUn   MarshalUnmarshaler
 }
 
 func newIndex(
 	parentBucket *boltdb.Bucket,
-	maUn thunder.MarshalUnmarshaler,
+	maUn MarshalUnmarshaler,
 ) (*indexStorage, error) {
 	bucket, err := parentBucket.CreateBucketIfNotExists([]byte("indexes"))
 	if err != nil {
 		return nil, err
+	}
+	return &indexStorage{
+		bucket: bucket,
+		maUn:   maUn,
+	}, nil
+}
+
+func loadIndex(
+	parentBucket *boltdb.Bucket,
+	maUn MarshalUnmarshaler,
+) (*indexStorage, error) {
+	bucket := parentBucket.Bucket([]byte("indexes"))
+	if bucket == nil {
+		return nil, nil
 	}
 	return &indexStorage{
 		bucket: bucket,
@@ -44,7 +57,7 @@ func (idx *indexStorage) insert(name string, keyParts []any, id []byte) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	bk, err := idx.bucket.CreateBucketIfNotExists(key)
+	bk, err := indexBk.CreateBucketIfNotExists(key)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +80,7 @@ func (idx *indexStorage) delete(name string, keyParts []any, seq []byte) error {
 	return bk.Delete(seq)
 }
 
-func (idx *indexStorage) get(operator thunder.OpType, name string, keyParts []any) (iter.Seq[[]byte], error) {
+func (idx *indexStorage) get(operator OpType, name string, keyParts []any) (iter.Seq[[]byte], error) {
 	key, err := idx.toKey(keyParts)
 	if err != nil {
 		return nil, err
@@ -77,7 +90,7 @@ func (idx *indexStorage) get(operator thunder.OpType, name string, keyParts []an
 		return nil, nil
 	}
 	return func(yield func([]byte) bool) {
-		if operator&thunder.OpLt != 0 {
+		if operator&OpLt != 0 {
 			c := idxBk.Cursor()
 			for k, _ := c.First(); k != nil && bytes.Compare(k, key) < 0; k, _ = c.Next() {
 				bk := idxBk.Bucket(k)
@@ -92,18 +105,18 @@ func (idx *indexStorage) get(operator thunder.OpType, name string, keyParts []an
 				}
 			}
 		}
-		if operator&thunder.OpEq != 0 {
+		if operator&OpEq != 0 {
 			bk := idxBk.Bucket(key)
 			if bk != nil {
 				c := bk.Cursor()
 				for k, v := c.First(); k != nil; k, v = c.Next() {
-					if v != nil && !yield(k) {
+					if v != nil && !yield(v) {
 						return
 					}
 				}
 			}
 		}
-		if operator&thunder.OpGt != 0 {
+		if operator&OpGt != 0 {
 			c := idxBk.Cursor()
 			c.Seek(key)
 			for k, _ := c.Next(); k != nil; k, _ = c.Next() {
