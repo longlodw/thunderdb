@@ -122,41 +122,38 @@ func (q *Query) explore(ops ...Op) error {
 					stack = append(stack, downStackItem{part: &part.bodies[i], ops: v.ops, requireUp: v.requireUp})
 				}
 			case *queryBody:
-				for k, partBody := range part.body {
-					// We only process the first part of the body to avoid duplicate results.
-					// This assumes the first part is the "driving" table.
-					if k != 0 {
+				// only first part is needed, because joins are handled in upStackItem
+				if len(part.body) == 0 {
+					continue
+				}
+				partBody := part.body[0]
+				matchedOps := make([]Op, 0, len(v.ops))
+				for _, op := range v.ops {
+					if slices.Contains(partBody.Columns(), op.Field) {
+						matchedOps = append(matchedOps, op)
+					}
+				}
+				switch node := partBody.(type) {
+				case *Persistent:
+					if !v.requireUp {
 						continue
 					}
-
-					matchedOps := make([]Op, 0, len(v.ops))
-					for _, op := range v.ops {
-						if slices.Contains(partBody.Columns(), op.Field) {
-							matchedOps = append(matchedOps, op)
-						}
+					entries, err := node.Select(matchedOps...)
+					if err != nil {
+						return err
 					}
-					switch node := partBody.(type) {
-					case *Persistent:
-						if !v.requireUp {
-							continue
-						}
-						entries, err := node.Select(matchedOps...)
+					for e, err := range entries {
 						if err != nil {
 							return err
 						}
-						for e, err := range entries {
-							if err != nil {
-								return err
-							}
-							stack = append(stack, upStackItem{part: part, value: e, index: k})
-						}
-					case *Query:
-						stack = append(stack, downStackItem{part: node, ops: matchedOps, requireUp: node.backing != nil || v.requireUp})
-					case *QueryProjection:
-						stack = append(stack, downStackItem{part: node.base, ops: matchedOps, requireUp: v.requireUp})
-					default:
-						return fmt.Errorf("unsupported selectable type")
+						stack = append(stack, upStackItem{part: part, value: e, index: 0})
 					}
+				case *Query:
+					stack = append(stack, downStackItem{part: node, ops: matchedOps, requireUp: node.backing != nil || v.requireUp})
+				case *QueryProjection:
+					stack = append(stack, downStackItem{part: node.base, ops: matchedOps, requireUp: v.requireUp})
+				default:
+					return fmt.Errorf("unsupported selectable type")
 				}
 			}
 		case upStackItem:
