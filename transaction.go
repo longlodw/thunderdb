@@ -19,11 +19,7 @@ type Tx struct {
 }
 
 func (tx *Tx) Commit() error {
-	err := tx.tx.Commit()
-	if err != nil {
-		return err
-	}
-	return nil
+	return tx.tx.Commit()
 }
 
 func (tx *Tx) Rollback() error {
@@ -147,6 +143,7 @@ func (tx *Tx) LoadPersistent(
 		indexesMeta: indexes,
 		columns:     columns,
 		relation:    relation,
+		maUn:        maUn,
 	}, nil
 }
 

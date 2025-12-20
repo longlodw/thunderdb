@@ -16,7 +16,7 @@ func OpenDB(maUn MarshalUnmarshaler, path string, mode os.FileMode, options *bol
 	if err != nil {
 		return nil, err
 	}
-	return &DB{db: bdb}, nil
+	return &DB{db: bdb, maUn: maUn}, nil
 }
 
 func (d *DB) Close() error {
@@ -55,5 +55,6 @@ func (d *DB) Begin(writable bool) (*Tx, error) {
 		tempTx:       tempTx,
 		tempDb:       tempDb,
 		tempFilePath: tempFilePath,
+		maUn:         d.maUn,
 	}, nil
 }

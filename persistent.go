@@ -1,6 +1,8 @@
 package thunder
 
 import (
+	"bytes"
+	"cmp"
 	"fmt"
 	"iter"
 	"reflect"
@@ -15,6 +17,7 @@ type Persistent struct {
 	indexesMeta map[string][]string
 	columns     []string
 	relation    string
+	maUn        MarshalUnmarshaler
 }
 
 func (pr *Persistent) Insert(obj map[string]any) error {
@@ -160,7 +163,7 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 						matches = false
 						break
 					}
-					match, err := apply(fieldValue, op)
+					match, err := apply(pr.maUn, fieldValue, op)
 					if err != nil {
 						if !yield(entry{}, err) {
 							return
@@ -202,7 +205,7 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 					matches = false
 					break
 				}
-				match, err := apply(fieldValue, op)
+				match, err := apply(pr.maUn, fieldValue, op)
 				if err != nil {
 					if !yield(entry{}, err) {
 						return
@@ -225,74 +228,77 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 	}, nil
 }
 
-func apply(value any, o Op) (bool, error) {
+func apply(maUn MarshalUnmarshaler, value any, o Op) (bool, error) {
 	if reflect.TypeOf(value) != reflect.TypeOf(o.Value) {
 		return false, fmt.Errorf("type mismatch: %T vs %T", value, o.Value)
 	}
+	v, err := compare(maUn, value, o.Value)
+	if err != nil {
+		return false, err
+	}
 	switch o.Type {
 	case OpEq:
-		if !reflect.ValueOf(value).Comparable() {
-			return false, fmt.Errorf("value is not comparable")
-		}
-		return value == o.Value, nil
+		return v == 0, nil
 	case OpNe:
-		if !reflect.ValueOf(value).Comparable() {
-			return false, fmt.Errorf("value is not comparable")
-		}
-		return value != o.Value, nil
+		return v != 0, nil
 	case OpGt:
-		if !isOrdered(value) {
-			return false, fmt.Errorf("value is not ordered")
-		}
-		return reflect.ValueOf(value).Interface().(interface {
-			GreaterThan(any) bool
-		}).GreaterThan(o.Value), nil
+		return v > 0, nil
 	case OpLt:
-		if !isOrdered(value) {
-			return false, fmt.Errorf("value is not ordered")
-		}
-		return reflect.ValueOf(value).Interface().(interface {
-			LessThan(any) bool
-		}).LessThan(o.Value), nil
+		return v < 0, nil
 	case OpGe:
-		if !isOrdered(value) {
-			return false, fmt.Errorf("value is not ordered")
-		}
-		gt, err := apply(value, Gt(o.Value))
-		if err != nil {
-			return false, err
-		}
-		eq, err := apply(value, Eq(o.Value))
-		if err != nil {
-			return false, err
-		}
-		return gt || eq, nil
+		return v >= 0, nil
 	case OpLe:
-		if !isOrdered(value) {
-			return false, fmt.Errorf("value is not ordered")
-		}
-		lt, err := apply(value, Lt(o.Value))
-		if err != nil {
-			return false, err
-		}
-		eq, err := apply(value, Eq(o.Value))
-		if err != nil {
-			return false, err
-		}
-		return lt || eq, nil
+		return v <= 0, nil
 	default:
 		return false, fmt.Errorf("unsupported operator: %d", o.Type)
 	}
 }
 
-func isOrdered(a any) bool {
-	switch a.(type) {
-	case int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64,
-		float32, float64,
-		string:
-		return true
+func compare[T any](maUn MarshalUnmarshaler, a, b T) (int, error) {
+	var p any = pair[T]{first: a, second: b}
+	switch caseted := p.(type) {
+	case pair[int]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[int8]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[int16]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[int32]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[int64]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[uint]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[uint8]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[uint16]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[uint32]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[uint64]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[uintptr]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[float32]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[float64]:
+		return cmp.Compare(caseted.first, caseted.second), nil
+	case pair[string]:
+		return cmp.Compare(caseted.first, caseted.second), nil
 	default:
-		return false
+		ba, err := maUn.Marshal(a)
+		if err != nil {
+			return 0, fmt.Errorf("failed to marshal value for comparison: %v", err)
+		}
+		bb, err := maUn.Marshal(b)
+		if err != nil {
+			return 0, fmt.Errorf("failed to marshal value for comparison: %v", err)
+		}
+		return bytes.Compare(ba, bb), nil
 	}
+}
+
+type pair[T any] struct {
+	first  T
+	second T
 }
