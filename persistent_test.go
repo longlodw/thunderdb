@@ -571,3 +571,144 @@ func TestPersistent_ComplexTypes(t *testing.T) {
 		t.Errorf("Expected 1 result for map Gt comparison, got %d", count)
 	}
 }
+
+func TestPersistent_CompositeIndex(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	relation := "users"
+	columns := []string{"id", "first", "last", "age"}
+	// Composite index on (first, last)
+	indexes := map[string][]string{
+		"name": {"first", "last"},
+	}
+
+	p, err := tx.CreatePersistent(relation, columns, indexes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert data
+	users := []struct {
+		id    string
+		first string
+		last  string
+		age   float64
+	}{
+		{"1", "John", "Doe", 30},
+		{"2", "Jane", "Doe", 25},
+		{"3", "John", "Smith", 40},
+		{"4", "Alice", "Wonder", 20},
+	}
+
+	for _, u := range users {
+		err := p.Insert(map[string]any{
+			"id":    u.id,
+			"first": u.first,
+			"last":  u.last,
+			"age":   u.age,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	p, err = tx.LoadPersistent(relation)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test 1: Exact match on composite index
+	op := Eq("name", []any{"John", "Doe"})
+	seq, err := p.Select(op)
+	if err != nil {
+		t.Fatalf("Select failed: %v", err)
+	}
+
+	count := 0
+	for val, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+		if val["first"] != "John" || val["last"] != "Doe" {
+			t.Errorf("Expected John Doe, got %v %v", val["first"], val["last"])
+		}
+	}
+	if count != 1 {
+		t.Errorf("Expected 1 result for John Doe, got %d", count)
+	}
+
+	// Test 2: Composite index AND non-indexed filter
+	op1 := Eq("name", []any{"John", "Doe"})
+	op2 := Gt("age", 20.0)
+
+	seq2, err := p.Select(op1, op2)
+	if err != nil {
+		t.Fatalf("Select failed: %v", err)
+	}
+	count = 0
+	for val, err := range seq2 {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+		if val["first"] != "John" {
+			t.Errorf("Expected John, got %v", val["first"])
+		}
+	}
+	if count != 1 {
+		t.Errorf("Expected 1 result, got %d", count)
+	}
+
+	// Test 3: Range scan on composite index
+	opGe := Ge("name", []any{"John"})
+	opLt := Lt("name", []any{"Joho"})
+
+	seq3, err := p.Select(opGe, opLt)
+	if err != nil {
+		t.Fatalf("Select failed: %v", err)
+	}
+
+	count = 0
+	foundDoe := false
+	foundSmith := false
+	for val, err := range seq3 {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+		if val["first"] != "John" {
+			t.Errorf("Expected first name John, got %v", val["first"])
+		}
+		last := val["last"].(string)
+		if last == "Doe" {
+			foundDoe = true
+		}
+		if last == "Smith" {
+			foundSmith = true
+		}
+	}
+
+	if count != 2 {
+		t.Errorf("Expected 2 Johns, got %d", count)
+	}
+	if !foundDoe || !foundSmith {
+		t.Errorf("Expected Doe and Smith, got Doe=%v Smith=%v", foundDoe, foundSmith)
+	}
+}

@@ -92,7 +92,11 @@ func (idx *indexStorage) get(operator OpType, name string, keyParts []any) (iter
 	return func(yield func([]byte) bool) {
 		if operator&OpLt != 0 {
 			c := idxBk.Cursor()
-			for k, _ := c.First(); k != nil && bytes.Compare(k, key) < 0; k, _ = c.Next() {
+			k, _ := c.Seek(key)
+			if k != nil {
+				k, _ = c.Prev()
+			}
+			for ; k != nil; k, _ = c.Prev() {
 				bk := idxBk.Bucket(k)
 				if bk == nil {
 					continue
@@ -118,8 +122,11 @@ func (idx *indexStorage) get(operator OpType, name string, keyParts []any) (iter
 		}
 		if operator&OpGt != 0 {
 			c := idxBk.Cursor()
-			c.Seek(key)
-			for k, _ := c.Next(); k != nil; k, _ = c.Next() {
+			k, _ := c.Seek(key)
+			if k != nil && bytes.Equal(k, key) {
+				k, _ = c.Next()
+			}
+			for ; k != nil; k, _ = c.Next() {
 				bk := idxBk.Bucket(k)
 				if bk == nil {
 					continue
