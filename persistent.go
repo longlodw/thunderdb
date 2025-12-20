@@ -133,7 +133,15 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 		indexCount++
 		values, ok := op.Value.([]any)
 		if !ok {
-			return nil, fmt.Errorf("operation value must be a slice")
+			// If not a slice, assume single value and wrap it if it's a single-column index
+			// We need to check if index is single column?
+			// indexesMeta[op.Field] returns columns.
+			idxCols := pr.indexesMeta[op.Field]
+			if len(idxCols) == 1 {
+				values = []any{op.Value}
+			} else {
+				return nil, fmt.Errorf("operation value must be a slice for composite index %s", op.Field)
+			}
 		}
 		iterIds, err := pr.indexes.get(op.Type, op.Field, values)
 		if err != nil {

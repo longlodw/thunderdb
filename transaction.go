@@ -93,6 +93,7 @@ func (tx *Tx) CreatePersistent(
 		indexesMeta: indexes,
 		columns:     columns,
 		relation:    relation,
+		maUn:        maUn,
 	}, nil
 }
 
