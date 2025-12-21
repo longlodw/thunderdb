@@ -16,7 +16,7 @@ func TestQuery_Recursive(t *testing.T) {
 
 	// 1. Setup Schema: Employees (id, name, manager_id)
 	// Typical recursive structure: manager is also an employee
-	employees, err := tx.CreatePersistent("employees", []string{"id", "name", "manager_id"}, nil)
+	employees, err := tx.CreatePersistent("employees", []string{"id", "name", "manager_id"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,15 +112,12 @@ func TestQuery_Recursive(t *testing.T) {
 
 	// Expected descendants: Bob (2), Charlie (3), Dave (4)
 	if len(results) != 3 {
-		t.Errorf("Expected 3 descendants, got %d: %v", len(results), results)
+		t.Errorf("Expected 3 descendants, got %d", len(results))
 	}
-	if !results["2"] {
-		t.Error("Expected Bob (2)")
-	}
-	if !results["3"] {
-		t.Error("Expected Charlie (3)")
-	}
-	if !results["4"] {
-		t.Error("Expected Dave (4)")
+	expectedDescendants := []string{"2", "3", "4"}
+	for _, desc := range expectedDescendants {
+		if !results[desc] {
+			t.Errorf("Expected descendant %s not found in results", desc)
+		}
 	}
 }

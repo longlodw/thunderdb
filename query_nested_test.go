@@ -17,22 +17,22 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 
 	// Schema
 	// users: u_id, u_name, group_id
-	users, err := tx.CreatePersistent("users", []string{"u_id", "u_name", "group_id"}, nil)
+	users, err := tx.CreatePersistent("users", []string{"u_id", "u_name", "group_id"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// admins: u_id, u_name, group_id
-	admins, err := tx.CreatePersistent("admins", []string{"u_id", "u_name", "group_id"}, nil)
+	admins, err := tx.CreatePersistent("admins", []string{"u_id", "u_name", "group_id"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// groups: group_id, g_name, org_id
-	groups, err := tx.CreatePersistent("groups", []string{"group_id", "g_name", "org_id"}, nil)
+	groups, err := tx.CreatePersistent("groups", []string{"group_id", "g_name", "org_id"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// orgs: org_id, o_name, region
-	orgs, err := tx.CreatePersistent("orgs", []string{"org_id", "o_name", "region"}, nil)
+	orgs, err := tx.CreatePersistent("orgs", []string{"org_id", "o_name", "region"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

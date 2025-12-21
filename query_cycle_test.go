@@ -33,7 +33,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 
 	// 1. Setup Schema: Node (id, target)
 	// Graph: A -> B -> A (Cycle)
-	nodes, err := tx.CreatePersistent("nodes", []string{"source", "target"}, nil)
+	nodes, err := tx.CreatePersistent("nodes", []string{"source", "target"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,6 +22,7 @@ var (
 	ErrProjectionMissingCol = func(baseCol string) error { return fmt.Errorf("column %s not found in base columns", baseCol) }
 	ErrProjectionMissingFld = func(field string) error { return fmt.Errorf("field %s not found in projection", field) }
 	ErrIndexColNotFound     = func(col string) error { return fmt.Errorf("index column %s not found in columns", col) }
+	ErrIndexNotFound        = func(idxName string) error { return fmt.Errorf("index %s not found", idxName) }
 	ErrUniqueColNotFound    = func(col string) error { return fmt.Errorf("unique column %s not found in columns", col) }
 	ErrUniqueConstraint     = func(idxName string) error {
 		return fmt.Errorf("unique constraint violation on index %s", idxName)
@@ -34,4 +35,5 @@ var (
 	}
 	ErrFieldNotFoundInObject = func(field string) error { return fmt.Errorf("field %s not found in object", field) }
 	ErrCannotMarshal         = func(v any) error { return fmt.Errorf("cannot marshal value '%v' of type %T", v, v) }
+	ErrUnsupportedType       = func(v any) error { return fmt.Errorf("unsupported comparison type %T", v) }
 )

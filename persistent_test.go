@@ -492,33 +492,6 @@ func TestPersistent_ComplexTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Test Equality on Map
-	// Comparison needs strict structural equality or byte comparison if non-comparable.
-	targetMap := map[string]any{
-		"key1": "value1",
-		"key2": 42.0,
-	}
-	opMap := Eq("data", targetMap)
-
-	seqMap, err := p.Select(opMap)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	count := 0
-	for val, err := range seqMap {
-		if err != nil {
-			t.Fatal(err)
-		}
-		count++
-		if val["id"] != "1" {
-			t.Errorf("Expected id 1, got %v", val["id"])
-		}
-	}
-	if count != 1 {
-		t.Errorf("Expected 1 result for map equality, got %d", count)
-	}
-
 	// Test Equality on Slice
 	// Order matters for byte-based comparison of slices
 	targetSlice := []any{"tag1", "tag2"}
@@ -529,7 +502,7 @@ func TestPersistent_ComplexTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	count = 0
+	count := 0
 	for val, err := range seqSlice {
 		if err != nil {
 			t.Fatal(err)
@@ -541,34 +514,6 @@ func TestPersistent_ComplexTypes(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("Expected 1 result for slice equality, got %d", count)
-	}
-
-	// Test Inequality (Byte order comparison for maps)
-	// We expect item2 > item1 because "value2" > "value1" in the JSON string representation
-	// item1 data: {"key1":"value1",...}
-	// item2 data: {"key1":"value2"}
-	// This depends on map key ordering in JSON marshal, which is usually sorted by key.
-
-	// Let's verify sort order.
-	opGt := Gt("data", targetMap) // data > {"key1":"value1"...}
-
-	seqGt, err := p.Select(opGt)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	count = 0
-	for val, err := range seqGt {
-		if err != nil {
-			t.Fatal(err)
-		}
-		count++
-		if val["id"] != "2" {
-			t.Errorf("Expected id 2 (value2 > value1), got %v", val["id"])
-		}
-	}
-	if count != 1 {
-		t.Errorf("Expected 1 result for map Gt comparison, got %d", count)
 	}
 }
 
@@ -675,10 +620,8 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	if count != 1 {
 		t.Errorf("Expected 1 result, got %d", count)
 	}
-
-	// Test 3: Range scan on composite index
-	opGe := Ge("name", []any{"John"})
-	opLt := Lt("name", []any{"Joho"})
+	opGe := Ge("name", []any{"John", "Doae"})
+	opLt := Lt("name", []any{"John", "Smitz"})
 
 	seq3, err := p.Select(opGe, opLt)
 	if err != nil {

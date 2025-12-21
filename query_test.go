@@ -19,7 +19,7 @@ func TestQuery_Basic(t *testing.T) {
 	usersRel := "users"
 	usersCols := []string{"id", "username", "department"}
 	usersIdx := map[string][]string{"username": {"username"}, "department": {"department"}}
-	users, err := tx.CreatePersistent(usersRel, usersCols, usersIdx)
+	users, err := tx.CreatePersistent(usersRel, usersCols, usersIdx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestQuery_Basic(t *testing.T) {
 	deptRel := "departments"
 	deptCols := []string{"department", "location"}
 	deptIdx := map[string][]string{"department": {"department"}}
-	depts, err := tx.CreatePersistent(deptRel, deptCols, deptIdx)
+	depts, err := tx.CreatePersistent(deptRel, deptCols, deptIdx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,6 @@ func TestQuery_Basic(t *testing.T) {
 
 	// Execute Select on the Query
 	// Filter by username 'alice'
-	// Use explicit struct to control type (string vs []any)
 	op := Eq("username", "alice")
 	seq, err := q.Select(op)
 	if err != nil {

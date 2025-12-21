@@ -93,7 +93,14 @@ func (tx *Tx) CreatePersistent(
 	if err := metaBucket.Put([]byte("uniques"), uniquesBytes); err != nil {
 		return nil, err
 	}
-	indexesStore, err := newIndex(bucket)
+	indexNames := make([]string, 0, len(indexes)+len(uniques))
+	for idxName := range indexes {
+		indexNames = append(indexNames, idxName)
+	}
+	for uniqueName := range uniques {
+		indexNames = append(indexNames, uniqueName)
+	}
+	indexesStore, err := newIndex(bucket, indexNames)
 	if err != nil {
 		return nil, err
 	}

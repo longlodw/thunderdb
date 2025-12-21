@@ -306,7 +306,7 @@ func compare(a, b any) (int, error) {
 		return cmp.Compare(va, b.(float64)), nil
 	case string:
 		return cmp.Compare(va, b.(string)), nil
-	default:
+	case []any:
 		ba, err := orderedMa.Marshal(a)
 		if err != nil {
 			return 0, err
@@ -316,5 +316,7 @@ func compare(a, b any) (int, error) {
 			return 0, err
 		}
 		return bytes.Compare(ba, bb), nil
+	default:
+		return 0, ErrUnsupportedType(a)
 	}
 }

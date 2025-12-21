@@ -13,10 +13,17 @@ type indexStorage struct {
 
 func newIndex(
 	parentBucket *boltdb.Bucket,
+	idxNames []string,
 ) (*indexStorage, error) {
 	bucket, err := parentBucket.CreateBucketIfNotExists([]byte("indexes"))
 	if err != nil {
 		return nil, err
+	}
+	for _, name := range idxNames {
+		_, err := bucket.CreateBucketIfNotExists([]byte(name))
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &indexStorage{
 		bucket: bucket,
@@ -40,9 +47,9 @@ func (idx *indexStorage) insert(name string, keyParts []any, id []byte) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	indexBk, err := idx.bucket.CreateBucketIfNotExists([]byte(name))
-	if err != nil {
-		return nil, err
+	indexBk := idx.bucket.Bucket([]byte(name))
+	if indexBk == nil {
+		return nil, ErrIndexNotFound(name)
 	}
 	seq, err := indexBk.NextSequence()
 	if err != nil {
@@ -64,9 +71,9 @@ func (idx *indexStorage) delete(name string, keyParts []any, seq []byte) error {
 	if err != nil {
 		return err
 	}
-	indexBk, err := idx.bucket.CreateBucketIfNotExists([]byte(name))
-	if err != nil {
-		return err
+	indexBk := idx.bucket.Bucket([]byte(name))
+	if indexBk == nil {
+		return ErrIndexNotFound(name)
 	}
 	bk := indexBk.Bucket(key)
 	if bk == nil {
@@ -80,9 +87,9 @@ func (idx *indexStorage) get(operator OpType, name string, keyParts []any) (iter
 	if err != nil {
 		return nil, err
 	}
-	idxBk, err := idx.bucket.CreateBucketIfNotExists([]byte(name))
-	if err != nil {
-		return nil, err
+	idxBk := idx.bucket.Bucket([]byte(name))
+	if idxBk == nil {
+		return nil, ErrIndexNotFound(name)
 	}
 	return func(yield func([]byte) bool) {
 		if operator&OpLt != 0 {
