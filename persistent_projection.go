@@ -15,18 +15,18 @@ type Projection struct {
 
 func newProjection(base Selector, fieldsMap map[string]string) (*Projection, error) {
 	baseColumns := base.Columns()
-	if len(baseColumns) != len(fieldsMap) {
-		return nil, fmt.Errorf("number of fields in projection does not match number of fields in base selectable")
-	}
+	// Allow subset projection, so we don't enforce length equality.
+	// But we must validate that all keys in fieldsMap are in baseColumns.
+
 	fromBase := make(map[string]string)
 	toBase := make(map[string]string)
-	for _, col := range baseColumns {
-		projCol, ok := fieldsMap[col]
-		if !ok {
-			return nil, fmt.Errorf("column %s not found in projection fields map", col)
+
+	for baseCol, projCol := range fieldsMap {
+		if !slices.Contains(baseColumns, baseCol) {
+			return nil, fmt.Errorf("column %s not found in base columns", baseCol)
 		}
-		fromBase[col] = projCol
-		toBase[projCol] = col
+		fromBase[baseCol] = projCol
+		toBase[projCol] = baseCol
 	}
 	return &Projection{
 		fromBase: fromBase,

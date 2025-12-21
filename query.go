@@ -11,7 +11,7 @@ import (
 
 type Query struct {
 	tx       *Tx
-	bodies   []queryBody
+	bodies   []*queryBody
 	backing  *Persistent
 	explored map[string]bool
 	parent   []*queryParent
@@ -34,7 +34,7 @@ func newQuery(tx *Tx, name string, columns []string, recursive bool) (*Query, er
 	}
 	return &Query{
 		tx:       tx,
-		bodies:   make([]queryBody, 0),
+		bodies:   make([]*queryBody, 0),
 		backing:  backing,
 		explored: make(map[string]bool),
 		parent:   make([]*queryParent, 0),
@@ -66,19 +66,35 @@ func (q *Query) AddBody(body ...Selector) error {
 			columnsSet[col] = struct{}{}
 		}
 	}
-	if len(columnsSet) != len(q.columns) {
-		return fmt.Errorf("body columns do not match query columns")
-	}
+	// Check if all query columns are present in the body
 	for _, col := range q.columns {
 		if _, ok := columnsSet[col]; !ok {
 			return fmt.Errorf("body missing required column %s", col)
 		}
 	}
-	q.bodies = append(q.bodies, queryBody{
+	newBody := &queryBody{
 		body:      body,
 		head:      q,
 		headIndex: len(q.bodies),
-	})
+	}
+	q.bodies = append(q.bodies, newBody)
+
+	// Register this body as a parent for any Query or QueryProjection children
+	for i, sel := range body {
+		switch s := sel.(type) {
+		case *Query:
+			s.parent = append(s.parent, &queryParent{
+				body:  newBody,
+				index: i,
+			})
+		case *QueryProjection:
+			s.parent = append(s.parent, &queryParent{
+				body:  newBody,
+				index: i,
+			})
+		}
+	}
+
 	return nil
 }
 
@@ -90,6 +106,8 @@ func (q *Query) Columns() []string {
 	return slices.Clone(q.columns)
 }
 
+// Project creates a new Projection that wraps this Query.
+// The projection will act as a parent to this Query, receiving updates when this Query produces data.
 func (q *Query) Project(mapping map[string]string) (Selector, error) {
 	pp, err := newProjection(q, mapping)
 	if err != nil {
@@ -129,7 +147,7 @@ func (q *Query) Select(ops ...Op) (iter.Seq2[map[string]any, error], error) {
 }
 
 func (q *Query) explore(ops ...Op) error {
-	stack := []any{downStackItem{part: q, ops: ops, requireUp: true}}
+	stack := []any{downStackItem{part: q, ops: ops, requireUp: q.backing != nil}}
 	for len(stack) > 0 {
 		item := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -144,7 +162,7 @@ func (q *Query) explore(ops ...Op) error {
 				}
 				part.explored[key] = true
 				for i := range part.bodies {
-					stack = append(stack, downStackItem{part: &part.bodies[i], ops: v.ops, requireUp: v.requireUp})
+					stack = append(stack, downStackItem{part: part.bodies[i], ops: v.ops, requireUp: v.requireUp})
 				}
 			case *queryBody:
 				// only first part is needed, because joins are handled in upStackItem
@@ -159,7 +177,11 @@ func (q *Query) explore(ops ...Op) error {
 					}
 				}
 				switch node := partBody.(type) {
-				case *Persistent:
+				case *Query:
+					stack = append(stack, downStackItem{part: node, ops: matchedOps, requireUp: node.backing != nil || v.requireUp})
+				case *QueryProjection:
+					stack = append(stack, downStackItem{part: node.base, ops: matchedOps, requireUp: v.requireUp})
+				case *Persistent, *Projection:
 					if !v.requireUp {
 						continue
 					}
@@ -173,12 +195,8 @@ func (q *Query) explore(ops ...Op) error {
 						}
 						stack = append(stack, upStackItem{part: part, value: e, index: 0, ops: v.ops})
 					}
-				case *Query:
-					stack = append(stack, downStackItem{part: node, ops: matchedOps, requireUp: node.backing != nil || v.requireUp})
-				case *QueryProjection:
-					stack = append(stack, downStackItem{part: node.base, ops: matchedOps, requireUp: v.requireUp})
 				default:
-					return fmt.Errorf("unsupported selectable type")
+					return fmt.Errorf("unsupported selector type in query body: %T", node)
 				}
 			}
 		case upStackItem:
@@ -194,7 +212,14 @@ func (q *Query) explore(ops ...Op) error {
 					}
 					if part.head != nil {
 						// Propagate up to the head Query
-						stack = append(stack, upStackItem{part: part.head, value: joinedEntry, index: part.headIndex, ops: v.ops})
+						// Filter columns to match head columns
+						filteredEntry := make(map[string]any)
+						for _, col := range part.head.columns {
+							if val, ok := joinedEntry[col]; ok {
+								filteredEntry[col] = val
+							}
+						}
+						stack = append(stack, upStackItem{part: part.head, value: filteredEntry, index: part.headIndex, ops: v.ops})
 					}
 				}
 			case *Query:
@@ -207,13 +232,16 @@ func (q *Query) explore(ops ...Op) error {
 					stack = append(stack, upStackItem{part: parent.body, value: v.value, index: parent.index, ops: v.ops})
 				}
 			case *QueryProjection:
+				proj := part
 				mappedValue := make(map[string]any)
-				for fromKey, toKey := range v.part.(*QueryProjection).fromBase {
+				for fromKey, toKey := range proj.fromBase {
 					if val, ok := v.value[fromKey]; ok {
 						mappedValue[toKey] = val
 					}
 				}
-				stack = append(stack, upStackItem{part: v.part.(*QueryProjection).base, value: mappedValue, index: 0, ops: v.ops})
+				for _, parent := range proj.parent {
+					stack = append(stack, upStackItem{part: parent.body, value: mappedValue, index: parent.index, ops: v.ops})
+				}
 			}
 		}
 	}

@@ -90,6 +90,9 @@ func (idx *indexStorage) get(operator OpType, name string, keyParts []any) (iter
 		return nil, nil
 	}
 	return func(yield func([]byte) bool) {
+		// Re-check idxBk in case it became invalid (though unlikely in this scope)
+		// But more importantly, check if we have ops
+
 		if operator&OpLt != 0 {
 			c := idxBk.Cursor()
 			k, _ := c.Seek(key)
