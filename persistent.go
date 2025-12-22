@@ -11,37 +11,55 @@ type Persistent struct {
 	data        *dataStorage
 	indexes     *indexStorage
 	reverseIdx  *reverseIndexStorage
-	indexesMeta map[string][]string
-	uniquesMeta map[string][]string
-	columns     []string
+	fields      map[string]ColumnSpec
 	relation    string
-	allIndexes  []string
+	uniqueNames []string
+	indexNames  []string
+	columns     []string
 }
 
 func (pr *Persistent) Insert(obj map[string]any) error {
-	if len(obj) != len(pr.columns) {
-		return ErrObjectFieldCountMismatch
-	}
-	for _, col := range pr.columns {
-		if _, ok := obj[col]; !ok {
-			return ErrObjectMissingField(col)
+	value := make(map[string][]byte)
+	for k, v := range pr.fields {
+		refs := v.ReferenceCols
+		if len(refs) > 0 {
+			refValues := make([]any, len(refs))
+			for i, refCol := range refs {
+				refV, ok := obj[refCol]
+				if !ok {
+					return ErrObjectMissingField(refCol)
+				}
+				refValues[i] = refV
+			}
+			refBytes, err := orderedMa.Marshal(refValues)
+			if err != nil {
+				return err
+			}
+			value[k] = refBytes
+		} else {
+			v, ok := obj[k]
+			if !ok {
+				return ErrObjectMissingField(k)
+			}
+			vBytes, err := orderedMa.Marshal([]any{v})
+			if err != nil {
+				return err
+			}
+			value[k] = vBytes
 		}
 	}
-	id, err := pr.data.insert(obj)
+	id, err := pr.data.insert(value)
 	if err != nil {
 		return err
 	}
 	// Check uniques
-	for uniqueName, keyFields := range pr.uniquesMeta {
-		keyParts := make([]any, len(keyFields))
-		for i, kf := range keyFields {
-			keyParts[i] = obj[kf]
+	for _, uniqueName := range pr.uniqueNames {
+		idxRange := &keyRange{
+			includeEnd:   true,
+			includeStart: true,
+			startKey:     value[uniqueName],
+			endKey:       value[uniqueName],
 		}
-		idxRanges, err := toRanges(Eq(uniqueName, keyParts))
-		if err != nil {
-			return err
-		}
-		idxRange := idxRanges[uniqueName]
 		exists, err := pr.indexes.get(uniqueName, idxRange)
 		if err != nil {
 			return err
@@ -53,23 +71,8 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 
 	// Update indexes
 	revIdx := make(map[string][]byte)
-	for idxName, keyFields := range pr.indexesMeta {
-		keyParts := make([]any, len(keyFields))
-		for i, kf := range keyFields {
-			keyParts[i] = obj[kf]
-		}
-		revIdxField, err := pr.indexes.insert(idxName, keyParts, id)
-		if err != nil {
-			return err
-		}
-		revIdx[idxName] = revIdxField
-	}
-	for idxName, keyFields := range pr.uniquesMeta {
-		keyParts := make([]any, len(keyFields))
-		for i, kf := range keyFields {
-			keyParts[i] = obj[kf]
-		}
-		revIdxField, err := pr.indexes.insert(idxName, keyParts, id)
+	for _, idxName := range pr.indexNames {
+		revIdxField, err := pr.indexes.insert(idxName, value[idxName], id)
 		if err != nil {
 			return err
 		}
@@ -96,15 +99,7 @@ func (pr *Persistent) Delete(ops ...Op) error {
 			return err
 		}
 		for idxName, revIdxField := range revIdx {
-			keyFields, ok := pr.indexesMeta[idxName]
-			if !ok {
-				return ErrIndexMetadataNotFound(idxName)
-			}
-			keyParts := make([]any, len(keyFields))
-			for i, kf := range keyFields {
-				keyParts[i] = e.value[kf]
-			}
-			if err := pr.indexes.delete(idxName, keyParts, revIdxField); err != nil {
+			if err := pr.indexes.delete(idxName, e.value[idxName], revIdxField); err != nil {
 				return err
 			}
 		}
@@ -129,7 +124,18 @@ func (pr *Persistent) Select(ops ...Op) (iter.Seq2[map[string]any, error], error
 			if err != nil {
 				return yield(nil, err)
 			}
-			return yield(e.value, nil)
+			result := make(map[string]any)
+			for _, k := range pr.columns {
+				var v []any
+				if err := orderedMa.Unmarshal(e.value[k], &v); err != nil {
+					return yield(nil, err)
+				}
+				if len(v) != 1 {
+					return yield(nil, ErrInvalidDataFormat)
+				}
+				result[k] = v[0]
+			}
+			return yield(result, nil)
 		})
 	}, nil
 }
@@ -152,7 +158,7 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 		return nil, err
 	}
 	selectedIndexes := make([]string, 0, len(ranges))
-	for _, idxName := range pr.allIndexes {
+	for _, idxName := range pr.indexNames {
 		if _, ok := ranges[idxName]; ok {
 			selectedIndexes = append(selectedIndexes, idxName)
 		}
@@ -235,55 +241,16 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 	}, nil
 }
 
-func (pr *Persistent) matchOps(value map[string]any, keyRanges map[string]*keyRange, skip string) (bool, error) {
-	compositeValue := make(map[string]any)
-	for k := range keyRanges {
-		if k == skip {
-			continue
-		}
-		_, ok := value[k]
-		if ok {
-			continue
-		}
-		if cols, ok := pr.indexesMeta[k]; ok {
-			parts := make([]any, len(cols))
-			for i, col := range cols {
-				part, ok := value[col]
-				if !ok {
-					return false, ErrObjectMissingField(col)
-				}
-				parts[i] = part
-			}
-			compositeValue[k] = parts
-		} else if cols, ok := pr.uniquesMeta[k]; ok {
-			parts := make([]any, len(cols))
-			for i, col := range cols {
-				part, ok := value[col]
-				if !ok {
-					return false, ErrObjectMissingField(col)
-				}
-				parts[i] = part
-			}
-			compositeValue[k] = parts
-		} else {
-			return false, ErrFieldNotFoundInColumns(k)
-		}
-	}
+func (pr *Persistent) matchOps(value map[string][]byte, keyRanges map[string]*keyRange, skip string) (bool, error) {
 	for name, r := range keyRanges {
 		if name == skip {
 			continue
 		}
-		v, ok := compositeValue[name]
+		v, ok := value[name]
 		if !ok {
-			if v, ok = value[name]; !ok {
-				return false, ErrFieldNotFoundInColumns(name)
-			}
+			return false, nil
 		}
-		vBytes, err := orderedMa.Marshal(v)
-		if err != nil {
-			return false, err
-		}
-		if !r.contains(vBytes) {
+		if !r.contains(v) {
 			return false, nil
 		}
 	}

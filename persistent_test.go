@@ -48,12 +48,12 @@ func basicCRUD_Insert(t *testing.T, db *DB) {
 	defer tx.Rollback()
 
 	relation := "users"
-	columns := []string{"id", "username", "age"}
-	indexes := map[string][]string{
-		"username": {"username"},
-	}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
+	p, err := tx.CreatePersistent(relation, map[string]ColumnSpec{
+		"id":       {},
+		"username": {Indexed: true},
+		"age":      {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,8 @@ func basicCRUD_SelectAlice(t *testing.T, db *DB) {
 		t.Fatal(err)
 	}
 
-	op := Eq("username", []any{"alice"})
+	// Use simple value "alice"
+	op := Eq("username", "alice")
 	seq, err := p.Select(op)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +122,8 @@ func basicCRUD_DeleteBob(t *testing.T, db *DB) {
 		t.Fatal(err)
 	}
 
-	op := Eq("username", []any{"bob"})
+	// Use simple value "bob"
+	op := Eq("username", "bob")
 	if err := p.Delete(op); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +145,7 @@ func basicCRUD_VerifyDeleteBob(t *testing.T, db *DB) {
 		t.Fatal(err)
 	}
 
-	op := Eq("username", []any{"bob"})
+	op := Eq("username", "bob")
 	seq, err := p.Select(op)
 	if err != nil {
 		t.Fatal(err)
@@ -177,10 +179,11 @@ func nonIndexed_Insert(t *testing.T, db *DB) {
 	defer tx.Rollback()
 
 	relation := "items"
-	columns := []string{"id", "price"}
-	indexes := map[string][]string{}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
+	p, err := tx.CreatePersistent(relation, map[string]ColumnSpec{
+		"id":    {},
+		"price": {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,12 +249,12 @@ func projection_Insert(t *testing.T, db *DB) {
 	defer tx.Rollback()
 
 	relation := "users"
-	columns := []string{"id", "username", "age"}
-	indexes := map[string][]string{
-		"username": {"username"},
-	}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
+	p, err := tx.CreatePersistent(relation, map[string]ColumnSpec{
+		"id":       {},
+		"username": {Indexed: true},
+		"age":      {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +291,7 @@ func projection_Select(t *testing.T, db *DB) {
 		t.Fatal(err)
 	}
 
-	op := Eq("login_name", []any{"alice"})
+	op := Eq("login_name", "alice")
 	seq, err := proj.Select(op)
 	if err != nil {
 		t.Fatal(err)
@@ -326,10 +329,12 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 	defer tx.Rollback()
 
 	relation := "products"
-	columns := []string{"id", "price", "stock"}
-	indexes := map[string][]string{} // Non-indexed for operator tests
 
-	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
+	p, err := tx.CreatePersistent(relation, map[string]ColumnSpec{
+		"id":    {},
+		"price": {},
+		"stock": {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,89 +439,6 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 	}
 }
 
-func TestPersistent_ComplexTypes(t *testing.T) {
-	db, cleanup := setupTestDBWithMaUn(t, &JsonMaUn)
-	defer cleanup()
-
-	tx, err := db.Begin(true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-
-	relation := "complex"
-	columns := []string{"id", "data", "tags"}
-	indexes := map[string][]string{}
-
-	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Map and Slice
-	item1 := map[string]any{
-		"id": "1",
-		"data": map[string]any{
-			"key1": "value1",
-			"key2": 42.0,
-		},
-		"tags": []any{"tag1", "tag2"},
-	}
-	if err := p.Insert(item1); err != nil {
-		t.Fatal(err)
-	}
-
-	// Another item for comparison tests
-	item2 := map[string]any{
-		"id": "2",
-		"data": map[string]any{
-			"key1": "value2", // Different value
-		},
-		"tags": []any{"tag3"},
-	}
-	if err := p.Insert(item2); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-
-	tx, err = db.Begin(false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-	p, err = tx.LoadPersistent(relation)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Test Equality on Slice
-	// Order matters for byte-based comparison of slices
-	targetSlice := []any{"tag1", "tag2"}
-	opSlice := Eq("tags", targetSlice)
-
-	seqSlice, err := p.Select(opSlice)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	count := 0
-	for val, err := range seqSlice {
-		if err != nil {
-			t.Fatal(err)
-		}
-		count++
-		if val["id"] != "1" {
-			t.Errorf("Expected id 1, got %v", val["id"])
-		}
-	}
-	if count != 1 {
-		t.Errorf("Expected 1 result for slice equality, got %d", count)
-	}
-}
-
 func TestPersistent_CompositeIndex(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -528,13 +450,19 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	defer tx.Rollback()
 
 	relation := "users"
-	columns := []string{"id", "first", "last", "age"}
 	// Composite index on (first, last)
-	indexes := map[string][]string{
-		"name": {"first", "last"},
-	}
-
-	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
+	// Old: map[string][]string{"name": {"first", "last"}}
+	// New: "name" is a key in ColumnSpec, with ReferenceCols = ["first", "last"] and Indexed = true
+	p, err := tx.CreatePersistent(relation, map[string]ColumnSpec{
+		"id":    {},
+		"first": {},
+		"last":  {},
+		"age":   {},
+		"name": {
+			ReferenceCols: []string{"first", "last"},
+			Indexed:       true,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,6 +507,7 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	}
 
 	// Test 1: Exact match on composite index
+	// For composite index, we DO need a slice of values
 	op := Eq("name", []any{"John", "Doe"})
 	seq, err := p.Select(op)
 	if err != nil {

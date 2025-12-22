@@ -65,7 +65,13 @@ func toRanges(ops ...Op) (map[string]*keyRange, error) {
 	ranges := make(map[string]*keyRange)
 	for _, op := range ops {
 		idxRange, exists := ranges[op.Field]
-		key, err := orderedMa.Marshal(op.Value)
+		var valSlice []any
+		if s, ok := op.Value.([]any); ok {
+			valSlice = s
+		} else {
+			valSlice = []any{op.Value}
+		}
+		key, err := orderedMa.Marshal(valSlice)
 		if err != nil {
 			return nil, err
 		}

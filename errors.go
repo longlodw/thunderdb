@@ -36,4 +36,7 @@ var (
 	ErrFieldNotFoundInObject = func(field string) error { return fmt.Errorf("field %s not found in object", field) }
 	ErrCannotMarshal         = func(v any) error { return fmt.Errorf("cannot marshal value '%v' of type %T", v, v) }
 	ErrUnsupportedType       = func(v any) error { return fmt.Errorf("unsupported comparison type %T", v) }
+	ErrDataNotFound          = errors.New("data not found")
+	ErrInvalidDataFormat     = errors.New("invalid data format")
+	ErrMetaDataNotFound      = errors.New("metadata not found")
 )

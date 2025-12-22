@@ -42,11 +42,7 @@ func loadIndex(
 	}, nil
 }
 
-func (idx *indexStorage) insert(name string, keyParts []any, id []byte) ([]byte, error) {
-	key, err := orderedMa.Marshal(keyParts)
-	if err != nil {
-		return nil, err
-	}
+func (idx *indexStorage) insert(name string, key []byte, id []byte) ([]byte, error) {
 	indexBk := idx.bucket.Bucket([]byte(name))
 	if indexBk == nil {
 		return nil, ErrIndexNotFound(name)
@@ -55,7 +51,7 @@ func (idx *indexStorage) insert(name string, keyParts []any, id []byte) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	seqBytes, err := orderedMa.Marshal(seq)
+	seqBytes, err := orderedMa.Marshal([]any{seq})
 	if err != nil {
 		return nil, err
 	}
@@ -66,11 +62,7 @@ func (idx *indexStorage) insert(name string, keyParts []any, id []byte) ([]byte,
 	return seqBytes, bk.Put(seqBytes, id)
 }
 
-func (idx *indexStorage) delete(name string, keyParts []any, seq []byte) error {
-	key, err := orderedMa.Marshal(keyParts)
-	if err != nil {
-		return err
-	}
+func (idx *indexStorage) delete(name string, key []byte, seq []byte) error {
 	indexBk := idx.bucket.Bucket([]byte(name))
 	if indexBk == nil {
 		return ErrIndexNotFound(name)

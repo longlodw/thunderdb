@@ -2,6 +2,7 @@ package thunder
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"slices"
 
@@ -36,16 +37,8 @@ func (tx *Tx) ID() int {
 
 func (tx *Tx) CreatePersistent(
 	relation string,
-	columns []string,
-	indexes map[string][]string,
-	uniques map[string][]string,
+	columnSpecs map[string]ColumnSpec,
 ) (*Persistent, error) {
-	if indexes == nil {
-		indexes = make(map[string][]string)
-	}
-	if uniques == nil {
-		uniques = make(map[string][]string)
-	}
 	tnx := tx.tx
 	maUn := tx.maUn
 	bucket, err := tnx.CreateBucketIfNotExists([]byte(relation))
@@ -56,49 +49,37 @@ func (tx *Tx) CreatePersistent(
 	if err != nil {
 		return nil, err
 	}
+	columns := make([]string, 0, len(columnSpecs))
+	indexNames := make([]string, 0, len(columnSpecs))
+	uniquesNames := make([]string, 0, len(columnSpecs))
 
-	columnsBytes, err := maUn.Marshal(columns)
+	columnsBytes, err := maUn.Marshal(columnSpecs)
 	if err != nil {
 		return nil, err
 	}
-	if err := metaBucket.Put([]byte("columns"), columnsBytes); err != nil {
+	if err := metaBucket.Put([]byte("columnSpecs"), columnsBytes); err != nil {
 		return nil, err
 	}
-
-	for _, cols := range indexes {
-		for _, col := range cols {
-			if !slices.Contains(columns, col) {
-				return nil, ErrIndexColNotFound(col)
-			}
+	for colName, colSpec := range columnSpecs {
+		refCols := colSpec.ReferenceCols
+		if len(refCols) == 0 {
+			columns = append(columns, colName)
 		}
 	}
-	for _, cols := range uniques {
-		for _, col := range cols {
-			if !slices.Contains(columns, col) {
-				return nil, ErrUniqueColNotFound(col)
+	for colName, colSpec := range columnSpecs {
+		refCols := colSpec.ReferenceCols
+		if colSpec.Indexed {
+			indexNames = append(indexNames, colName)
+		}
+		if colSpec.Unique {
+			uniquesNames = append(uniquesNames, colName)
+			indexNames = append(indexNames, colName)
+		}
+		for _, refCol := range refCols {
+			if !slices.Contains(columns, refCol) {
+				return nil, ErrFieldNotFoundInColumns(refCol)
 			}
 		}
-	}
-	indexesBytes, err := maUn.Marshal(indexes)
-	if err != nil {
-		return nil, err
-	}
-	if err := metaBucket.Put([]byte("indexes"), indexesBytes); err != nil {
-		return nil, err
-	}
-	uniquesBytes, err := maUn.Marshal(uniques)
-	if err != nil {
-		return nil, err
-	}
-	if err := metaBucket.Put([]byte("uniques"), uniquesBytes); err != nil {
-		return nil, err
-	}
-	indexNames := make([]string, 0, len(indexes)+len(uniques))
-	for idxName := range indexes {
-		indexNames = append(indexNames, idxName)
-	}
-	for uniqueName := range uniques {
-		indexNames = append(indexNames, uniqueName)
 	}
 	indexesStore, err := newIndex(bucket, indexNames)
 	if err != nil {
@@ -108,27 +89,21 @@ func (tx *Tx) CreatePersistent(
 	if err != nil {
 		return nil, err
 	}
-	dataStore, err := newData(bucket, maUn)
+	fields := slices.Collect(maps.Keys(columnSpecs))
+	dataStore, err := newData(bucket, fields)
 	if err != nil {
 		return nil, err
-	}
-	allIndexes := make([]string, 0, len(indexes)+len(uniques))
-	for idxName := range indexes {
-		allIndexes = append(allIndexes, idxName)
-	}
-	for uniqueName := range uniques {
-		allIndexes = append(allIndexes, uniqueName)
 	}
 
 	return &Persistent{
 		data:        dataStore,
 		indexes:     indexesStore,
 		reverseIdx:  reverseIdxStore,
-		indexesMeta: indexes,
-		uniquesMeta: uniques,
-		columns:     columns,
+		fields:      columnSpecs,
 		relation:    relation,
-		allIndexes:  allIndexes,
+		uniqueNames: uniquesNames,
+		indexNames:  indexNames,
+		columns:     columns,
 	}, nil
 }
 
@@ -146,23 +121,39 @@ func (tx *Tx) LoadPersistent(
 	if metaBucket == nil {
 		return nil, boltdb_errors.ErrBucketNotFound
 	}
-
-	columnsBytes := metaBucket.Get([]byte("columns"))
-	var columns []string
-	if err := maUn.Unmarshal(columnsBytes, &columns); err != nil {
+	columnSpecsBytes := metaBucket.Get([]byte("columnSpecs"))
+	if columnSpecsBytes == nil {
+		return nil, ErrMetaDataNotFound
+	}
+	var columnSpecs map[string]ColumnSpec
+	if err := maUn.Unmarshal(columnSpecsBytes, &columnSpecs); err != nil {
 		return nil, err
 	}
-
-	indexesBytes := metaBucket.Get([]byte("indexes"))
-	var indexes map[string][]string
-	if err := maUn.Unmarshal(indexesBytes, &indexes); err != nil {
-		return nil, err
+	columns := make([]string, 0, len(columnSpecs))
+	indexNames := make([]string, 0, len(columnSpecs))
+	uniquesNames := make([]string, 0, len(columnSpecs))
+	for colName, colSpec := range columnSpecs {
+		refCols := colSpec.ReferenceCols
+		if len(refCols) == 0 {
+			columns = append(columns, colName)
+		}
 	}
-	uniquesBytes := metaBucket.Get([]byte("uniques"))
-	var uniques map[string][]string
-	if err := maUn.Unmarshal(uniquesBytes, &uniques); err != nil {
-		return nil, err
+	for colName, colSpec := range columnSpecs {
+		refCols := colSpec.ReferenceCols
+		if colSpec.Indexed {
+			indexNames = append(indexNames, colName)
+		}
+		if colSpec.Unique {
+			uniquesNames = append(uniquesNames, colName)
+			indexNames = append(indexNames, colName)
+		}
+		for _, refCol := range refCols {
+			if !slices.Contains(columns, refCol) {
+				return nil, ErrFieldNotFoundInColumns(refCol)
+			}
+		}
 	}
+	fields := slices.Collect(maps.Keys(columnSpecs))
 
 	indexesStore, err := loadIndex(bucket)
 	if err != nil {
@@ -172,27 +163,20 @@ func (tx *Tx) LoadPersistent(
 	if err != nil {
 		return nil, err
 	}
-	dataStore, err := loadData(bucket, maUn)
+	dataStore, err := loadData(bucket, fields)
 	if err != nil {
 		return nil, err
-	}
-	allIndexes := make([]string, 0, len(indexes)+len(uniques))
-	for idxName := range indexes {
-		allIndexes = append(allIndexes, idxName)
-	}
-	for uniqueName := range uniques {
-		allIndexes = append(allIndexes, uniqueName)
 	}
 
 	return &Persistent{
 		data:        dataStore,
 		indexes:     indexesStore,
 		reverseIdx:  reverseIdxStore,
-		indexesMeta: indexes,
-		uniquesMeta: uniques,
-		columns:     columns,
+		fields:      columnSpecs,
 		relation:    relation,
-		allIndexes:  allIndexes,
+		uniqueNames: uniquesNames,
+		indexNames:  indexNames,
+		columns:     columns,
 	}, nil
 }
 

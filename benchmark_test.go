@@ -47,7 +47,10 @@ func BenchmarkInsert(b *testing.B) {
 				// Let's structure it so we measure the time to insert 'count' records.
 				tx, _ := db.Begin(true)
 				relation := fmt.Sprintf("bench_%d", rand.Int()) // use rand to avoid conflicts if possible, or just unique
-				p, _ := tx.CreatePersistent(relation, []string{"id", "val"}, nil, nil)
+				p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
+					"id":  {},
+					"val": {},
+				})
 
 				for j := range count {
 					p.Insert(map[string]any{
@@ -66,8 +69,10 @@ func BenchmarkInsert(b *testing.B) {
 			for b.Loop() {
 				tx, _ := db.Begin(true)
 				relation := fmt.Sprintf("bench_idx_%d", rand.Int())
-				indexes := map[string][]string{"val": {"val"}}
-				p, _ := tx.CreatePersistent(relation, []string{"id", "val"}, indexes, nil)
+				p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
+					"id":  {},
+					"val": {Indexed: true},
+				})
 
 				for j := range count {
 					p.Insert(map[string]any{
@@ -91,12 +96,17 @@ func BenchmarkSelect(b *testing.B) {
 
 	// Relation with index on "val"
 	relationIdx := "bench_select_idx"
-	indexes := map[string][]string{"val": {"val"}}
-	pIdx, _ := tx.CreatePersistent(relationIdx, []string{"id", "val"}, indexes, nil)
+	pIdx, _ := tx.CreatePersistent(relationIdx, map[string]ColumnSpec{
+		"id":  {},
+		"val": {Indexed: true},
+	})
 
 	// Relation WITHOUT index on "val"
 	relationNoIdx := "bench_select_noidx"
-	pNoIdx, _ := tx.CreatePersistent(relationNoIdx, []string{"id", "val"}, nil, nil)
+	pNoIdx, _ := tx.CreatePersistent(relationNoIdx, map[string]ColumnSpec{
+		"id":  {},
+		"val": {},
+	})
 
 	for i := range count {
 		row := map[string]any{
@@ -176,13 +186,11 @@ func BenchmarkRecursion(b *testing.B) {
 	depth := 100
 	tx, _ := db.Begin(true)
 	relation := "graph"
-	columns := []string{"source", "target"}
 	// We need indexes for efficient recursion (joins)
-	indexes := map[string][]string{
-		"source": {"source"},
-		"target": {"target"},
-	}
-	p, _ := tx.CreatePersistent(relation, columns, indexes, nil)
+	p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
+		"source": {Indexed: true},
+		"target": {Indexed: true},
+	})
 
 	for i := range depth {
 		p.Insert(map[string]any{
@@ -217,9 +225,9 @@ func BenchmarkRecursion(b *testing.B) {
 
 			// Creating a helper relation for the start node constraint
 			startNodeRel := "start_node"
-			startNodeCols := []string{"source"}
-			startNodeIdx := map[string][]string{"source": {"source"}}
-			startNodeP, _ := rtx.CreatePersistent(startNodeRel, startNodeCols, startNodeIdx, nil)
+			startNodeP, _ := rtx.CreatePersistent(startNodeRel, map[string]ColumnSpec{
+				"source": {Indexed: true},
+			})
 			startNodeP.Insert(map[string]any{"source": "node_0"})
 
 			q.AddBody(baseProj, startNodeP)

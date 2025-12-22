@@ -17,22 +17,38 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 
 	// Schema
 	// users: u_id, u_name, group_id
-	users, err := tx.CreatePersistent("users", []string{"u_id", "u_name", "group_id"}, nil, nil)
+	users, err := tx.CreatePersistent("users", map[string]ColumnSpec{
+		"u_id":     {},
+		"u_name":   {},
+		"group_id": {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// admins: u_id, u_name, group_id
-	admins, err := tx.CreatePersistent("admins", []string{"u_id", "u_name", "group_id"}, nil, nil)
+	admins, err := tx.CreatePersistent("admins", map[string]ColumnSpec{
+		"u_id":     {},
+		"u_name":   {},
+		"group_id": {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// groups: group_id, g_name, org_id
-	groups, err := tx.CreatePersistent("groups", []string{"group_id", "g_name", "org_id"}, nil, nil)
+	groups, err := tx.CreatePersistent("groups", map[string]ColumnSpec{
+		"group_id": {},
+		"g_name":   {},
+		"org_id":   {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// orgs: org_id, o_name, region
-	orgs, err := tx.CreatePersistent("orgs", []string{"org_id", "o_name", "region"}, nil, nil)
+	orgs, err := tx.CreatePersistent("orgs", map[string]ColumnSpec{
+		"org_id": {},
+		"o_name": {},
+		"region": {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

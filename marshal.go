@@ -68,17 +68,18 @@ func (m *msgpackMarshalUnmarshaler) Unmarshal(data []byte, v any) error {
 
 type orderedMarshaler struct{}
 
-func (o *orderedMarshaler) Marshal(v any) ([]byte, error) {
-	switch val := v.(type) {
-	case []any:
-		if !ordered.CanEncode(val...) {
-			return nil, ErrCannotMarshal(v)
-		}
-		return ordered.Encode(val...), nil
-	default:
-		if !ordered.CanEncode(val) {
-			return nil, ErrCannotMarshal(v)
-		}
-		return ordered.Encode(val), nil
+func (o *orderedMarshaler) Marshal(v []any) ([]byte, error) {
+	if !ordered.CanEncode(v...) {
+		return nil, ErrCannotMarshal(v)
 	}
+	return ordered.Encode(v...), nil
+}
+
+func (o *orderedMarshaler) Unmarshal(data []byte, v *[]any) error {
+	decoded, err := ordered.DecodeAny(data)
+	if err != nil {
+		return err
+	}
+	*v = decoded
+	return nil
 }

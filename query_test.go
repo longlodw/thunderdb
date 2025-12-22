@@ -17,18 +17,21 @@ func TestQuery_Basic(t *testing.T) {
 
 	// Create 'users' relation
 	usersRel := "users"
-	usersCols := []string{"id", "username", "department"}
-	usersIdx := map[string][]string{"username": {"username"}, "department": {"department"}}
-	users, err := tx.CreatePersistent(usersRel, usersCols, usersIdx, nil)
+	users, err := tx.CreatePersistent(usersRel, map[string]ColumnSpec{
+		"id":         {},
+		"username":   {Indexed: true},
+		"department": {Indexed: true},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Create 'departments' relation
 	deptRel := "departments"
-	deptCols := []string{"department", "location"}
-	deptIdx := map[string][]string{"department": {"department"}}
-	depts, err := tx.CreatePersistent(deptRel, deptCols, deptIdx, nil)
+	depts, err := tx.CreatePersistent(deptRel, map[string]ColumnSpec{
+		"department": {Indexed: true},
+		"location":   {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,13 +23,17 @@ func newQuery(tx *Tx, name string, columns []string, recursive bool) (*Query, er
 	var backing *Persistent
 	var err error
 	if recursive {
+		fields := make(map[string]ColumnSpec)
+		for _, col := range columns {
+			fields[col] = ColumnSpec{}
+		}
+		fields[queryAllUniqueCol] = ColumnSpec{
+			Unique:        true,
+			ReferenceCols: columns,
+		}
 		backing, err = tx.CreatePersistent(
 			fmt.Sprintf("query_backing_%s_%d", name, tx.ID()),
-			columns,
-			map[string][]string{},
-			map[string][]string{
-				"unique_all": columns,
-			},
+			fields,
 		)
 		if err != nil {
 			return nil, err
@@ -45,6 +49,8 @@ func newQuery(tx *Tx, name string, columns []string, recursive bool) (*Query, er
 		name:     name,
 	}, nil
 }
+
+const queryAllUniqueCol = "__all_unique"
 
 type QueryProjection struct {
 	Projection
@@ -228,7 +234,7 @@ func (q *Query) explore(ops ...Op) error {
 			case *Query:
 				if part.backing != nil {
 					if err := part.backing.Insert(v.value); err != nil {
-						if err.Error() == ErrUniqueConstraint("unique_all").Error() {
+						if err.Error() == ErrUniqueConstraint(queryAllUniqueCol).Error() {
 							// Ignore unique constraint violations
 							continue
 						}

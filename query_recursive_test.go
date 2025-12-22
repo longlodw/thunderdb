@@ -16,7 +16,11 @@ func TestQuery_Recursive(t *testing.T) {
 
 	// 1. Setup Schema: Employees (id, name, manager_id)
 	// Typical recursive structure: manager is also an employee
-	employees, err := tx.CreatePersistent("employees", []string{"id", "name", "manager_id"}, nil, nil)
+	employees, err := tx.CreatePersistent("employees", map[string]ColumnSpec{
+		"id":         {},
+		"name":       {},
+		"manager_id": {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

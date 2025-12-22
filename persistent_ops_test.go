@@ -16,13 +16,14 @@ func TestPersistent_AllOperators(t *testing.T) {
 	defer tx.Rollback()
 
 	relation := "numbers"
-	columns := []string{"id", "val", "indexed_val"}
 	// Create one indexed column and one non-indexed to test both paths
-	indexes := map[string][]string{
-		"indexed_val": {"indexed_val"},
-	}
+	// indexes := map[string][]string{"indexed_val": {"indexed_val"}}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
+	p, err := tx.CreatePersistent(relation, map[string]ColumnSpec{
+		"id":          {},
+		"val":         {},
+		"indexed_val": {Indexed: true},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
