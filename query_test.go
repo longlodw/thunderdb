@@ -86,7 +86,11 @@ func TestQuery_Basic(t *testing.T) {
 	// Execute Select on the Query
 	// Filter by username 'alice'
 	op := Eq("username", "alice")
-	seq, err := q.Select(op)
+	f, err := Filter(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := q.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}

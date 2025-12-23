@@ -129,7 +129,11 @@ func BenchmarkSelect(b *testing.B) {
 			// Search for random val (non-indexed)
 			target := float64(rand.Intn(count))
 			op := Eq("val", target)
-			seq, _ := pLoadNoIdx.Select(op)
+			f, err := Filter(op)
+			if err != nil {
+				b.Fatal(err)
+			}
+			seq, _ := pLoadNoIdx.Select(f)
 			for range seq {
 				// drain
 			}
@@ -141,7 +145,11 @@ func BenchmarkSelect(b *testing.B) {
 			// Search for random val (indexed)
 			target := float64(rand.Intn(count))
 			op := Eq("val", target)
-			seq, _ := pLoadIdx.Select(op)
+			f, err := Filter(op)
+			if err != nil {
+				b.Fatal(err)
+			}
+			seq, _ := pLoadIdx.Select(f)
 			for range seq {
 				// drain
 			}
@@ -155,7 +163,11 @@ func BenchmarkSelect(b *testing.B) {
 			end := start + 50.0
 			op1 := Ge("val", start)
 			op2 := Lt("val", end)
-			seq, _ := pLoadNoIdx.Select(op1, op2)
+			f, err := Filter(op1, op2)
+			if err != nil {
+				b.Fatal(err)
+			}
+			seq, _ := pLoadNoIdx.Select(f)
 			for range seq {
 				// drain
 			}
@@ -169,7 +181,11 @@ func BenchmarkSelect(b *testing.B) {
 			end := start + 50.0
 			op1 := Ge("val", start)
 			op2 := Lt("val", end)
-			seq, _ := pLoadIdx.Select(op1, op2)
+			f, err := Filter(op1, op2)
+			if err != nil {
+				b.Fatal(err)
+			}
+			seq, _ := pLoadIdx.Select(f)
 			for range seq {
 				// drain
 			}
@@ -242,7 +258,11 @@ func BenchmarkRecursion(b *testing.B) {
 			q.AddBody(q, recProj)
 
 			// Execute
-			seq, _ := q.Select()
+			f, err := Filter()
+			if err != nil {
+				b.Fatal(err)
+			}
+			seq, _ := q.Select(f)
 			for range seq {
 			}
 			rtx.Rollback()
@@ -263,7 +283,11 @@ func BenchmarkRecursion(b *testing.B) {
 				for _, node := range currentNodes {
 					// Find children
 					op := Eq("source", node)
-					seq, _ := pLoad.Select(op)
+					f, err := Filter(op)
+					if err != nil {
+						b.Fatal(err)
+					}
+					seq, _ := pLoad.Select(f)
 					for row := range seq {
 						target := row["target"].(string)
 						if !visited[target] {

@@ -84,7 +84,11 @@ func TestPersistent_AllOperators(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			seq, err := p.Select(tt.ops...)
+			f, err := Filter(tt.ops...)
+			if err != nil {
+				t.Fatalf("Filter creation failed: %v", err)
+			}
+			seq, err := p.Select(f)
 			if err != nil {
 				t.Fatalf("Select failed: %v", err)
 			}

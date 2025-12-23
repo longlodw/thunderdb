@@ -87,7 +87,11 @@ func basicCRUD_SelectAlice(t *testing.T, db *DB) {
 
 	// Use simple value "alice"
 	op := Eq("username", "alice")
-	seq, err := p.Select(op)
+	f, err := Filter(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := p.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +128,11 @@ func basicCRUD_DeleteBob(t *testing.T, db *DB) {
 
 	// Use simple value "bob"
 	op := Eq("username", "bob")
-	if err := p.Delete(op); err != nil {
+	f, err := Filter(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Delete(f); err != nil {
 		t.Fatal(err)
 	}
 
@@ -146,7 +154,11 @@ func basicCRUD_VerifyDeleteBob(t *testing.T, db *DB) {
 	}
 
 	op := Eq("username", "bob")
-	seq, err := p.Select(op)
+	f, err := Filter(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := p.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +225,11 @@ func nonIndexed_Select(t *testing.T, db *DB) {
 	}
 
 	op := Eq("price", 20.0)
-	seq, err := p.Select(op)
+	f, err := Filter(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := p.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +308,11 @@ func projection_Select(t *testing.T, db *DB) {
 	}
 
 	op := Eq("login_name", "alice")
-	seq, err := proj.Select(op)
+	f, err := Filter(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := proj.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +388,11 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 
 	// Test Greater Than
 	opGt := Gt("price", 15.0)
-	seqGt, err := p.Select(opGt)
+	f, err := Filter(opGt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seqGt, err := p.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +418,11 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 
 	// Le(20.0) -> Expect C (0) and D (20)
 	opLe := Le("stock", 20.0)
-	seqLe, err := p.Select(opLe)
+	f, err = Filter(opLe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seqLe, err := p.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +448,11 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 	op1 := Gt("price", 10.0)
 	op2 := Gt("stock", 0.0)
 
-	seqMulti, err := p.Select(op1, op2)
+	f, err = Filter(op1, op2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seqMulti, err := p.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +541,11 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	// Test 1: Exact match on composite index
 	// For composite index, we DO need a slice of values
 	op := Eq("name", []any{"John", "Doe"})
-	seq, err := p.Select(op)
+	f, err := Filter(op)
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	seq, err := p.Select(f)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)
 	}
@@ -532,7 +568,11 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	op1 := Eq("name", []any{"John", "Doe"})
 	op2 := Gt("age", 20.0)
 
-	seq2, err := p.Select(op1, op2)
+	f, err = Filter(op1, op2)
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	seq2, err := p.Select(f)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)
 	}
@@ -552,7 +592,11 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	opGe := Ge("name", []any{"John", "Doae"})
 	opLt := Lt("name", []any{"John", "Smitz"})
 
-	seq3, err := p.Select(opGe, opLt)
+	f, err = Filter(opGe, opLt)
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	seq3, err := p.Select(f)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)
 	}

@@ -119,7 +119,11 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// 3. Select Region="North"
 	// Should return Alice (user) and Charlie (admin)
 	op := Eq("region", "North")
-	seq, err := qAll.Select(op)
+	f, err := Filter(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := qAll.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}

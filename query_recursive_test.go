@@ -97,7 +97,11 @@ func TestQuery_Recursive(t *testing.T) {
 	// 4. Execution
 	// Find all descendants of Alice (id=1).
 	// query: path(ancestor=1, descendant=X).
-	seq, err := qPath.Select(Eq("ancestor", "1"))
+	f, err := Filter(Eq("ancestor", "1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := qPath.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}

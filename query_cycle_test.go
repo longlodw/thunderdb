@@ -109,7 +109,11 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Find all reachable nodes from A.
 	// Expected: A -> B, B -> A, so reachable: B, A.
 	// If cycle is not handled, this will loop A->B->A->B...
-	seq, err := qReach.Select(Eq("source", "A"))
+	f, err := Filter(Eq("source", "A"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := qReach.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}

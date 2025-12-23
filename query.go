@@ -1,6 +1,7 @@
 package thunder
 
 import (
+	"bytes"
 	"fmt"
 	"iter"
 	"maps"
@@ -135,17 +136,17 @@ func (q *Query) Project(mapping map[string]string) (Selector, error) {
 	return proj, nil
 }
 
-func (q *Query) Select(ops ...Op) (iter.Seq2[map[string]any, error], error) {
+func (q *Query) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
 	if q.backing != nil {
-		err := q.explore(ops...)
+		err := q.explore(ranges)
 		if err != nil {
 			return nil, err
 		}
-		return q.backing.Select(ops...)
+		return q.backing.Select(ranges)
 	}
 	return func(yield func(map[string]any, error) bool) {
 		for _, body := range q.bodies {
-			iterEntries, err := body.join(0, map[string]any{}, -1, ops)
+			iterEntries, err := body.join(0, map[string]any{}, -1, ranges)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -157,8 +158,8 @@ func (q *Query) Select(ops ...Op) (iter.Seq2[map[string]any, error], error) {
 	}, nil
 }
 
-func (q *Query) explore(ops ...Op) error {
-	stack := []any{downStackItem{part: q, ops: ops, requireUp: q.backing != nil}}
+func (q *Query) explore(ranges map[string]*keyRange) error {
+	stack := []any{downStackItem{part: q, ranges: ranges, requireUp: q.backing != nil}}
 	for len(stack) > 0 {
 		item := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -166,14 +167,14 @@ func (q *Query) explore(ops ...Op) error {
 		case downStackItem:
 			switch part := v.part.(type) {
 			case *Query:
-				key := hashOperators(v.ops...)
+				key := hashOperators(v.ranges)
 				// no need to explore again or there is no backing (meaning the query is not recursive)
 				if part.backing == nil || part.explored[key] {
 					continue
 				}
 				part.explored[key] = true
 				for i := range part.bodies {
-					stack = append(stack, downStackItem{part: part.bodies[i], ops: v.ops, requireUp: v.requireUp})
+					stack = append(stack, downStackItem{part: part.bodies[i], ranges: ranges, requireUp: v.requireUp})
 				}
 			case *queryBody:
 				// only first part is needed, because joins are handled in upStackItem
@@ -181,22 +182,22 @@ func (q *Query) explore(ops ...Op) error {
 					continue
 				}
 				partBody := part.body[0]
-				matchedOps := make([]Op, 0, len(v.ops))
-				for _, op := range v.ops {
-					if slices.Contains(partBody.Columns(), op.Field) {
-						matchedOps = append(matchedOps, op)
+				matchedRanges := make(map[string]*keyRange)
+				for name, rangeObj := range v.ranges {
+					if slices.Contains(partBody.Columns(), name) {
+						matchedRanges[name] = rangeObj
 					}
 				}
 				switch node := partBody.(type) {
 				case *Query:
-					stack = append(stack, downStackItem{part: node, ops: matchedOps, requireUp: node.backing != nil || v.requireUp})
+					stack = append(stack, downStackItem{part: node, ranges: matchedRanges, requireUp: node.backing != nil || v.requireUp})
 				case *QueryProjection:
-					stack = append(stack, downStackItem{part: node.base, ops: matchedOps, requireUp: v.requireUp})
+					stack = append(stack, downStackItem{part: node.base, ranges: matchedRanges, requireUp: v.requireUp})
 				case *Persistent, *Projection:
 					if !v.requireUp {
 						continue
 					}
-					entries, err := node.Select(matchedOps...)
+					entries, err := node.Select(matchedRanges)
 					if err != nil {
 						return err
 					}
@@ -204,7 +205,7 @@ func (q *Query) explore(ops ...Op) error {
 						if err != nil {
 							return err
 						}
-						stack = append(stack, upStackItem{part: part, value: e, index: 0, ops: v.ops})
+						stack = append(stack, upStackItem{part: part, value: e, index: 0, ranges: v.ranges})
 					}
 				default:
 					return ErrUnsupportedSelector(node)
@@ -213,7 +214,7 @@ func (q *Query) explore(ops ...Op) error {
 		case upStackItem:
 			switch part := v.part.(type) {
 			case *queryBody:
-				iterJoined, err := part.join(0, v.value, v.index, v.ops)
+				iterJoined, err := part.join(0, v.value, v.index, v.ranges)
 				if err != nil {
 					return err
 				}
@@ -230,7 +231,7 @@ func (q *Query) explore(ops ...Op) error {
 								filteredEntry[col] = val
 							}
 						}
-						stack = append(stack, upStackItem{part: part.head, value: filteredEntry, index: part.headIndex, ops: v.ops})
+						stack = append(stack, upStackItem{part: part.head, value: filteredEntry, index: part.headIndex, ranges: v.ranges})
 					}
 				}
 			case *Query:
@@ -244,7 +245,7 @@ func (q *Query) explore(ops ...Op) error {
 					}
 				}
 				for _, parent := range part.parent {
-					stack = append(stack, upStackItem{part: parent.body, value: v.value, index: parent.index, ops: v.ops})
+					stack = append(stack, upStackItem{part: parent.body, value: v.value, index: parent.index, ranges: v.ranges})
 				}
 			case *QueryProjection:
 				proj := part
@@ -255,7 +256,7 @@ func (q *Query) explore(ops ...Op) error {
 					}
 				}
 				for _, parent := range proj.parent {
-					stack = append(stack, upStackItem{part: parent.body, value: mappedValue, index: parent.index, ops: v.ops})
+					stack = append(stack, upStackItem{part: parent.body, value: mappedValue, index: parent.index, ranges: v.ranges})
 				}
 			}
 		}
@@ -265,46 +266,63 @@ func (q *Query) explore(ops ...Op) error {
 
 type downStackItem struct {
 	part      any
-	ops       []Op
+	ranges    map[string]*keyRange
 	requireUp bool
 }
 
 type upStackItem struct {
-	part  any
-	value map[string]any
-	index int
-	ops   []Op
+	part   any
+	value  map[string]any
+	index  int
+	ranges map[string]*keyRange
 }
 
-func (qb *queryBody) join(curIdx int, e map[string]any, skipIdx int, ops []Op) (iter.Seq2[map[string]any, error], error) {
+func (qb *queryBody) join(curIdx int, e map[string]any, skipIdx int, ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
 	if curIdx >= len(qb.body) {
 		return func(yield func(map[string]any, error) bool) {
 			yield(e, nil)
 		}, nil
 	}
 	if curIdx == skipIdx {
-		return qb.join(curIdx+1, e, skipIdx, ops)
+		return qb.join(curIdx+1, e, skipIdx, ranges)
 	}
 	selectable := qb.body[curIdx]
 	columns := selectable.Columns()
-	joinOps := make([]Op, 0, len(columns)+len(ops))
+	joinedRanges := make(map[string]*keyRange)
 	for _, col := range columns {
 		if val, ok := e[col]; ok {
-			joinOps = append(joinOps, Op{
-				Field: col,
-				Type:  OpEq,
-				Value: val,
-			})
+			kr := &keyRange{
+				includeStart: true,
+				includeEnd:   true,
+			}
+			key, err := orderedMa.Marshal([]any{val})
+			if err != nil {
+				return nil, err
+			}
+			kr.startKey = key
+			kr.endKey = key
+			joinedRanges[col] = kr
 		}
 	}
-	// Add external ops that apply to this selectable
-	for _, op := range ops {
-		if slices.Contains(columns, op.Field) {
-			joinOps = append(joinOps, op)
+	// Add external ranges that apply to this selectable
+	for name, kr := range ranges {
+		if slices.Contains(columns, name) {
+			if r, exists := joinedRanges[name]; !exists {
+				joinedRanges[name] = kr
+			} else {
+				if r.startKey == nil || (kr.startKey != nil && bytes.Compare(kr.startKey, r.startKey) > 0) {
+					r.startKey = kr.startKey
+					r.includeStart = kr.includeStart
+				}
+				if r.endKey == nil || (kr.endKey != nil && bytes.Compare(kr.endKey, r.endKey) < 0) {
+					r.endKey = kr.endKey
+					r.includeEnd = kr.includeEnd
+				}
+			}
 		}
 	}
 
-	iterEntries, err := selectable.Select(joinOps...)
+	iterEntries, err := selectable.Select(joinedRanges)
 	if err != nil {
 		return nil, err
 	}
@@ -316,9 +334,8 @@ func (qb *queryBody) join(curIdx int, e map[string]any, skipIdx int, ops []Op) (
 				}
 				continue
 			}
-			merged := maps.Clone(e)
-			maps.Copy(merged, en)
-			iterJoined, err := qb.join(curIdx+1, merged, skipIdx, ops)
+			maps.Copy(en, e)
+			iterJoined, err := qb.join(curIdx+1, en, skipIdx, ranges)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -330,10 +347,10 @@ func (qb *queryBody) join(curIdx int, e map[string]any, skipIdx int, ops []Op) (
 	}, nil
 }
 
-func hashOperators(ops ...Op) string {
+func hashOperators(ranges map[string]*keyRange) string {
 	var opStrings []string
-	for _, op := range ops {
-		opStrings = append(opStrings, fmt.Sprintf("%s:%v:%d", op.Field, op.Value, op.Type))
+	for name, rangeObj := range ranges {
+		opStrings = append(opStrings, fmt.Sprintf("%s:%v", name, rangeObj))
 	}
 	sort.Strings(opStrings)
 	result := strings.Join(opStrings, "|")

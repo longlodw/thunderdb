@@ -170,19 +170,11 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 		}
 		refs := v.ReferenceCols
 		if len(refs) > 0 {
-			refValues := make([]any, len(refs))
-			for i, refCol := range refs {
-				refV, ok := obj[refCol]
-				if !ok {
-					return ErrObjectMissingField(refCol)
-				}
-				refValues[i] = refV
-			}
-			refBytes, err := orderedMa.Marshal(refValues)
+			key, err := pr.computeKey(obj, k)
 			if err != nil {
 				return err
 			}
-			value[k] = refBytes
+			value[k] = key
 		} else {
 			v, ok := obj[k]
 			if !ok {
@@ -227,8 +219,8 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 	return nil
 }
 
-func (pr *Persistent) Delete(ops ...Op) error {
-	iterEntries, err := pr.iter(ops...)
+func (pr *Persistent) Delete(ranges map[string]*keyRange) error {
+	iterEntries, err := pr.iter(ranges)
 	if err != nil {
 		return err
 	}
@@ -261,8 +253,8 @@ func (pr *Persistent) Delete(ops ...Op) error {
 	return nil
 }
 
-func (pr *Persistent) Select(ops ...Op) (iter.Seq2[map[string]any, error], error) {
-	iterEntries, err := pr.iter(ops...)
+func (pr *Persistent) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
+	iterEntries, err := pr.iter(ranges)
 	if err != nil {
 		return nil, err
 	}
@@ -288,11 +280,7 @@ func (pr *Persistent) Project(mapping map[string]string) (Selector, error) {
 	return newProjection(pr, mapping)
 }
 
-func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
-	ranges, err := toRanges(ops...)
-	if err != nil {
-		return nil, err
-	}
+func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error], error) {
 	selectedIndexes := make([]string, 0, len(ranges))
 	for _, idxName := range pr.indexNames {
 		if _, ok := ranges[idxName]; ok {

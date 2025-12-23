@@ -39,21 +39,16 @@ func (p *Projection) Columns() []string {
 	return slices.Collect(maps.Keys(p.toBase))
 }
 
-func (p *Projection) Select(ops ...Op) (iter.Seq2[map[string]any, error], error) {
-	adjustedOps := make([]Op, len(ops))
-	for i, op := range ops {
-		adjustedField, ok := p.toBase[op.Field]
+func (p *Projection) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
+	baseRanges := make(map[string]*keyRange)
+	for projField, kr := range ranges {
+		baseField, ok := p.toBase[projField]
 		if !ok {
-			return nil, ErrProjectionMissingFld(op.Field)
+			return nil, ErrProjectionMissingFld(projField)
 		}
-		adjustedOp := Op{
-			Type:  op.Type,
-			Value: op.Value,
-			Field: adjustedField,
-		}
-		adjustedOps[i] = adjustedOp
+		baseRanges[baseField] = kr
 	}
-	baseSeq, err := p.base.Select(adjustedOps...)
+	baseSeq, err := p.base.Select(baseRanges)
 	if err != nil {
 		return nil, err
 	}

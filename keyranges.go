@@ -61,7 +61,7 @@ func (ir keyRange) distance() []byte {
 	return distance
 }
 
-func toRanges(ops ...Op) (map[string]*keyRange, error) {
+func Filter(ops ...Op) (map[string]*keyRange, error) {
 	ranges := make(map[string]*keyRange)
 	for _, op := range ops {
 		idxRange, exists := ranges[op.Field]
