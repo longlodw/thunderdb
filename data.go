@@ -2,6 +2,7 @@ package thunder
 
 import (
 	"bytes"
+	"encoding/binary"
 	"iter"
 
 	"github.com/openkvlab/boltdb"
@@ -45,23 +46,21 @@ func loadData(
 	}, nil
 }
 
-func (d *dataStorage) insert(value map[string]any) ([]byte, error) {
+func (d *dataStorage) insert(value map[string]any) (uint64, error) {
 	if len(value) != len(d.fields) {
-		return nil, ErrObjectFieldCountMismatch
+		return 0, ErrObjectFieldCountMismatch
 	}
 	id, err := d.bucket.NextSequence()
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	idBytes, err := orderedMa.Marshal([]any{id})
-	if err != nil {
-		return nil, err
-	}
+	var idBytes [8]byte
+	binary.BigEndian.PutUint64(idBytes[:], id)
 	valueBytes, err := d.maUn.Marshal(value)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	return idBytes, d.bucket.Put(idBytes, valueBytes)
+	return id, d.bucket.Put(idBytes[:], valueBytes)
 }
 
 func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
@@ -94,9 +93,10 @@ func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
 				}
 				continue
 			}
+			id := binary.BigEndian.Uint64(k)
 			if !yield(entry{
-				id:    k,
 				value: value,
+				id:    id,
 			}, nil) {
 				return
 			}
@@ -109,6 +109,6 @@ func (d *dataStorage) delete(id []byte) error {
 }
 
 type entry struct {
-	id    []byte
+	id    uint64
 	value map[string]any
 }

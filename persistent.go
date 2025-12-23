@@ -12,7 +12,6 @@ import (
 type Persistent struct {
 	data        *dataStorage
 	indexes     *indexStorage
-	reverseIdx  *reverseIndexStorage
 	fields      map[string]ColumnSpec
 	relation    string
 	uniqueNames []string
@@ -63,11 +62,7 @@ func newPersistent(tx *Tx, relation string, columnSpecs map[string]ColumnSpec) (
 			}
 		}
 	}
-	indexesStore, err := newIndex(bucket, indexNames)
-	if err != nil {
-		return nil, err
-	}
-	reverseIdxStore, err := newReverseIndex(bucket, maUn)
+	indexesStore, err := newIndex(bucket, indexNames, maUn)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +74,6 @@ func newPersistent(tx *Tx, relation string, columnSpecs map[string]ColumnSpec) (
 	return &Persistent{
 		data:        dataStore,
 		indexes:     indexesStore,
-		reverseIdx:  reverseIdxStore,
 		fields:      columnSpecs,
 		relation:    relation,
 		uniqueNames: uniquesNames,
@@ -133,11 +127,7 @@ func loadPersistent(tx *Tx, relation string) (*Persistent, error) {
 		}
 	}
 
-	indexesStore, err := loadIndex(bucket)
-	if err != nil {
-		return nil, err
-	}
-	reverseIdxStore, err := loadReverseIndex(bucket, maUn)
+	indexesStore, err := loadIndex(bucket, maUn)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +139,6 @@ func loadPersistent(tx *Tx, relation string) (*Persistent, error) {
 	return &Persistent{
 		data:        dataStore,
 		indexes:     indexesStore,
-		reverseIdx:  reverseIdxStore,
 		fields:      columnSpecs,
 		relation:    relation,
 		uniqueNames: uniquesNames,
@@ -205,16 +194,15 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 	}
 
 	// Update indexes
-	revIdx := make(map[string][]byte)
 	for _, idxName := range pr.indexNames {
-		revIdxField, err := pr.indexes.insert(idxName, value[idxName], id)
+		idxLoc := &indexLocator{
+			Key: value[idxName],
+			Id:  id,
+		}
+		err := pr.indexes.insert(idxName, idxLoc)
 		if err != nil {
 			return err
 		}
-		revIdx[idxName] = revIdxField
-	}
-	if err := pr.reverseIdx.insert(id, revIdx); err != nil {
-		return err
 	}
 	return nil
 }
@@ -229,24 +217,25 @@ func (pr *Persistent) Delete(ranges map[string]*keyRange) error {
 			return err
 		}
 		// Delete from indexes
-		revIdx, err := pr.reverseIdx.get(e.id)
-		if err != nil {
-			return err
-		}
-		for idxName, revIdxField := range revIdx {
-			keyBytes, err := pr.computeKey(e.value, idxName)
+		for _, idxName := range pr.indexNames {
+			key, err := pr.computeKey(e.value, idxName)
 			if err != nil {
 				return err
 			}
-			if err := pr.indexes.delete(idxName, keyBytes, revIdxField); err != nil {
+			idxLoc := &indexLocator{
+				Key: key,
+				Id:  e.id,
+			}
+			if err := pr.indexes.delete(idxName, idxLoc); err != nil {
 				return err
 			}
 		}
-		if err := pr.reverseIdx.delete(e.id); err != nil {
+		// Delete from data
+		idBytes, err := orderedMa.Marshal([]any{e.id})
+		if err != nil {
 			return err
 		}
-		// Delete from data
-		if err := pr.data.delete(e.id); err != nil {
+		if err := pr.data.delete(idBytes); err != nil {
 			return err
 		}
 	}
@@ -273,7 +262,7 @@ func (pr *Persistent) Name() string {
 }
 
 func (pr *Persistent) Columns() []string {
-	return slices.Clone(pr.columns)
+	return pr.columns
 }
 
 func (pr *Persistent) Project(mapping map[string]string) (Selector, error) {
@@ -339,13 +328,19 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 		return nil, err
 	}
 	return func(yield func(entry, error) bool) {
-		for idBytes := range idxes {
-			id := idBytes
+		for id := range idxes {
+			idBytes, err := orderedMa.Marshal([]any{id})
+			if err != nil {
+				if !yield(entry{}, err) {
+					return
+				}
+				continue
+			}
 			values, err := pr.data.get(&keyRange{
 				includeEnd:   true,
 				includeStart: true,
-				startKey:     id,
-				endKey:       id,
+				startKey:     idBytes,
+				endKey:       idBytes,
 			})
 			if err != nil {
 				if !yield(entry{}, err) {

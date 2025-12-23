@@ -115,7 +115,7 @@ func (q *Query) Name() string {
 }
 
 func (q *Query) Columns() []string {
-	return slices.Clone(q.columns)
+	return q.columns
 }
 
 // Project creates a new Projection that wraps this Query.
@@ -288,19 +288,19 @@ func (qb *queryBody) join(curIdx int, e map[string]any, skipIdx int, ranges map[
 	}
 	selectable := qb.body[curIdx]
 	columns := selectable.Columns()
-	joinedRanges := make(map[string]*keyRange)
+	joinedRanges := make(map[string]*keyRange, len(columns)+len(ranges))
 	for _, col := range columns {
 		if val, ok := e[col]; ok {
-			kr := &keyRange{
-				includeStart: true,
-				includeEnd:   true,
-			}
 			key, err := orderedMa.Marshal([]any{val})
 			if err != nil {
 				return nil, err
 			}
-			kr.startKey = key
-			kr.endKey = key
+			kr := &keyRange{
+				includeStart: true,
+				includeEnd:   true,
+				startKey:     key,
+				endKey:       key,
+			}
 			joinedRanges[col] = kr
 		}
 	}
@@ -334,8 +334,9 @@ func (qb *queryBody) join(curIdx int, e map[string]any, skipIdx int, ranges map[
 				}
 				continue
 			}
-			maps.Copy(en, e)
-			iterJoined, err := qb.join(curIdx+1, en, skipIdx, ranges)
+			joinedEntry := maps.Clone(e)
+			maps.Copy(joinedEntry, en)
+			iterJoined, err := qb.join(curIdx+1, joinedEntry, skipIdx, ranges)
 			if err != nil {
 				if !yield(nil, err) {
 					return

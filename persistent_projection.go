@@ -10,6 +10,7 @@ type Projection struct {
 	fromBase map[string]string
 	toBase   map[string]string
 	base     Selector
+	columns  []string
 }
 
 func newProjection(base Selector, fieldsMap map[string]string) (*Projection, error) {
@@ -31,12 +32,13 @@ func newProjection(base Selector, fieldsMap map[string]string) (*Projection, err
 		fromBase: fromBase,
 		toBase:   toBase,
 		base:     base,
+		columns:  slices.Collect(maps.Keys(toBase)),
 	}, nil
 
 }
 
 func (p *Projection) Columns() []string {
-	return slices.Collect(maps.Keys(p.toBase))
+	return p.columns
 }
 
 func (p *Projection) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
