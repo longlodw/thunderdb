@@ -58,7 +58,7 @@ func newPersistent(tx *Tx, relation string, columnSpecs map[string]ColumnSpec) (
 		}
 		for _, refCol := range refCols {
 			if !slices.Contains(columns, refCol) {
-				return nil, ErrFieldNotFoundInColumns(refCol)
+				return nil, ErrFieldNotFound(refCol)
 			}
 		}
 	}
@@ -92,11 +92,11 @@ func loadPersistent(tx *Tx, relation string) (*Persistent, error) {
 
 	metaBucket := bucket.Bucket([]byte("meta"))
 	if metaBucket == nil {
-		return nil, boltdb_errors.ErrBucketNotFound
+		return nil, ErrMetaDataNotFound(relation)
 	}
 	columnSpecsBytes := metaBucket.Get([]byte("columnSpecs"))
 	if columnSpecsBytes == nil {
-		return nil, ErrMetaDataNotFound
+		return nil, ErrCorruptedMetaDataEntry(relation, "columnSpecs")
 	}
 	var columnSpecs map[string]ColumnSpec
 	if err := maUn.Unmarshal(columnSpecsBytes, &columnSpecs); err != nil {
@@ -122,7 +122,7 @@ func loadPersistent(tx *Tx, relation string) (*Persistent, error) {
 		}
 		for _, refCol := range refCols {
 			if !slices.Contains(columns, refCol) {
-				return nil, ErrFieldNotFoundInColumns(refCol)
+				return nil, ErrFieldNotFound(refCol)
 			}
 		}
 	}
@@ -167,7 +167,7 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 		} else {
 			v, ok := obj[k]
 			if !ok {
-				return ErrObjectMissingField(k)
+				return ErrFieldNotFound(k)
 			}
 			vBytes, err := orderedMa.Marshal([]any{v})
 			if err != nil {
@@ -189,11 +189,10 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 			return err
 		}
 		for range exists {
-			return ErrUniqueConstraint(uniqueName)
+			return ErrUniqueConstraint(uniqueName, value[uniqueName])
 		}
 	}
 
-	// Update indexes
 	for _, idxName := range pr.indexNames {
 		err := pr.indexes.insert(idxName, value[idxName], id[:])
 		if err != nil {
@@ -369,7 +368,7 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 func (pr *Persistent) computeKey(obj map[string]any, name string) ([]byte, error) {
 	keySpec, ok := pr.fields[name]
 	if !ok {
-		return nil, ErrFieldNotFoundInColumns(name)
+		return nil, ErrFieldNotFound(name)
 	}
 	var keyParts []any
 	if len(keySpec.ReferenceCols) > 0 {
@@ -377,14 +376,14 @@ func (pr *Persistent) computeKey(obj map[string]any, name string) ([]byte, error
 		for _, refCol := range keySpec.ReferenceCols {
 			v, ok := obj[refCol]
 			if !ok {
-				return nil, ErrObjectMissingField(refCol)
+				return nil, ErrFieldNotFound(refCol)
 			}
 			keyParts = append(keyParts, v)
 		}
 	} else {
 		v, ok := obj[name]
 		if !ok {
-			return nil, ErrObjectMissingField(name)
+			return nil, ErrFieldNotFound(name)
 		}
 		keyParts = []any{v}
 	}

@@ -81,7 +81,7 @@ func (q *Query) AddBody(body ...Selector) error {
 	// Check if all query columns are present in the body
 	for _, col := range q.columns {
 		if _, ok := columnsSet[col]; !ok {
-			return ErrBodyMissingColumn(col)
+			return ErrFieldNotFound(col)
 		}
 	}
 	newBody := &queryBody{
@@ -208,7 +208,7 @@ func (q *Query) explore(ranges map[string]*keyRange) error {
 						stack = append(stack, upStackItem{part: part, value: e, index: 0, ranges: v.ranges})
 					}
 				default:
-					return ErrUnsupportedSelector(node)
+					return ErrUnsupportedSelector()
 				}
 			}
 		case upStackItem:
@@ -237,8 +237,7 @@ func (q *Query) explore(ranges map[string]*keyRange) error {
 			case *Query:
 				if part.backing != nil {
 					if err := part.backing.Insert(v.value); err != nil {
-						if err.Error() == ErrUniqueConstraint(queryAllUniqueCol).Error() {
-							// Ignore unique constraint violations
+						if thunderErr, ok := err.(*ThunderError); ok && thunderErr.Code == ErrCodeUniqueConstraint {
 							continue
 						}
 						return err

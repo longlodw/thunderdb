@@ -113,7 +113,7 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, erro
 			}
 
 			if len(parts) != 2 {
-				if yield([8]byte{}, ErrCorruptedIndexEntry) {
+				if yield([8]byte{}, ErrCorruptedIndexEntry(name)) {
 					continue
 				} else {
 					return
@@ -127,7 +127,7 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, erro
 			case string:
 				valBytes = []byte(v)
 			default:
-				if yield([8]byte{}, ErrCorruptedIndexEntry) {
+				if yield([8]byte{}, ErrCorruptedIndexEntry(name)) {
 					continue
 				} else {
 					return
@@ -140,7 +140,7 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, erro
 			switch v := idAny.(type) {
 			case string:
 				if len(v) != 8 {
-					if yield([8]byte{}, ErrCorruptedIndexEntry) {
+					if yield([8]byte{}, ErrCorruptedIndexEntry(name)) {
 						continue
 					} else {
 						return
@@ -149,7 +149,7 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, erro
 				copy(id[:], v)
 			case []byte:
 				if len(v) != 8 {
-					if yield([8]byte{}, ErrCorruptedIndexEntry) {
+					if yield([8]byte{}, ErrCorruptedIndexEntry(name)) {
 						continue
 					} else {
 						return
@@ -157,7 +157,7 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, erro
 				}
 				copy(id[:], v)
 			default:
-				if yield([8]byte{}, ErrCorruptedIndexEntry) {
+				if yield([8]byte{}, ErrCorruptedIndexEntry(name)) {
 					continue
 				} else {
 					return

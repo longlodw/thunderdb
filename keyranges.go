@@ -115,7 +115,7 @@ func Filter(ops ...Op) (map[string]*keyRange, error) {
 		case OpNe:
 			idxRange.excludes = append(idxRange.excludes, key)
 		default:
-			return nil, ErrUnsupportedOperator(op.Type)
+			return nil, ErrUnsupportedOperator(op)
 		}
 	}
 	return ranges, nil

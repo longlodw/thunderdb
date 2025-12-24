@@ -15,7 +15,6 @@ type Projection struct {
 
 func newProjection(base Selector, fieldsMap map[string]string) (*Projection, error) {
 	baseColumns := base.Columns()
-	// Allow subset projection, so we don't enforce length equality.
 	// But we must validate that all keys in fieldsMap are in baseColumns.
 
 	fromBase := make(map[string]string)
@@ -23,7 +22,7 @@ func newProjection(base Selector, fieldsMap map[string]string) (*Projection, err
 
 	for baseCol, projCol := range fieldsMap {
 		if !slices.Contains(baseColumns, baseCol) {
-			return nil, ErrProjectionMissingCol(baseCol)
+			return nil, ErrFieldNotFound(baseCol)
 		}
 		fromBase[baseCol] = projCol
 		toBase[projCol] = baseCol
@@ -46,7 +45,7 @@ func (p *Projection) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]a
 	for projField, kr := range ranges {
 		baseField, ok := p.toBase[projField]
 		if !ok {
-			return nil, ErrProjectionMissingFld(projField)
+			return nil, ErrFieldNotFound(projField)
 		}
 		baseRanges[baseField] = kr
 	}
@@ -73,7 +72,7 @@ func (p *Projection) Project(mapping map[string]string) (Selector, error) {
 	for fromField, toField := range mapping {
 		baseField, ok := p.toBase[fromField]
 		if !ok {
-			return nil, ErrProjectionMissingFld(fromField)
+			return nil, ErrFieldNotFound(fromField)
 		}
 		newMapping[baseField] = toField
 	}

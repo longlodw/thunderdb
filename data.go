@@ -48,7 +48,7 @@ func loadData(
 
 func (d *dataStorage) insert(value map[string]any) ([8]byte, error) {
 	if len(value) != len(d.fields) {
-		return [8]byte{}, ErrObjectFieldCountMismatch
+		return [8]byte{}, ErrFieldCountMismatch(len(d.fields), len(value))
 	}
 	id, err := d.bucket.NextSequence()
 	if err != nil {

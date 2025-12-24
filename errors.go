@@ -1,43 +1,96 @@
 package thunder
 
-import (
-	"errors"
-	"fmt"
+import "fmt"
+
+const (
+	ErrCodeFieldCountMismatch = iota
+	ErrCodeFieldNotFound
+	ErrCodeFieldNotFoundInColumns
+	ErrCodeUnsupportedOperator
+	ErrCodeUnsupportedSelector
+	ErrCodeIndexNotFound
+	ErrCodeUniqueConstraint
+	ErrCodeCannotMarshal
+	ErrCodeMetaDataNotFound
+	ErrCodeCorruptedIndexEntry
+	ErrCodeCorruptedMetaDataEntry
 )
 
-var (
-	// Persistent / Query errors
-	ErrObjectFieldCountMismatch = errors.New("object has incorrect number of fields")
-	ErrObjectMissingField       = func(col string) error { return fmt.Errorf("object is missing field %s", col) }
-	ErrIndexMetadataNotFound    = func(idxName string) error { return fmt.Errorf("index metadata not found for index %s", idxName) }
-	ErrFieldNotFoundInColumns   = func(field string) error { return fmt.Errorf("field %s not found in columns", field) }
-	ErrOperationValueComposite  = func(field string) error {
-		return fmt.Errorf("operation value must be a slice for composite index %s", field)
+type ThunderError struct {
+	Code    int
+	Message string
+}
+
+func (e *ThunderError) Error() string {
+	return e.Message
+}
+
+func ErrFieldCountMismatch(expected, got int) error {
+	return &ThunderError{
+		Code:    ErrCodeFieldCountMismatch,
+		Message: fmt.Sprintf("object field count mismatch: expected %d, got %d", expected, got),
 	}
-	ErrTypeMismatch         = func(got, want any) error { return fmt.Errorf("type mismatch: %T vs %T", got, want) }
-	ErrUnsupportedOperator  = func(op OpType) error { return fmt.Errorf("unsupported operator: %d", op) }
-	ErrMarshalComparison    = func(err error) error { return fmt.Errorf("failed to marshal value for comparison: %v", err) }
-	ErrBodyMissingColumn    = func(col string) error { return fmt.Errorf("body missing required column %s", col) }
-	ErrUnsupportedSelector  = func(node any) error { return fmt.Errorf("unsupported selector type in query body: %T", node) }
-	ErrProjectionMissingCol = func(baseCol string) error { return fmt.Errorf("column %s not found in base columns", baseCol) }
-	ErrProjectionMissingFld = func(field string) error { return fmt.Errorf("field %s not found in projection", field) }
-	ErrIndexColNotFound     = func(col string) error { return fmt.Errorf("index column %s not found in columns", col) }
-	ErrIndexNotFound        = func(idxName string) error { return fmt.Errorf("index %s not found", idxName) }
-	ErrUniqueColNotFound    = func(col string) error { return fmt.Errorf("unique column %s not found in columns", col) }
-	ErrUniqueConstraint     = func(idxName string) error {
-		return fmt.Errorf("unique constraint violation on index %s", idxName)
+}
+
+func ErrFieldNotFound(field string) error {
+	return &ThunderError{
+		Code:    ErrCodeFieldNotFound,
+		Message: fmt.Sprintf("field not found: %s", field),
 	}
-	ErrUniqueIndexValueCount = func(field string, expected, got int) error {
-		return fmt.Errorf("unique index %s requires %d values, got %d", field, expected, got)
+}
+
+func ErrUnsupportedOperator(op Op) error {
+	return &ThunderError{
+		Code:    ErrCodeUnsupportedOperator,
+		Message: fmt.Sprintf("unsupported operator: %v", op),
 	}
-	ErrIndexValueCount = func(field string, expected, got int) error {
-		return fmt.Errorf("index %s requires %d values, got %d", field, expected, got)
+}
+
+func ErrUnsupportedSelector() error {
+	return &ThunderError{
+		Code:    ErrCodeUnsupportedSelector,
+		Message: "unsupported selector",
 	}
-	ErrFieldNotFoundInObject = func(field string) error { return fmt.Errorf("field %s not found in object", field) }
-	ErrCannotMarshal         = func(v any) error { return fmt.Errorf("cannot marshal value '%v' of type %T", v, v) }
-	ErrUnsupportedType       = func(v any) error { return fmt.Errorf("unsupported comparison type %T", v) }
-	ErrDataNotFound          = errors.New("data not found")
-	ErrInvalidDataFormat     = errors.New("invalid data format")
-	ErrMetaDataNotFound      = errors.New("metadata not found")
-	ErrCorruptedIndexEntry   = errors.New("corrupted index entry")
-)
+}
+
+func ErrIndexNotFound(indexName string) error {
+	return &ThunderError{
+		Code:    ErrCodeIndexNotFound,
+		Message: fmt.Sprintf("index not found: %s", indexName),
+	}
+}
+
+func ErrUniqueConstraint(indexName string, value any) error {
+	return &ThunderError{
+		Code:    ErrCodeUniqueConstraint,
+		Message: fmt.Sprintf("unique constraint violation on index %s for value %v", indexName, value),
+	}
+}
+
+func ErrCannotMarshal(v any) error {
+	return &ThunderError{
+		Code:    ErrCodeCannotMarshal,
+		Message: fmt.Sprintf("cannot marshal object: %v", v),
+	}
+}
+
+func ErrMetaDataNotFound(relation string) error {
+	return &ThunderError{
+		Code:    ErrCodeMetaDataNotFound,
+		Message: fmt.Sprintf("meta data not found for relation: %s", relation),
+	}
+}
+
+func ErrCorruptedIndexEntry(indexName string) error {
+	return &ThunderError{
+		Code:    ErrCodeCorruptedIndexEntry,
+		Message: fmt.Sprintf("corrupted index entry in index %s", indexName),
+	}
+}
+
+func ErrCorruptedMetaDataEntry(relation, metaName string) error {
+	return &ThunderError{
+		Code:    ErrCodeCorruptedMetaDataEntry,
+		Message: fmt.Sprintf("corrupted meta data entry %s in relation %s", metaName, relation),
+	}
+}
