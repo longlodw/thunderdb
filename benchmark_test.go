@@ -201,6 +201,188 @@ func BenchmarkSelect(b *testing.B) {
 	})
 }
 
+func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
+	db, cleanup := setupBenchmarkDB(b)
+	defer cleanup()
+
+	// Constants for large row generation
+	const largeValSize = 8192 // larger than typical OS page size (4KB)
+	largeVal := make([]byte, largeValSize)
+	for i := range largeVal {
+		largeVal[i] = 'A'
+	}
+	largeStr := string(largeVal)
+
+	tx, _ := db.Begin(true)
+	defer tx.Rollback()
+
+	// Schema setup similar to query_nested_test.go
+	users, _ := tx.CreatePersistent("users", map[string]ColumnSpec{
+		"u_id":     {Indexed: true},
+		"u_name":   {},
+		"group_id": {Indexed: true},
+		"large":    {},
+	})
+	groups, _ := tx.CreatePersistent("groups", map[string]ColumnSpec{
+		"group_id": {Indexed: true},
+		"g_name":   {},
+		"org_id":   {Indexed: true},
+		"large":    {},
+	})
+	orgs, _ := tx.CreatePersistent("orgs", map[string]ColumnSpec{
+		"org_id": {Indexed: true},
+		"o_name": {},
+		"region": {Indexed: true},
+		"large":  {},
+	})
+
+	// Pre-populate some data
+	count := 1000
+	for i := range count {
+		// Orgs
+		orgID := fmt.Sprintf("o%d", i)
+		region := "North"
+		if i%2 == 0 {
+			region = "South"
+		}
+		orgs.Insert(map[string]any{
+			"org_id": orgID,
+			"o_name": fmt.Sprintf("Org_%d", i),
+			"region": region,
+			"large":  largeStr,
+		})
+
+		// Groups
+		groupID := fmt.Sprintf("g%d", i)
+		groups.Insert(map[string]any{
+			"group_id": groupID,
+			"g_name":   fmt.Sprintf("Group_%d", i),
+			"org_id":   orgID,
+			"large":    largeStr,
+		})
+
+		// Users
+		userID := fmt.Sprintf("u%d", i)
+		users.Insert(map[string]any{
+			"u_id":     userID,
+			"u_name":   fmt.Sprintf("User_%d", i),
+			"group_id": groupID,
+			"large":    largeStr,
+		})
+	}
+	tx.Commit()
+
+	b.Run("InsertLargeRows", func(b *testing.B) {
+		db, cleanup := setupBenchmarkDB(b)
+		defer cleanup()
+
+		tx, _ := db.Begin(true)
+		defer tx.Rollback()
+		p, _ := tx.CreatePersistent("large_rows", map[string]ColumnSpec{
+			"id":    {Indexed: true},
+			"large": {},
+		})
+		tx.Commit()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tx, _ := db.Begin(true)
+			p, _ = tx.LoadPersistent("large_rows")
+			p.Insert(map[string]any{
+				"id":    strconv.Itoa(i),
+				"large": largeStr,
+			})
+			tx.Commit()
+		}
+	})
+
+	b.Run("QueryDeeplyNested", func(b *testing.B) {
+		readTx, _ := db.Begin(false)
+		defer readTx.Rollback()
+
+		users, _ = readTx.LoadPersistent("users")
+		groups, _ = readTx.LoadPersistent("groups")
+		orgs, _ = readTx.LoadPersistent("orgs")
+
+		// Nested Query: qGroupsOrgs (Groups + Orgs)
+		qGroupsOrgs, _ := readTx.CreateQuery("groups_orgs", []string{"group_id", "org_id", "region", "large"}, false)
+		qGroupsOrgs.AddBody(groups, orgs)
+
+		// Top Query: qAll (Users + qGroupsOrgs)
+		qAll, _ := readTx.CreateQuery("all_users", []string{"u_id", "group_id", "org_id", "region"}, false)
+		qAll.AddBody(users, qGroupsOrgs)
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			// Query for a specific region
+			op := Eq("region", "North")
+			f, _ := Filter(op)
+			seq, _ := qAll.Select(f)
+			for range seq {
+				// drain
+			}
+		}
+	})
+
+	b.Run("RecursiveLargeRows", func(b *testing.B) {
+		db, cleanup := setupBenchmarkDB(b)
+		defer cleanup()
+
+		depth := 100
+		tx, _ := db.Begin(true)
+		defer tx.Rollback()
+		relation := "graph_large"
+		p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
+			"source": {Indexed: true},
+			"target": {Indexed: true},
+			"large":  {},
+		})
+
+		for i := range depth {
+			p.Insert(map[string]any{
+				"source": fmt.Sprintf("node_%d", i),
+				"target": fmt.Sprintf("node_%d", i+1),
+				"large":  largeStr,
+			})
+		}
+		tx.Commit()
+
+		recursiveLoopBody := func() {
+			rtx, _ := db.Begin(true)
+			defer rtx.Rollback()
+
+			q, _ := rtx.CreateQuery("descendants_large", []string{"target", "large"}, true)
+
+			// Base case
+			baseP, _ := rtx.LoadPersistent(relation)
+			baseProj, _ := baseP.Project(map[string]string{"target": "target", "large": "large"})
+
+			startNodeRel := "start_node_large"
+			startNodeP, _ := rtx.CreatePersistent(startNodeRel, map[string]ColumnSpec{
+				"source": {Indexed: true},
+			})
+			startNodeP.Insert(map[string]any{"source": "node_0"})
+
+			q.AddBody(baseProj, startNodeP)
+
+			// Recursive step
+			recP, _ := rtx.LoadPersistent(relation)
+			recProj, _ := recP.Project(map[string]string{"target": "target", "large": "large"})
+			q.AddBody(q, recProj)
+
+			f, _ := Filter()
+			seq, _ := q.Select(f)
+			for range seq {
+			}
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			recursiveLoopBody()
+		}
+	})
+}
+
 func BenchmarkRecursion(b *testing.B) {
 	db, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
