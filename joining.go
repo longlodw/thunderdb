@@ -1,0 +1,172 @@
+package thunder
+
+import (
+	"bytes"
+	"iter"
+	"maps"
+	"slices"
+)
+
+type Joining struct {
+	bodies          []linkedSelector
+	columns         []string
+	firstOccurences map[string]int
+	parentsList     []*queryParent
+	recursive       bool
+}
+
+func newJoining(bodies []linkedSelector) Selector {
+	columnsSet := make(map[string]struct{})
+	firstOccurences := make(map[string]int)
+	recursive := false
+	result := &Joining{}
+	for bodyIdx, body := range bodies {
+		for _, col := range body.Columns() {
+			columnsSet[col] = struct{}{}
+			if _, exists := firstOccurences[col]; !exists {
+				firstOccurences[col] = bodyIdx
+			}
+		}
+		if body.IsRecursive() {
+			recursive = true
+		}
+		body.addParent(&queryParent{
+			parent: result,
+		})
+	}
+	columns := maps.Keys(columnsSet)
+	result.columns = slices.Collect(columns)
+	result.bodies = bodies
+	result.firstOccurences = firstOccurences
+	result.recursive = recursive
+	return result
+}
+
+func (jr *Joining) Columns() []string {
+	return jr.columns
+}
+
+func (jr *Joining) Project(mapping map[string]string) Selector {
+	return newProjection(jr, mapping)
+}
+
+func (jr *Joining) IsRecursive() bool {
+	return jr.recursive
+}
+
+func (jr *Joining) addParent(parent *queryParent) {
+	jr.parentsList = append(jr.parentsList, parent)
+}
+
+func (jr *Joining) parents() []*queryParent {
+	return jr.parentsList
+}
+
+func (jr *Joining) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
+	seedIdx := jr.bestBodyIndex(ranges)
+	seq, err := jr.bodies[seedIdx].Select(ranges)
+	if err != nil {
+		return nil, err
+	}
+	return func(yield func(map[string]any, error) bool) {
+		for item, err := range seq {
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				continue
+			}
+			nextSeq, err := jr.join(item, ranges, 0, seedIdx)
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				continue
+			}
+			nextSeq(yield)
+		}
+	}, nil
+}
+
+func (jr *Joining) Join(bodies ...Selector) Selector {
+	linkedBodies := make([]linkedSelector, len(bodies))
+	for i, body := range bodies {
+		linkedBodies[i] = body.(linkedSelector)
+	}
+	return newJoining(append(jr.bodies, linkedBodies...))
+}
+
+func (jr *Joining) bestBodyIndex(ranges map[string]*keyRange) int {
+	shortest := slices.MinFunc(slices.Collect(maps.Keys(ranges)), func(aKey, bKey string) int {
+		a := ranges[aKey]
+		b := ranges[bKey]
+		return bytes.Compare(a.distance, b.distance)
+	})
+	return jr.firstOccurences[shortest]
+}
+
+func (jr *Joining) join(values map[string]any, ranges map[string]*keyRange, bodyIdx, skip int) (iter.Seq2[map[string]any, error], error) {
+	if bodyIdx >= len(jr.bodies) {
+		return func(yield func(map[string]any, error) bool) {
+			yield(values, nil)
+		}, nil
+	}
+	if bodyIdx == skip {
+		return jr.join(values, ranges, bodyIdx+1, skip)
+	}
+	body := jr.bodies[bodyIdx]
+	columns := body.Columns()
+	neededRanges := make(map[string]*keyRange)
+	for _, col := range columns {
+		if val, ok := values[col]; ok {
+			key, err := orderedMa.Marshal([]any{val})
+			if err != nil {
+				return nil, err
+			}
+			kr := KeyRange(key, key, true, true, nil)
+			neededRanges[col] = kr
+		}
+	}
+	// Add external ranges that apply to this selectable
+	for name, kr := range ranges {
+		if slices.Contains(columns, name) {
+			if r, exists := neededRanges[name]; !exists {
+				neededRanges[name] = kr
+			} else {
+				if r.startKey == nil || (kr.startKey != nil && bytes.Compare(kr.startKey, r.startKey) > 0) {
+					r.startKey = kr.startKey
+					r.includeStart = kr.includeStart
+				}
+				if r.endKey == nil || (kr.endKey != nil && bytes.Compare(kr.endKey, r.endKey) < 0) {
+					r.endKey = kr.endKey
+					r.includeEnd = kr.includeEnd
+				}
+			}
+		}
+	}
+
+	iterEntries, err := body.Select(neededRanges)
+	if err != nil {
+		return nil, err
+	}
+	return func(yield func(map[string]any, error) bool) {
+		for en, err := range iterEntries {
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				continue
+			}
+			combined := maps.Clone(values)
+			maps.Copy(combined, en)
+			nextSeq, err := jr.join(combined, ranges, bodyIdx+1, skip)
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				continue
+			}
+			nextSeq(yield)
+		}
+	}, nil
+}

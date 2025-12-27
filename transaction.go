@@ -36,7 +36,7 @@ func (tx *Tx) CreatePersistent(
 	relation string,
 	columnSpecs map[string]ColumnSpec,
 ) (*Persistent, error) {
-	return newPersistent(tx, relation, columnSpecs)
+	return newPersistent(tx, relation, columnSpecs, false)
 }
 
 func (tx *Tx) LoadPersistent(
@@ -53,6 +53,6 @@ func (tx *Tx) DeletePersistent(relation string) error {
 	return nil
 }
 
-func (tx *Tx) CreateQuery(name string, columns []string, recursive bool) (*Query, error) {
-	return newQuery(tx, name, columns, recursive)
+func (tx *Tx) CreateRecursion(relation string, colColumnSpec map[string]ColumnSpec) (*Recursion, error) {
+	return newRecursive(tx, relation, colColumnSpec)
 }

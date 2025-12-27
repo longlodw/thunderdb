@@ -12,9 +12,22 @@ type keyRange struct {
 	startKey     []byte
 	endKey       []byte
 	excludes     [][]byte
+	distance     []byte
 }
 
-func (ir keyRange) contains(key []byte) bool {
+func KeyRange(startKey, endKey []byte, includeStart, includeEnd bool, excludes [][]byte) *keyRange {
+	res := &keyRange{
+		startKey:     startKey,
+		endKey:       endKey,
+		excludes:     excludes,
+		includeStart: includeStart,
+		includeEnd:   includeEnd,
+	}
+	res.distance = res.computeDistance()
+	return res
+}
+
+func (ir *keyRange) contains(key []byte) bool {
 	if ir.startKey != nil {
 		cmpStart := bytes.Compare(key, ir.startKey)
 		if cmpStart < 0 || (cmpStart == 0 && !ir.includeStart) {
@@ -30,7 +43,7 @@ func (ir keyRange) contains(key []byte) bool {
 	return !ir.doesExclude(key)
 }
 
-func (ir keyRange) doesExclude(key []byte) bool {
+func (ir *keyRange) doesExclude(key []byte) bool {
 	for _, exKey := range ir.excludes {
 		if bytes.Equal(key, exKey) {
 			return true
@@ -39,7 +52,7 @@ func (ir keyRange) doesExclude(key []byte) bool {
 	return false
 }
 
-func (ir keyRange) distance() []byte {
+func (ir *keyRange) computeDistance() []byte {
 	start := slices.Clone(ir.startKey)
 	if start == nil {
 		start = []byte{}
@@ -117,6 +130,9 @@ func Filter(ops ...Op) (map[string]*keyRange, error) {
 		default:
 			return nil, ErrUnsupportedOperator(op)
 		}
+	}
+	for _, kr := range ranges {
+		kr.distance = kr.computeDistance()
 	}
 	return ranges, nil
 }

@@ -17,10 +17,14 @@ type Persistent struct {
 	uniqueNames []string
 	indexNames  []string
 	columns     []string
+	parentsList []*queryParent
 }
 
-func newPersistent(tx *Tx, relation string, columnSpecs map[string]ColumnSpec) (*Persistent, error) {
+func newPersistent(tx *Tx, relation string, columnSpecs map[string]ColumnSpec, emepheral bool) (*Persistent, error) {
 	tnx := tx.tx
+	if emepheral {
+		tnx = tx.tempTx
+	}
 	maUn := tx.maUn
 	bucket, err := tnx.CreateBucketIfNotExists([]byte(relation))
 	if err != nil {
@@ -147,6 +151,22 @@ func loadPersistent(tx *Tx, relation string) (*Persistent, error) {
 	}, nil
 }
 
+func (pr *Persistent) IsRecursive() bool {
+	return false
+}
+
+func (pr *Persistent) addParent(parent *queryParent) {
+	pr.parentsList = append(pr.parentsList, parent)
+}
+
+func (pr *Persistent) parents() []*queryParent {
+	return pr.parentsList
+}
+
+func (pr *Persistent) Join(bodies ...Selector) Selector {
+	return newJoining(append([]Selector{pr}, bodies...))
+}
+
 func (pr *Persistent) Insert(obj map[string]any) error {
 	id, err := pr.data.insert(obj)
 	if err != nil {
@@ -252,7 +272,7 @@ func (pr *Persistent) Columns() []string {
 	return pr.columns
 }
 
-func (pr *Persistent) Project(mapping map[string]string) (Selector, error) {
+func (pr *Persistent) Project(mapping map[string]string) Selector {
 	return newProjection(pr, mapping)
 }
 
@@ -305,8 +325,8 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 		}, nil
 	}
 	shortestRangeIdxName := slices.MinFunc(selectedIndexes, func(a, b string) int {
-		distA := ranges[a].distance()
-		distB := ranges[b].distance()
+		distA := ranges[a].distance
+		distB := ranges[b].distance
 		return bytes.Compare(distA, distB)
 	})
 	rangeIdx := ranges[shortestRangeIdxName]
