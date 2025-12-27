@@ -61,21 +61,21 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// reach(X, Y) :- nodes(X, Y).
 	// reach(X, Z) :- reach(X, Y), nodes(Y, Z).
 
-	qReach, err := tx.CreateQuery("reach", []string{"source", "target"}, true)
+	qReach, err := tx.CreateRecursion("reach", map[string]ColumnSpec{
+		"source": {},
+		"target": {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Body 1: Base Case
 	// reach(X, Y) :- nodes(X, Y).
-	baseProj, err := nodes.Project(map[string]string{
+	baseProj := nodes.Project(map[string]string{
 		"source": "source",
 		"target": "target",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := qReach.AddBody(baseProj); err != nil {
+	if err := qReach.AddBranch(baseProj); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,24 +84,21 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Join on Y (reach.target == nodes.source)
 
 	// reach(X, Y) -> project Y as "join_key"
-	reachProj, err := qReach.Project(map[string]string{
-		"source": "source",
-		"target": "join_key", // Y
+	reachProj := qReach.Project(map[string]string{
+		"source":   "source",
+		"join_key": "target", // Y
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// nodes(Y, Z) -> project Y as "join_key"
-	nodeProj, err := nodes.Project(map[string]string{
-		"source": "join_key", // Y
-		"target": "target",   // Z
+	nodeProj := nodes.Project(map[string]string{
+		"join_key": "source", // Y
+		"target":   "target", // Z
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	if err := qReach.AddBody(reachProj, nodeProj); err != nil {
+	if err := qReach.AddBranch(reachProj.Join(nodeProj).Project(map[string]string{
+		"source": "source",
+		"target": "target",
+	})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +106,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Find all reachable nodes from A.
 	// Expected: A -> B, B -> A, so reachable: B, A.
 	// If cycle is not handled, this will loop A->B->A->B...
-	f, err := Filter(Eq("source", "A"))
+	f, err := ToKeyRanges(Eq("source", "A"))
 	if err != nil {
 		t.Fatal(err)
 	}

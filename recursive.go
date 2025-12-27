@@ -86,11 +86,17 @@ func (r *Recursion) AddBranch(branch Selector) error {
 		return ErrUnsupportedSelector()
 	} else {
 		r.branches = append(r.branches, ls)
+		ls.addParent(&queryParent{
+			parent: r,
+		})
 	}
 	stack := []linkedSelector{branch.(linkedSelector)}
 	for len(stack) > 0 {
 		top := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+		if r.interestedSet[top] {
+			continue
+		}
 		r.interestedSet[top] = true
 		switch v := top.(type) {
 		case *Projection:
@@ -181,11 +187,14 @@ func (r *Recursion) explore(ranges map[string]*keyRange) error {
 		case *upStack:
 			// Handle up stack logic
 			for _, parent := range v.selector.parents() {
+				if !r.interestedSet[parent.parent] {
+					continue
+				}
 				idx := parent.index
 				switch p := parent.parent.(type) {
 				case *Joining:
 					// Handle joining parent
-					entries, err := p.join(v.value, ranges, 0, idx)
+					entries, err := p.join(v.value, v.ranges, 0, idx)
 					if err != nil {
 						return err
 					}

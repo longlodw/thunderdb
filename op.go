@@ -1,5 +1,7 @@
 package thunder
 
+import "bytes"
+
 const (
 	OpEq = OpType(0b0010)
 	OpNe = OpType(0b0101)
@@ -12,55 +14,108 @@ const (
 type OpType uint8
 
 type Op struct {
-	Field string
-	Value any
-	Type  OpType
+	field  string
+	value  []any
+	opType OpType
 }
 
-func Eq(field string, value any) Op {
+func Eq(field string, value ...any) Op {
 	return Op{
-		Field: field,
-		Value: value,
-		Type:  OpEq,
+		field:  field,
+		value:  value,
+		opType: OpEq,
 	}
 }
 
-func Ne(field string, value any) Op {
+func Ne(field string, value ...any) Op {
 	return Op{
-		Field: field,
-		Value: value,
-		Type:  OpNe,
+		field:  field,
+		value:  value,
+		opType: OpNe,
 	}
 }
 
-func Gt(field string, value any) Op {
+func Gt(field string, value ...any) Op {
 	return Op{
-		Field: field,
-		Value: value,
-		Type:  OpGt,
+		field:  field,
+		value:  value,
+		opType: OpGt,
 	}
 }
 
-func Lt(field string, value any) Op {
+func Lt(field string, value ...any) Op {
 	return Op{
-		Field: field,
-		Value: value,
-		Type:  OpLt,
+		field:  field,
+		value:  value,
+		opType: OpLt,
 	}
 }
 
-func Ge(field string, value any) Op {
+func Ge(field string, value ...any) Op {
 	return Op{
-		Field: field,
-		Value: value,
-		Type:  OpGe,
+		field:  field,
+		value:  value,
+		opType: OpGe,
 	}
 }
 
-func Le(field string, value any) Op {
+func Le(field string, value ...any) Op {
 	return Op{
-		Field: field,
-		Value: value,
-		Type:  OpLe,
+		field:  field,
+		value:  value,
+		opType: OpLe,
 	}
+}
+
+func ToKeyRanges(ops ...Op) (map[string]*keyRange, error) {
+	keyRanges := make(map[string]*keyRange)
+	for _, op := range ops {
+		encodedKey, err := ToKey(op.value...)
+		if err != nil {
+			return nil, err
+		}
+		kr, exists := keyRanges[op.field]
+		if !exists {
+			kr = &keyRange{}
+			keyRanges[op.field] = kr
+		}
+		switch op.opType {
+		case OpEq:
+			if kr.startKey == nil || bytes.Compare(encodedKey, kr.startKey) > 0 {
+				kr.startKey = encodedKey
+				kr.includeStart = true
+			}
+			if kr.endKey == nil || bytes.Compare(encodedKey, kr.endKey) < 0 {
+				kr.endKey = encodedKey
+				kr.includeEnd = true
+			}
+		case OpNe:
+			kr.excludes = append(kr.excludes, encodedKey)
+		case OpGt:
+			if kr.startKey == nil || bytes.Compare(encodedKey, kr.startKey) >= 0 {
+				kr.startKey = encodedKey
+				kr.includeStart = false
+			}
+		case OpGe:
+			if kr.startKey == nil || bytes.Compare(encodedKey, kr.startKey) > 0 {
+				kr.startKey = encodedKey
+				kr.includeStart = true
+			}
+		case OpLt:
+			if kr.endKey == nil || bytes.Compare(encodedKey, kr.endKey) <= 0 {
+				kr.endKey = encodedKey
+				kr.includeEnd = false
+			}
+		case OpLe:
+			if kr.endKey == nil || bytes.Compare(encodedKey, kr.endKey) < 0 {
+				kr.endKey = encodedKey
+				kr.includeEnd = true
+			}
+		}
+	}
+	for field, kr := range keyRanges {
+		kr.distance = kr.computeDistance()
+		keyRanges[field] = kr
+	}
+	return keyRanges, nil
 }

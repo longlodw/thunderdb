@@ -84,7 +84,7 @@ func TestPersistent_AllOperators(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f, err := Filter(tt.ops...)
+			f, err := ToKeyRanges(tt.ops...)
 			if err != nil {
 				t.Fatalf("Filter creation failed: %v", err)
 			}

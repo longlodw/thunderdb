@@ -88,38 +88,86 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// Nested Query: qGroupsOrgs (Groups + Orgs)
 	// Columns: Union of groups and orgs columns
 	// group_id, g_name, org_id, o_name, region
-	qGroupsOrgsCols := []string{"group_id", "g_name", "org_id", "o_name", "region"}
-	qGroupsOrgs, err := tx.CreateQuery("groups_orgs", qGroupsOrgsCols, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := qGroupsOrgs.AddBody(groups, orgs); err != nil {
-		t.Fatal(err)
-	}
+	qGroupsOrgs := groups.Join(orgs)
 
 	// Top Query: qAll (Users/Admins + qGroupsOrgs)
 	// Columns: Union of users/admins and qGroupsOrgs
 	// u_id, u_name, group_id, g_name, org_id, o_name, region
-	qAllCols := []string{"u_id", "u_name", "group_id", "g_name", "org_id", "o_name", "region"}
-	qAll, err := tx.CreateQuery("all_users", qAllCols, false)
+
+	// Body 1: Users + qGroupsOrgs
+	// Body 2: Admins + qGroupsOrgs
+	// Since we cannot add multiple bodies to a joining directly in the new API (it creates a new one),
+	// we will run two separate queries and combine results or check individually.
+	// For this test, let's verify each path individually or assume the user wants a single interface.
+	// The original test tested adding multiple bodies to a single query.
+	// To replicate "Union" behavior (Body 1 OR Body 2), we might not have a direct "Union" selector yet
+	// unless Joining supports it or we use recursion.
+	// However, looking at previous tests, "AddBody" on a Query added alternative paths (OR semantics).
+	// Joining struct has `bodies []linkedSelector`.
+	// The new `Join` method creates a `Joining` with multiple bodies, which implies AND semantics (joining them).
+	// Wait, `Joining` struct has `bodies` which are joined together.
+	// The old `Query` had `bodies` which were alternatives?
+	// Let's check `Joining.Select`.
+	// `func (jr *Joining) Select` iterates `jr.bodies[seedIdx].Select` then calls `jr.join`.
+	// This implies AND semantics (Join).
+
+	// The original test `qAll.AddBody(users, qGroupsOrgs)` and `qAll.AddBody(admins, qGroupsOrgs)`
+	// implies qAll = (users JOIN qGroupsOrgs) UNION (admins JOIN qGroupsOrgs).
+	// The new API seems to move towards explicit Join selectors.
+	// If we want Union, we might need a different approach or just test the two joins separately.
+	// For now, let's test the two joins separately as the "Union" might not be directly supported
+	// without a "Union" selector or using Recursion (which supports multiple branches).
+
+	// Let's use Recursion to simulate Union if needed, or just test separately.
+	// Given the context "query no longer exists", and we have `Joining` and `Recursion`.
+	// `Recursion` has `AddBranch`. Each branch is an alternative (OR).
+	// So we can use `Recursion` to simulate the Union.
+
+	qAll, err := tx.CreateRecursion("all_users_union", map[string]ColumnSpec{
+		"u_id":     {},
+		"u_name":   {},
+		"group_id": {},
+		"g_name":   {},
+		"org_id":   {},
+		"o_name":   {},
+		"region":   {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Body 1: Users + qGroupsOrgs
-	if err := qAll.AddBody(users, qGroupsOrgs); err != nil {
+	// Branch 1: Users + qGroupsOrgs
+	branch1 := users.Join(qGroupsOrgs).Project(map[string]string{
+		"u_id":     "u_id",
+		"u_name":   "u_name",
+		"group_id": "group_id",
+		"g_name":   "g_name",
+		"org_id":   "org_id",
+		"o_name":   "o_name",
+		"region":   "region",
+	})
+	if err := qAll.AddBranch(branch1); err != nil {
 		t.Fatal(err)
 	}
 
-	// Body 2: Admins + qGroupsOrgs
-	if err := qAll.AddBody(admins, qGroupsOrgs); err != nil {
+	// Branch 2: Admins + qGroupsOrgs
+	branch2 := admins.Join(qGroupsOrgs).Project(map[string]string{
+		"u_id":     "u_id",
+		"u_name":   "u_name",
+		"group_id": "group_id",
+		"g_name":   "g_name",
+		"org_id":   "org_id",
+		"o_name":   "o_name",
+		"region":   "region",
+	})
+	if err := qAll.AddBranch(branch2); err != nil {
 		t.Fatal(err)
 	}
 
 	// 3. Select Region="North"
 	// Should return Alice (user) and Charlie (admin)
 	op := Eq("region", "North")
-	f, err := Filter(op)
+	f, err := ToKeyRanges(op)
 	if err != nil {
 		t.Fatal(err)
 	}

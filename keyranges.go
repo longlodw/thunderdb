@@ -15,6 +15,10 @@ type keyRange struct {
 	distance     []byte
 }
 
+func ToKey(values ...any) ([]byte, error) {
+	return orderedMa.Marshal(values)
+}
+
 func KeyRange(startKey, endKey []byte, includeStart, includeEnd bool, excludes [][]byte) *keyRange {
 	res := &keyRange{
 		startKey:     startKey,
@@ -72,67 +76,4 @@ func (ir *keyRange) computeDistance() []byte {
 	distance := make([]byte, len(start))
 	subtle.XORBytes(distance, end, start)
 	return distance
-}
-
-func Filter(ops ...Op) (map[string]*keyRange, error) {
-	ranges := make(map[string]*keyRange)
-	for _, op := range ops {
-		idxRange, exists := ranges[op.Field]
-		var valSlice []any
-		if s, ok := op.Value.([]any); ok {
-			valSlice = s
-		} else {
-			valSlice = []any{op.Value}
-		}
-		key, err := orderedMa.Marshal(valSlice)
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
-			idxRange = &keyRange{
-				includeStart: true,
-				includeEnd:   true,
-			}
-			ranges[op.Field] = idxRange
-		}
-		switch op.Type {
-		case OpEq:
-			if idxRange.startKey == nil || bytes.Compare(key, idxRange.startKey) > 0 {
-				idxRange.startKey = key
-				idxRange.includeStart = true
-			}
-			if idxRange.endKey == nil || bytes.Compare(key, idxRange.endKey) < 0 {
-				idxRange.endKey = key
-				idxRange.includeEnd = true
-			}
-		case OpLt:
-			if idxRange.endKey == nil || bytes.Compare(key, idxRange.endKey) < 0 {
-				idxRange.endKey = key
-				idxRange.includeEnd = false
-			}
-		case OpLe:
-			if idxRange.endKey == nil || bytes.Compare(key, idxRange.endKey) < 0 {
-				idxRange.endKey = key
-				idxRange.includeEnd = true
-			}
-		case OpGt:
-			if idxRange.startKey == nil || bytes.Compare(key, idxRange.startKey) > 0 {
-				idxRange.startKey = key
-				idxRange.includeStart = false
-			}
-		case OpGe:
-			if idxRange.startKey == nil || bytes.Compare(key, idxRange.startKey) > 0 {
-				idxRange.startKey = key
-				idxRange.includeStart = true
-			}
-		case OpNe:
-			idxRange.excludes = append(idxRange.excludes, key)
-		default:
-			return nil, ErrUnsupportedOperator(op)
-		}
-	}
-	for _, kr := range ranges {
-		kr.distance = kr.computeDistance()
-	}
-	return ranges, nil
 }

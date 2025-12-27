@@ -52,7 +52,7 @@ func (idx *indexStorage) insert(name string, key, id []byte) error {
 	if indexBk == nil {
 		return ErrIndexNotFound(name)
 	}
-	compositeKey, err := orderedMa.Marshal([]any{key, id})
+	compositeKey, err := ToKey(key, id)
 	if err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func (idx *indexStorage) delete(name string, key, id []byte) error {
 	if indexBk == nil {
 		return ErrIndexNotFound(name)
 	}
-	compositeKey, err := orderedMa.Marshal([]any{key, id})
+	compositeKey, err := ToKey(key, id)
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, erro
 		var err error
 
 		if kr.startKey != nil {
-			seekPrefix, err = orderedMa.Marshal([]any{kr.startKey})
+			seekPrefix, err = ToKey(kr.startKey)
 			if err != nil {
 				if !yield([8]byte{}, err) {
 					return

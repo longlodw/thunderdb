@@ -72,7 +72,12 @@ func (p *Projection) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]a
 }
 
 func (p *Projection) Join(bodies ...Selector) Selector {
-	return newJoining(append([]Selector{p}, bodies...))
+	linedBodies := make([]linkedSelector, len(bodies)+1)
+	linedBodies[0] = p
+	for i, body := range bodies {
+		linedBodies[i+1] = body.(linkedSelector)
+	}
+	return newJoining(linedBodies)
 }
 
 func (p *Projection) Project(mapping map[string]string) Selector {
@@ -80,7 +85,7 @@ func (p *Projection) Project(mapping map[string]string) Selector {
 	for fromField, toField := range mapping {
 		baseField, ok := p.toBase[toField]
 		if !ok {
-			continue
+			panic(ErrFieldNotFound(toField))
 		}
 		newMapping[fromField] = baseField
 	}

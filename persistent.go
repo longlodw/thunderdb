@@ -164,7 +164,12 @@ func (pr *Persistent) parents() []*queryParent {
 }
 
 func (pr *Persistent) Join(bodies ...Selector) Selector {
-	return newJoining(append([]Selector{pr}, bodies...))
+	linkedBodies := make([]linkedSelector, 0, len(bodies)+1)
+	linkedBodies = append(linkedBodies, pr)
+	for _, body := range bodies {
+		linkedBodies = append(linkedBodies, body.(linkedSelector))
+	}
+	return newJoining(linkedBodies)
 }
 
 func (pr *Persistent) Insert(obj map[string]any) error {
@@ -189,7 +194,7 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 			if !ok {
 				return ErrFieldNotFound(k)
 			}
-			vBytes, err := orderedMa.Marshal([]any{v})
+			vBytes, err := ToKey(v)
 			if err != nil {
 				return err
 			}
@@ -407,7 +412,7 @@ func (pr *Persistent) computeKey(obj map[string]any, name string) ([]byte, error
 		}
 		keyParts = []any{v}
 	}
-	return orderedMa.Marshal(keyParts)
+	return ToKey(keyParts...)
 }
 
 func (pr *Persistent) matchOps(value map[string][]byte, keyRanges map[string]*keyRange, skip string) (bool, error) {

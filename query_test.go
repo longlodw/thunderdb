@@ -72,21 +72,12 @@ func TestQuery_Basic(t *testing.T) {
 
 	// Define a query that joins users and departments
 	// We want to find users in 'engineering' and their location
-	q, err := tx.CreateQuery("agg", []string{"id", "username", "department", "location"}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Query Body: Join users and departments on 'department'
-	// The join logic is implicit: both have 'department' column
-	if err := q.AddBody(users, depts); err != nil {
-		t.Fatal(err)
-	}
+	q := users.Join(depts)
 
 	// Execute Select on the Query
 	// Filter by username 'alice'
 	op := Eq("username", "alice")
-	f, err := Filter(op)
+	f, err := ToKeyRanges(op)
 	if err != nil {
 		t.Fatal(err)
 	}

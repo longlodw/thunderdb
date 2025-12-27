@@ -71,7 +71,7 @@ func Example() {
 
 	// Create a filter: username == "alice"
 	op := thunder.Eq("username", "alice")
-	f, err := thunder.Filter(op)
+	f, err := thunder.ToKeyRanges(op)
 	if err != nil {
 		panic(err)
 	}
@@ -149,21 +149,21 @@ func Example_recursive() {
 	// Create a recursive query named "path"
 	// Schema: ancestor, descendant
 	// recursive=true
-	qPath, err := tx.CreateQuery("path", []string{"ancestor", "descendant"}, true)
+	qPath, err := tx.CreateRecursion("path", map[string]thunder.ColumnSpec{
+		"ancestor":   {},
+		"descendant": {},
+	})
 	if err != nil {
 		panic(err)
 	}
 
 	// Rule 1 (Base Case): Direct reports
 	// path(manager_id, id) :- employees(id, ..., manager_id)
-	baseProj, err := employees.Project(map[string]string{
-		"manager_id": "ancestor",
-		"id":         "descendant",
+	baseProj := employees.Project(map[string]string{
+		"ancestor":   "manager_id",
+		"descendant": "id",
 	})
-	if err != nil {
-		panic(err)
-	}
-	if err := qPath.AddBody(baseProj); err != nil {
+	if err := qPath.AddBranch(baseProj); err != nil {
 		panic(err)
 	}
 
@@ -172,28 +172,25 @@ func Example_recursive() {
 	// We join 'employees' (manager=a, id=b) with 'path' (ancestor=b, descendant=c)
 	// Join key is implicit 'b' (mapped to the same name "join_key")
 
-	edgeProj, err := employees.Project(map[string]string{
-		"manager_id": "ancestor", // a
-		"id":         "join_key", // b
+	edgeProj := employees.Project(map[string]string{
+		"ancestor": "manager_id", // a
+		"join_key": "id",         // b
 	})
-	if err != nil {
-		panic(err)
-	}
 
-	pathProj, err := qPath.Project(map[string]string{
-		"ancestor":   "join_key",   // b
+	pathProj := qPath.Project(map[string]string{
+		"join_key":   "ancestor",   // b
 		"descendant": "descendant", // c
 	})
-	if err != nil {
-		panic(err)
-	}
 
-	if err := qPath.AddBody(edgeProj, pathProj); err != nil {
+	if err := qPath.AddBranch(edgeProj.Join(pathProj).Project(map[string]string{
+		"ancestor":   "ancestor",
+		"descendant": "descendant",
+	})); err != nil {
 		panic(err)
 	}
 
 	// Execute: Find all descendants of Alice (id=1)
-	f, err := thunder.Filter(thunder.Eq("ancestor", "1"))
+	f, err := thunder.ToKeyRanges(thunder.Eq("ancestor", "1"))
 	if err != nil {
 		panic(err)
 	}

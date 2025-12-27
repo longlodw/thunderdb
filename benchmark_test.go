@@ -137,7 +137,7 @@ func BenchmarkSelect(b *testing.B) {
 			// Search for random val (non-indexed)
 			target := float64(rand.Intn(count))
 			op := Eq("val", target)
-			f, err := Filter(op)
+			f, err := ToKeyRanges(op)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -153,7 +153,7 @@ func BenchmarkSelect(b *testing.B) {
 			// Search for random val (indexed)
 			target := float64(rand.Intn(count))
 			op := Eq("val", target)
-			f, err := Filter(op)
+			f, err := ToKeyRanges(op)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -171,7 +171,7 @@ func BenchmarkSelect(b *testing.B) {
 			end := start + 50.0
 			op1 := Ge("val", start)
 			op2 := Lt("val", end)
-			f, err := Filter(op1, op2)
+			f, err := ToKeyRanges(op1, op2)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -189,7 +189,7 @@ func BenchmarkSelect(b *testing.B) {
 			end := start + 50.0
 			op1 := Ge("val", start)
 			op2 := Lt("val", end)
-			f, err := Filter(op1, op2)
+			f, err := ToKeyRanges(op1, op2)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -285,7 +285,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		tx.Commit()
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for i := 0; b.Loop(); i++ {
 			tx, _ := db.Begin(true)
 			p, _ = tx.LoadPersistent("large_rows")
 			p.Insert(map[string]any{
@@ -305,18 +305,19 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		orgs, _ = readTx.LoadPersistent("orgs")
 
 		// Nested Query: qGroupsOrgs (Groups + Orgs)
-		qGroupsOrgs, _ := readTx.CreateQuery("groups_orgs", []string{"group_id", "org_id", "region", "large"}, false)
-		qGroupsOrgs.AddBody(groups, orgs)
+		groups, _ := readTx.LoadPersistent("groups")
+		orgs, _ := readTx.LoadPersistent("orgs")
+		qGroupsOrgs := groups.Join(orgs)
 
 		// Top Query: qAll (Users + qGroupsOrgs)
-		qAll, _ := readTx.CreateQuery("all_users", []string{"u_id", "group_id", "org_id", "region"}, false)
-		qAll.AddBody(users, qGroupsOrgs)
+		users, _ := readTx.LoadPersistent("users")
+		qAll := users.Join(qGroupsOrgs)
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			// Query for a specific region
 			op := Eq("region", "North")
-			f, _ := Filter(op)
+			f, _ := ToKeyRanges(op)
 			seq, _ := qAll.Select(f)
 			for range seq {
 				// drain
@@ -351,11 +352,14 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			rtx, _ := db.Begin(true)
 			defer rtx.Rollback()
 
-			q, _ := rtx.CreateQuery("descendants_large", []string{"target", "large"}, true)
+			q, _ := rtx.CreateRecursion("descendants_large", map[string]ColumnSpec{
+				"target": {},
+				"large":  {},
+			})
 
 			// Base case
 			baseP, _ := rtx.LoadPersistent(relation)
-			baseProj, _ := baseP.Project(map[string]string{"target": "target", "large": "large"})
+			baseProj := baseP.Project(map[string]string{"target": "target", "large": "large"})
 
 			startNodeRel := "start_node_large"
 			startNodeP, _ := rtx.CreatePersistent(startNodeRel, map[string]ColumnSpec{
@@ -363,21 +367,20 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			})
 			startNodeP.Insert(map[string]any{"source": "node_0"})
 
-			q.AddBody(baseProj, startNodeP)
+			q.AddBranch(baseProj.Join(startNodeP))
 
 			// Recursive step
 			recP, _ := rtx.LoadPersistent(relation)
-			recProj, _ := recP.Project(map[string]string{"target": "target", "large": "large"})
-			q.AddBody(q, recProj)
+			recProj := recP.Project(map[string]string{"target": "target", "large": "large"})
+			q.AddBranch(q.Join(recProj))
 
-			f, _ := Filter()
-			seq, _ := q.Select(f)
+			seq, _ := q.Select(nil)
 			for range seq {
 			}
 		}
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			recursiveLoopBody()
 		}
 	})
@@ -421,12 +424,14 @@ func BenchmarkRecursion(b *testing.B) {
 		rtx, _ := db.Begin(true)
 		defer rtx.Rollback()
 
-		q, _ := rtx.CreateQuery("descendants", []string{"target"}, true)
+		q, _ := rtx.CreateRecursion("descendants", map[string]ColumnSpec{
+			"target": {},
+		})
 
 		// Base case: direct children of node_0
 		baseP, _ := rtx.LoadPersistent(relation)
 		// Select target where source = node_0
-		baseProj, _ := baseP.Project(map[string]string{"target": "target"})
+		baseProj := baseP.Project(map[string]string{"target": "target"})
 
 		// Creating a helper relation for the start node constraint
 		startNodeRel := "start_node"
@@ -435,23 +440,19 @@ func BenchmarkRecursion(b *testing.B) {
 		})
 		startNodeP.Insert(map[string]any{"source": "node_0"})
 
-		q.AddBody(baseProj, startNodeP)
+		q.AddBranch(baseProj.Join(startNodeP))
 
 		// Recursive step: children of discovered targets
 		// Join graph G on G.source = descendant.target
 		recP, _ := rtx.LoadPersistent(relation)
-		recProj, _ := recP.Project(map[string]string{"target": "target"})
+		recProj := recP.Project(map[string]string{"target": "target"})
 
 		// We need to join q (source of truth for recursion) with recP
 		// q(target) -> recP(source) -> output(target)
-		q.AddBody(q, recProj)
+		q.AddBranch(q.Join(recProj))
 
 		// Execute
-		f, err := Filter()
-		if err != nil {
-			b.Fatal(err)
-		}
-		seq, _ := q.Select(f)
+		seq, _ := q.Select(nil)
 		for range seq {
 		}
 	}
@@ -474,12 +475,14 @@ func BenchmarkRecursion(b *testing.B) {
 			var nextNodes []string
 			for _, node := range currentNodes {
 				// Find children
-				op := Eq("source", node)
-				f, err := Filter(op)
+				nodeKey, err := ToKey(node)
 				if err != nil {
 					b.Fatal(err)
 				}
-				seq, _ := pLoad.Select(f)
+
+				seq, _ := pLoad.Select(map[string]*keyRange{
+					"source": KeyRange(nodeKey, nodeKey, true, true, nil),
+				})
 				for row := range seq {
 					target := row["target"].(string)
 					if !visited[target] {

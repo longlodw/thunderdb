@@ -49,7 +49,10 @@ func TestQuery_Recursive(t *testing.T) {
 	// OR simpler left-linear: path(a, b) :- edge(a, b).
 	//                         path(a, c) :- edge(a, b), path(b, c).
 
-	qPath, err := tx.CreateQuery("path", []string{"ancestor", "descendant"}, true)
+	qPath, err := tx.CreateRecursion("path", map[string]ColumnSpec{
+		"ancestor":   {},
+		"descendant": {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,14 +60,11 @@ func TestQuery_Recursive(t *testing.T) {
 	// Body 1: Base Case
 	// path(a, b) :- edge(a, b).
 	// edge is 'employees' table: manager_id (a) -> id (b).
-	baseProj, err := employees.Project(map[string]string{
-		"manager_id": "ancestor",
-		"id":         "descendant",
+	baseProj := employees.Project(map[string]string{
+		"ancestor":   "manager_id",
+		"descendant": "id",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := qPath.AddBody(baseProj); err != nil {
+	if err := qPath.AddBranch(baseProj); err != nil {
 		t.Fatal(err)
 	}
 
@@ -74,30 +74,27 @@ func TestQuery_Recursive(t *testing.T) {
 	// edge (employees): manager_id (a) -> ancestor, id (b) -> join_key
 	// path (qPath): ancestor (b) -> join_key, descendant (c) -> descendant
 
-	edgeProj2, err := employees.Project(map[string]string{
-		"manager_id": "ancestor", // a
-		"id":         "join_key", // b
+	edgeProj2 := employees.Project(map[string]string{
+		"ancestor": "manager_id", // a
+		"join_key": "id",         // b
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	pathProj2, err := qPath.Project(map[string]string{
-		"ancestor":   "join_key",   // b
+	pathProj2 := qPath.Project(map[string]string{
+		"join_key":   "ancestor",   // b
 		"descendant": "descendant", // c
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	if err := qPath.AddBody(edgeProj2, pathProj2); err != nil {
+	if err := qPath.AddBranch(edgeProj2.Join(pathProj2).Project(map[string]string{
+		"ancestor":   "ancestor",
+		"descendant": "descendant",
+	})); err != nil {
 		t.Fatal(err)
 	}
 
 	// 4. Execution
 	// Find all descendants of Alice (id=1).
 	// query: path(ancestor=1, descendant=X).
-	f, err := Filter(Eq("ancestor", "1"))
+	f, err := ToKeyRanges(Eq("ancestor", "1"))
 	if err != nil {
 		t.Fatal(err)
 	}

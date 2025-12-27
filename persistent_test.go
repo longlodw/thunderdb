@@ -87,7 +87,7 @@ func basicCRUD_SelectAlice(t *testing.T, db *DB) {
 
 	// Use simple value "alice"
 	op := Eq("username", "alice")
-	f, err := Filter(op)
+	f, err := ToKeyRanges(op)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func basicCRUD_DeleteBob(t *testing.T, db *DB) {
 
 	// Use simple value "bob"
 	op := Eq("username", "bob")
-	f, err := Filter(op)
+	f, err := ToKeyRanges(op)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func basicCRUD_VerifyDeleteBob(t *testing.T, db *DB) {
 	}
 
 	op := Eq("username", "bob")
-	f, err := Filter(op)
+	f, err := ToKeyRanges(op)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func nonIndexed_Select(t *testing.T, db *DB) {
 	}
 
 	op := Eq("price", 20.0)
-	f, err := Filter(op)
+	f, err := ToKeyRanges(op)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,17 +298,14 @@ func projection_Select(t *testing.T, db *DB) {
 	}
 
 	mapping := map[string]string{
-		"id":       "user_id",
-		"username": "login_name",
-		"age":      "user_age",
+		"user_id":    "id",
+		"login_name": "username",
+		"user_age":   "age",
 	}
-	proj, err := p.Project(mapping)
-	if err != nil {
-		t.Fatal(err)
-	}
+	proj := p.Project(mapping)
 
 	op := Eq("login_name", "alice")
-	f, err := Filter(op)
+	f, err := ToKeyRanges(op)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +385,7 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 
 	// Test Greater Than
 	opGt := Gt("price", 15.0)
-	f, err := Filter(opGt)
+	f, err := ToKeyRanges(opGt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +415,7 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 
 	// Le(20.0) -> Expect C (0) and D (20)
 	opLe := Le("stock", 20.0)
-	f, err = Filter(opLe)
+	f, err = ToKeyRanges(opLe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +445,7 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 	op1 := Gt("price", 10.0)
 	op2 := Gt("stock", 0.0)
 
-	f, err = Filter(op1, op2)
+	f, err = ToKeyRanges(op1, op2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,8 +537,8 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 
 	// Test 1: Exact match on composite index
 	// For composite index, we DO need a slice of values
-	op := Eq("name", []any{"John", "Doe"})
-	f, err := Filter(op)
+	op := Eq("name", "John", "Doe")
+	f, err := ToKeyRanges(op)
 	if err != nil {
 		t.Fatalf("Filter failed: %v", err)
 	}
@@ -565,10 +562,10 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	}
 
 	// Test 2: Composite index AND non-indexed filter
-	op1 := Eq("name", []any{"John", "Doe"})
+	op1 := Eq("name", "John", "Doe")
 	op2 := Gt("age", 20.0)
 
-	f, err = Filter(op1, op2)
+	f, err = ToKeyRanges(op1, op2)
 	if err != nil {
 		t.Fatalf("Filter failed: %v", err)
 	}
@@ -589,10 +586,10 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	if count != 1 {
 		t.Errorf("Expected 1 result, got %d", count)
 	}
-	opGe := Ge("name", []any{"John", "Doae"})
-	opLt := Lt("name", []any{"John", "Smitz"})
+	opGe := Ge("name", "John", "Doae")
+	opLt := Lt("name", "John", "Smitz")
 
-	f, err = Filter(opGe, opLt)
+	f, err = ToKeyRanges(opGe, opLt)
 	if err != nil {
 		t.Fatalf("Filter failed: %v", err)
 	}

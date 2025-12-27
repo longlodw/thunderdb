@@ -32,6 +32,7 @@ func newJoining(bodies []linkedSelector) Selector {
 		}
 		body.addParent(&queryParent{
 			parent: result,
+			index:  bodyIdx,
 		})
 	}
 	columns := maps.Keys(columnsSet)
@@ -93,10 +94,13 @@ func (jr *Joining) Join(bodies ...Selector) Selector {
 	for i, body := range bodies {
 		linkedBodies[i] = body.(linkedSelector)
 	}
-	return newJoining(append(jr.bodies, linkedBodies...))
+	return newJoining(append(linkedBodies, jr.bodies...))
 }
 
 func (jr *Joining) bestBodyIndex(ranges map[string]*keyRange) int {
+	if len(ranges) == 0 {
+		return 0
+	}
 	shortest := slices.MinFunc(slices.Collect(maps.Keys(ranges)), func(aKey, bKey string) int {
 		a := ranges[aKey]
 		b := ranges[bKey]
@@ -119,7 +123,7 @@ func (jr *Joining) join(values map[string]any, ranges map[string]*keyRange, body
 	neededRanges := make(map[string]*keyRange)
 	for _, col := range columns {
 		if val, ok := values[col]; ok {
-			key, err := orderedMa.Marshal([]any{val})
+			key, err := ToKey(val)
 			if err != nil {
 				return nil, err
 			}
@@ -141,6 +145,7 @@ func (jr *Joining) join(values map[string]any, ranges map[string]*keyRange, body
 					r.endKey = kr.endKey
 					r.includeEnd = kr.includeEnd
 				}
+				r.distance = r.computeDistance()
 			}
 		}
 	}
