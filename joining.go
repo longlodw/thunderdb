@@ -137,15 +137,20 @@ func (jr *Joining) join(values map[string]any, ranges map[string]*keyRange, body
 			if r, exists := neededRanges[name]; !exists {
 				neededRanges[name] = kr
 			} else {
+				changed := false
 				if r.startKey == nil || (kr.startKey != nil && bytes.Compare(kr.startKey, r.startKey) > 0) {
 					r.startKey = kr.startKey
 					r.includeStart = kr.includeStart
+					changed = true
 				}
 				if r.endKey == nil || (kr.endKey != nil && bytes.Compare(kr.endKey, r.endKey) < 0) {
 					r.endKey = kr.endKey
 					r.includeEnd = kr.includeEnd
+					changed = true
 				}
-				r.distance = r.computeDistance()
+				if changed {
+					r.distance = r.computeDistance()
+				}
 			}
 		}
 	}

@@ -305,12 +305,12 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		orgs, _ = readTx.LoadPersistent("orgs")
 
 		// Nested Query: qGroupsOrgs (Groups + Orgs)
-		groups, _ := readTx.LoadPersistent("groups")
-		orgs, _ := readTx.LoadPersistent("orgs")
+		groups, _ = readTx.LoadPersistent("groups")
+		orgs, _ = readTx.LoadPersistent("orgs")
 		qGroupsOrgs := groups.Join(orgs)
 
 		// Top Query: qAll (Users + qGroupsOrgs)
-		users, _ := readTx.LoadPersistent("users")
+		users, _ = readTx.LoadPersistent("users")
 		qAll := users.Join(qGroupsOrgs)
 
 		b.ResetTimer()
@@ -499,4 +499,89 @@ func BenchmarkRecursion(b *testing.B) {
 			iterativeLoopBody()
 		}
 	})
+}
+
+func BenchmarkRecursionWithNoise(b *testing.B) {
+	noiseLevels := []int{0, 1000, 10000, 100000}
+
+	for _, noiseCount := range noiseLevels {
+		b.Run(fmt.Sprintf("Noise_%d", noiseCount), func(b *testing.B) {
+			db, cleanup := setupBenchmarkDB(b)
+			defer cleanup()
+
+			// 1. Setup Data: Graph + Noise
+			depth := 100
+			tx, _ := db.Begin(true)
+			defer tx.Rollback()
+
+			relation := "graph"
+			p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
+				"source": {Indexed: true},
+				"target": {Indexed: true},
+				"type":   {Indexed: true},
+			})
+
+			// Insert "Relevant" Graph Path: node_0 -> node_1 ... -> node_100
+			for i := range depth {
+				p.Insert(map[string]any{
+					"source": fmt.Sprintf("node_%d", i),
+					"target": fmt.Sprintf("node_%d", i+1),
+					"type":   "path",
+				})
+			}
+
+			// Insert "Noise" Data
+			for i := range noiseCount {
+				p.Insert(map[string]any{
+					"source": fmt.Sprintf("noise_%d", i),
+					"target": fmt.Sprintf("noise_%d_end", i),
+					"type":   "noise",
+				})
+			}
+			// Create cycle to match BenchmarkRecursion logic
+			p.Insert(map[string]any{
+				"source": fmt.Sprintf("node_%d", depth),
+				"target": "node_0",
+			})
+			tx.Commit()
+
+			// 2. Define Benchmark Body
+			recursiveLoopBody := func() {
+				rtx, _ := db.Begin(true)
+				defer rtx.Rollback()
+
+				q, _ := rtx.CreateRecursion("descendants", map[string]ColumnSpec{
+					"target": {},
+				})
+
+				// Base case: direct children of node_0
+				baseP, _ := rtx.LoadPersistent(relation)
+				baseProj := baseP.Project(map[string]string{"target": "target"})
+
+				startNodeRel := "start_node"
+				startNodeP, _ := rtx.CreatePersistent(startNodeRel, map[string]ColumnSpec{
+					"source": {Indexed: true},
+				})
+				startNodeP.Insert(map[string]any{"source": "node_0"})
+
+				q.AddBranch(baseProj.Join(startNodeP))
+
+				// Recursive step: children of discovered targets
+				recP, _ := rtx.LoadPersistent(relation)
+				recProj := recP.Project(map[string]string{"target": "target"})
+
+				q.AddBranch(q.Join(recProj))
+
+				// Execute
+				seq, _ := q.Select(nil)
+				for range seq {
+				}
+			}
+
+			b.ResetTimer()
+			for b.Loop() {
+				recursiveLoopBody()
+			}
+		})
+	}
 }
