@@ -1,6 +1,6 @@
-# Thunder
+# Thunderdb
 
-Thunder is a Go library that provides a lightweight, persistent, and datalog-like database interface.
+Thunderdb is a Go library that provides a lightweight, persistent, and datalog-like database interface.
 It leverages `bolt` for underlying storage and supports serialization via `MessagePack`, `JSON`, `Gob`, or custom marshalers/unmarshalers.
 
 This library is designed for Go applications needing an embedded database with capabilities for schema definitions, indexing, filtering, and complex query operations, including recursive queries for hierarchical data.
@@ -21,7 +21,7 @@ Note: Always call `tx.Rollback()` using `defer` to ensure the transaction is clo
 ## Installation
 
 ```bash
-go get github.com/longlodw/thunder
+go get github.com/longlodw/thunderdb
 ```
 
 ## Usage
@@ -37,13 +37,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/longlodw/thunder"
+	"github.com/longlodw/thunderdb"
 )
 
 func main() {
 	// 1. Open the database
 	// We use MsgpackMaUn for MessagePack marshaling/unmarshaling
-	db, err := thunder.OpenDB(&thunder.MsgpackMaUn, "my.db", 0600, nil)
+	db, err := thunderdb.OpenDB(&thunderdb.MsgpackMaUn, "my.db", 0600, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -57,7 +57,7 @@ func main() {
 	defer tx.Rollback()
 
 	// 3. Define Schema (Create a Relation)
-	users, err := tx.CreatePersistent("users", map[string]thunder.ColumnSpec{
+	users, err := tx.CreatePersistent("users", map[string]thunderdb.ColumnSpec{
 		"id":       {},
 		"username": {Indexed: true},
 		"role":     {},
@@ -85,7 +85,7 @@ func main() {
 
 	// Filter for username "alice"
 	// ToKeyRanges converts high-level operators into key ranges for the query engine
-	filter, _ := thunder.ToKeyRanges(thunder.Eq("username", "alice"))
+	filter, _ := thunderdb.ToKeyRanges(thunderdb.Eq("username", "alice"))
 	
 	// Execute Select
 	results, _ := users.Select(filter)
@@ -98,13 +98,13 @@ func main() {
 
 ### Uniques and Composite Indexes
 
-Thunder supports defining unique constraints and composite indexes.
+Thunderdb supports defining unique constraints and composite indexes.
 A **Composite Index** is an index that spans multiple columns.
 A **Unique Constraint** ensures that all values in a column (or a set of columns) are distinct across the table.
 
 ```go
 // Define Schema with Unique and Composite Index
-users, err := tx.CreatePersistent("users", map[string]thunder.ColumnSpec{
+users, err := tx.CreatePersistent("users", map[string]thunderdb.ColumnSpec{
     "id":       {Unique: true}, // Unique constraint on single column
     "username": {Indexed: true},
     "first":    {},
@@ -125,13 +125,13 @@ users, err := tx.CreatePersistent("users", map[string]thunder.ColumnSpec{
 
 // Querying using the composite index
 // Note: Pass values as a slice in the same order as ReferenceCols
-filter, _ := thunder.ToKeyRanges(thunder.Eq("name", []any{"John", "Doe"}))
+filter, _ := thunderdb.ToKeyRanges(thunderdb.Eq("name", []any{"John", "Doe"}))
 results, _ := users.Select(filter)
 ```
 
 ### Recursive Queries
 
-Thunder supports recursive Datalog-style queries, useful for traversing hierarchical data like organizational charts or file systems.
+Thunderdb supports recursive Datalog-style queries, useful for traversing hierarchical data like organizational charts or file systems.
 
 ```go
 // Example: Find all descendants of a manager
@@ -139,7 +139,7 @@ Thunder supports recursive Datalog-style queries, useful for traversing hierarch
 
 // Define a recursive query "path" with columns "ancestor" and "descendant"
 // The new API uses CreateRecursion instead of CreateQuery
-qPath, _ := tx.CreateRecursion("path", map[string]thunder.ColumnSpec{
+qPath, _ := tx.CreateRecursion("path", map[string]thunderdb.ColumnSpec{
     "ancestor":   {},
     "descendant": {},
 })
@@ -177,7 +177,7 @@ recursiveStep := edgeProj.Join(pathProj).Project(map[string]string{
 qPath.AddBranch(recursiveStep)
 
 // Execute query to find descendants of ID "1"
-filter, _ := thunder.ToKeyRanges(thunder.Eq("ancestor", "1"))
+filter, _ := thunderdb.ToKeyRanges(thunderdb.Eq("ancestor", "1"))
 results, _ := qPath.Select(filter)
 ```
 

@@ -1,10 +1,10 @@
-package thunder_test
+package thunderdb_test
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/longlodw/thunder"
+	"github.com/longlodw/thunderdb"
 )
 
 // ExampleDB_Basic demonstrates how to open a database, create a relation,
@@ -20,7 +20,7 @@ func Example() {
 	defer os.Remove(dbPath) // Clean up database file
 
 	// Open the database using MessagePack marshaler (default recommended)
-	db, err := thunder.OpenDB(&thunder.MsgpackMaUn, dbPath, 0600, nil)
+	db, err := thunderdb.OpenDB(&thunderdb.MsgpackMaUn, dbPath, 0600, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -35,7 +35,7 @@ func Example() {
 
 	// Create 'users' relation
 	usersRel := "users"
-	users, err := tx.CreatePersistent(usersRel, map[string]thunder.ColumnSpec{
+	users, err := tx.CreatePersistent(usersRel, map[string]thunderdb.ColumnSpec{
 		"id":       {},
 		"username": {Indexed: true},
 		"role":     {Indexed: true},
@@ -70,8 +70,8 @@ func Example() {
 	}
 
 	// Create a filter: username == "alice"
-	op := thunder.Eq("username", "alice")
-	f, err := thunder.ToKeyRanges(op)
+	op := thunderdb.Eq("username", "alice")
+	f, err := thunderdb.ToKeyRanges(op)
 	if err != nil {
 		panic(err)
 	}
@@ -106,7 +106,7 @@ func Example_recursive() {
 	tmpfile.Close()
 	defer os.Remove(dbPath)
 
-	db, err := thunder.OpenDB(&thunder.MsgpackMaUn, dbPath, 0600, nil)
+	db, err := thunderdb.OpenDB(&thunderdb.MsgpackMaUn, dbPath, 0600, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -119,7 +119,7 @@ func Example_recursive() {
 	}
 	defer tx.Rollback()
 
-	employees, err := tx.CreatePersistent("employees", map[string]thunder.ColumnSpec{
+	employees, err := tx.CreatePersistent("employees", map[string]thunderdb.ColumnSpec{
 		"id":         {},
 		"name":       {},
 		"manager_id": {}, // The link to the parent node
@@ -149,7 +149,7 @@ func Example_recursive() {
 	// Create a recursive query named "path"
 	// Schema: ancestor, descendant
 	// recursive=true
-	qPath, err := tx.CreateRecursion("path", map[string]thunder.ColumnSpec{
+	qPath, err := tx.CreateRecursion("path", map[string]thunderdb.ColumnSpec{
 		"ancestor":   {},
 		"descendant": {},
 	})
@@ -190,7 +190,7 @@ func Example_recursive() {
 	}
 
 	// Execute: Find all descendants of Alice (id=1)
-	f, err := thunder.ToKeyRanges(thunder.Eq("ancestor", "1"))
+	f, err := thunderdb.ToKeyRanges(thunderdb.Eq("ancestor", "1"))
 	if err != nil {
 		panic(err)
 	}

@@ -1,4 +1,4 @@
-package thunder
+package thunderdb
 
 import (
 	"errors"

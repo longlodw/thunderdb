@@ -1,4 +1,4 @@
-package thunder
+package thunderdb
 
 type ColumnSpec struct {
 	ReferenceCols []string

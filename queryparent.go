@@ -1,4 +1,4 @@
-package thunder
+package thunderdb
 
 type queryParent struct {
 	parent linkedSelector
