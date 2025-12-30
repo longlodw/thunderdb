@@ -6,6 +6,7 @@ import (
 	"iter"
 
 	"github.com/openkvlab/boltdb"
+	boltdb_errors "github.com/openkvlab/boltdb/errors"
 )
 
 type dataStorage struct {
@@ -22,6 +23,20 @@ func newData(
 	bucket, err := parentBucket.CreateBucketIfNotExists([]byte("data"))
 	if err != nil {
 		return nil, err
+	}
+	_, err = bucket.CreateBucketIfNotExists([]byte("ids"))
+	if err != nil {
+		return nil, err
+	}
+	valuesBucket, err := bucket.CreateBucketIfNotExists([]byte("values"))
+	if err != nil {
+		return nil, err
+	}
+	for _, field := range fields {
+		_, err := valuesBucket.CreateBucketIfNotExists([]byte(field))
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &dataStorage{
 		bucket: bucket,
@@ -54,18 +69,44 @@ func (d *dataStorage) insert(value map[string]any) ([8]byte, error) {
 	if err != nil {
 		return [8]byte{}, err
 	}
+	idsBucket := d.bucket.Bucket([]byte("ids"))
+	if idsBucket == nil {
+		return [8]byte{}, boltdb_errors.ErrBucketNotFound
+	}
+	valuesBucket := d.bucket.Bucket([]byte("values"))
+	if valuesBucket == nil {
+		return [8]byte{}, boltdb_errors.ErrBucketNotFound
+	}
 	var idBytes [8]byte
 	binary.BigEndian.PutUint64(idBytes[:], id)
-	valueBytes, err := d.maUn.Marshal(value)
-	if err != nil {
-		return idBytes, err
+	for _, field := range d.fields {
+		fieldBucket := valuesBucket.Bucket([]byte(field))
+		if fieldBucket == nil {
+			return [8]byte{}, ErrFieldNotFound(field)
+		}
+		fieldValue, ok := value[field]
+		if !ok {
+			return [8]byte{}, ErrFieldNotFound(field)
+		}
+		fieldValueBytes, err := d.maUn.Marshal(fieldValue)
+		if err != nil {
+			return [8]byte{}, err
+		}
+		err = fieldBucket.Put(append(fieldValueBytes, idBytes[:]...), idBytes[:])
+		if err != nil {
+			return [8]byte{}, err
+		}
 	}
-	return idBytes, d.bucket.Put(idBytes[:], valueBytes)
+	return idBytes, idsBucket.Put(idBytes[:], nil)
 }
 
-func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
-	return func(yield func(entry, error) bool) {
-		c := d.bucket.Cursor()
+func (d *dataStorage) get(kr *keyRange) (iter.Seq2[*persistentRow, error], error) {
+	idsBucket := d.bucket.Bucket([]byte("ids"))
+	if idsBucket == nil {
+		return nil, boltdb_errors.ErrBucketNotFound
+	}
+	return func(yield func(*persistentRow, error) bool) {
+		c := idsBucket.Cursor()
 		lessThan := func(k []byte) bool {
 			if kr.endKey == nil {
 				return true
@@ -73,32 +114,22 @@ func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
 			cmp := bytes.Compare(k, kr.endKey)
 			return cmp < 0 || (cmp == 0 && kr.includeEnd)
 		}
-		var k, v []byte
+		var k, _ []byte
 		if kr.startKey != nil {
-			k, v = c.Seek(kr.startKey)
+			k, _ = c.Seek(kr.startKey)
 		} else {
-			k, v = c.First()
+			k, _ = c.First()
 		}
 		if !kr.includeStart {
-			k, v = c.Next()
+			k, _ = c.Next()
 		}
-		for ; k != nil && lessThan(k); k, v = c.Next() {
+		for ; k != nil && lessThan(k); k, _ = c.Next() {
 			if !kr.contains(k) {
-				continue
-			}
-			var value map[string]any
-			if err := d.maUn.Unmarshal(v, &value); err != nil {
-				if !yield(entry{}, err) {
-					return
-				}
 				continue
 			}
 			idFixed := [8]byte{}
 			copy(idFixed[:], k)
-			if !yield(entry{
-				value: value,
-				id:    idFixed,
-			}, nil) {
+			if !yield(newPersistentRow(d.bucket, d.maUn, d.fields, idFixed), nil) {
 				return
 			}
 		}
@@ -106,7 +137,29 @@ func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
 }
 
 func (d *dataStorage) delete(id []byte) error {
-	return d.bucket.Delete(id)
+	valuesBucket := d.bucket.Bucket([]byte("values"))
+	if valuesBucket == nil {
+		return boltdb_errors.ErrBucketNotFound
+	}
+	idsBucket := d.bucket.Bucket([]byte("ids"))
+	if idsBucket == nil {
+		return boltdb_errors.ErrBucketNotFound
+	}
+	for _, field := range d.fields {
+		fieldBucket := valuesBucket.Bucket([]byte(field))
+		if fieldBucket == nil {
+			return ErrFieldNotFound(field)
+		}
+		c := fieldBucket.Cursor()
+		prefix := id
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasSuffix(k, prefix); k, _ = c.Next() {
+			err := fieldBucket.Delete(k)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return idsBucket.Delete(id)
 }
 
 type entry struct {

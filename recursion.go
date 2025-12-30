@@ -114,7 +114,7 @@ func (r *Recursion) AddBranch(branch Selector) error {
 	return nil
 }
 
-func (r *Recursion) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
+func (r *Recursion) Select(ranges map[string]*keyRange) (iter.Seq2[Row, error], error) {
 	if err := r.explore(ranges); err != nil {
 		return nil, err
 	}
@@ -194,7 +194,10 @@ func (r *Recursion) explore(ranges map[string]*keyRange) error {
 				switch p := parent.parent.(type) {
 				case *Joining:
 					// Handle joining parent
-					entries, err := p.join(v.value, v.ranges, 0, idx)
+					joinedBases := make([]Row, len(p.bodies))
+					joinedBases[idx] = v.value
+					joinedValues := newJoinedRow(joinedBases, p.firstOccurences)
+					entries, err := p.join(joinedValues, v.ranges, 0, idx)
 					if err != nil {
 						return err
 					}
@@ -210,14 +213,7 @@ func (r *Recursion) explore(ranges map[string]*keyRange) error {
 					}
 				case *Projection:
 					// Handle projection parent
-					projValue := make(map[string]any)
-					for projField, baseField := range p.toBase {
-						vv, ok := v.value[baseField]
-						if !ok {
-							return ErrFieldNotFound(baseField)
-						}
-						projValue[projField] = vv
-					}
+					projValue := newProjectedRow(v.value, p.toBase)
 					stack = append(stack, &upStack{
 						selector: p,
 						value:    projValue,
@@ -225,7 +221,11 @@ func (r *Recursion) explore(ranges map[string]*keyRange) error {
 					})
 				case *Recursion:
 					// Handle recursive parent
-					if err := p.backing.Insert(v.value); err != nil {
+					valMap, err := v.value.ToMap()
+					if err != nil {
+						return err
+					}
+					if err := p.backing.Insert(valMap); err != nil {
 						if thunderErr, ok := err.(*ThunderError); ok && thunderErr.Code == ErrCodeUniqueConstraint {
 							continue
 						}
@@ -262,7 +262,7 @@ type downStack struct {
 
 type upStack struct {
 	selector linkedSelector
-	value    map[string]any
+	value    Row
 	ranges   map[string]*keyRange
 }
 

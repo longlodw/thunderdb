@@ -63,13 +63,13 @@ func (jr *Joining) parents() []*queryParent {
 	return jr.parentsList
 }
 
-func (jr *Joining) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
+func (jr *Joining) Select(ranges map[string]*keyRange) (iter.Seq2[Row, error], error) {
 	seedIdx := jr.bestBodyIndex(ranges)
 	seq, err := jr.bodies[seedIdx].Select(ranges)
 	if err != nil {
 		return nil, err
 	}
-	return func(yield func(map[string]any, error) bool) {
+	return func(yield func(Row, error) bool) {
 		for item, err := range seq {
 			if err != nil {
 				if !yield(nil, err) {
@@ -77,7 +77,10 @@ func (jr *Joining) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any
 				}
 				continue
 			}
-			nextSeq, err := jr.join(item, ranges, 0, seedIdx)
+			joinedBases := make([]Row, len(jr.bodies))
+			joinedBases[seedIdx] = item
+			joinedItem := newJoinedRow(joinedBases, jr.firstOccurences)
+			nextSeq, err := jr.join(joinedItem, ranges, 0, seedIdx)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -109,9 +112,9 @@ func (jr *Joining) bestBodyIndex(ranges map[string]*keyRange) int {
 	return jr.firstOccurences[shortest]
 }
 
-func (jr *Joining) join(values map[string]any, ranges map[string]*keyRange, bodyIdx, skip int) (iter.Seq2[map[string]any, error], error) {
+func (jr *Joining) join(values *joinedRow, ranges map[string]*keyRange, bodyIdx, skip int) (iter.Seq2[Row, error], error) {
 	if bodyIdx >= len(jr.bodies) {
-		return func(yield func(map[string]any, error) bool) {
+		return func(yield func(Row, error) bool) {
 			yield(values, nil)
 		}, nil
 	}
@@ -122,14 +125,16 @@ func (jr *Joining) join(values map[string]any, ranges map[string]*keyRange, body
 	columns := body.Columns()
 	neededRanges := make(map[string]*keyRange)
 	for _, col := range columns {
-		if val, ok := values[col]; ok {
-			key, err := ToKey(val)
-			if err != nil {
-				return nil, err
-			}
-			kr := KeyRange(key, key, true, true, nil)
-			neededRanges[col] = kr
+		val, err := values.Get(col)
+		if err != nil {
+			continue
 		}
+		key, err := ToKey(val)
+		if err != nil {
+			return nil, err
+		}
+		kr := KeyRange(key, key, true, true, nil)
+		neededRanges[col] = kr
 	}
 	// Add external ranges that apply to this selectable
 	for name, kr := range ranges {
@@ -159,7 +164,7 @@ func (jr *Joining) join(values map[string]any, ranges map[string]*keyRange, body
 	if err != nil {
 		return nil, err
 	}
-	return func(yield func(map[string]any, error) bool) {
+	return func(yield func(Row, error) bool) {
 		for en, err := range iterEntries {
 			if err != nil {
 				if !yield(nil, err) {
@@ -167,8 +172,9 @@ func (jr *Joining) join(values map[string]any, ranges map[string]*keyRange, body
 				}
 				continue
 			}
-			combined := maps.Clone(values)
-			maps.Copy(combined, en)
+			combinedBases := slices.Clone(values.bases)
+			combinedBases[bodyIdx] = en
+			combined := newJoinedRow(combinedBases, jr.firstOccurences)
 			nextSeq, err := jr.join(combined, ranges, bodyIdx+1, skip)
 			if err != nil {
 				if !yield(nil, err) {
@@ -179,4 +185,36 @@ func (jr *Joining) join(values map[string]any, ranges map[string]*keyRange, body
 			nextSeq(yield)
 		}
 	}, nil
+}
+
+type joinedRow struct {
+	bases           []Row
+	firstOccurences map[string]int
+}
+
+func newJoinedRow(bases []Row, firstOccurences map[string]int) *joinedRow {
+	return &joinedRow{
+		bases:           bases,
+		firstOccurences: firstOccurences,
+	}
+}
+
+func (jr *joinedRow) Get(field string) (any, error) {
+	bodyIdx, ok := jr.firstOccurences[field]
+	if !ok {
+		return nil, ErrFieldNotFound(field)
+	}
+	return jr.bases[bodyIdx].Get(field)
+}
+
+func (jr *joinedRow) ToMap() (map[string]any, error) {
+	result := make(map[string]any)
+	for name, bodyIdx := range jr.firstOccurences {
+		val, err := jr.bases[bodyIdx].Get(name)
+		if err != nil {
+			return nil, err
+		}
+		result[name] = val
+	}
+	return result, nil
 }

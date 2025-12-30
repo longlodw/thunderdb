@@ -44,7 +44,7 @@ func (p *Projection) parents() []*queryParent {
 	return p.parentsList
 }
 
-func (p *Projection) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
+func (p *Projection) Select(ranges map[string]*keyRange) (iter.Seq2[Row, error], error) {
 	baseRanges := make(map[string]*keyRange)
 	for projField, kr := range ranges {
 		baseField, ok := p.toBase[projField]
@@ -57,16 +57,12 @@ func (p *Projection) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]a
 	if err != nil {
 		return nil, err
 	}
-	return func(yield func(map[string]any, error) bool) {
-		baseSeq(func(item map[string]any, err error) bool {
+	return func(yield func(Row, error) bool) {
+		baseSeq(func(item Row, err error) bool {
 			if err != nil {
 				return yield(nil, err)
 			}
-			projectedItem := make(map[string]any)
-			for projField, baseField := range p.toBase {
-				projectedItem[projField] = item[baseField]
-			}
-			return yield(projectedItem, nil)
+			return yield(newProjectedRow(item, p.toBase), nil)
 		})
 	}, nil
 }
@@ -90,4 +86,36 @@ func (p *Projection) Project(mapping map[string]string) Selector {
 		newMapping[fromField] = baseField
 	}
 	return newProjection(p.base, newMapping)
+}
+
+type projectedRow struct {
+	baseRow Row
+	toBase  map[string]string
+}
+
+func newProjectedRow(base Row, toBase map[string]string) *projectedRow {
+	return &projectedRow{
+		baseRow: base,
+		toBase:  toBase,
+	}
+}
+
+func (pr *projectedRow) Get(field string) (any, error) {
+	baseField, ok := pr.toBase[field]
+	if !ok {
+		return nil, ErrFieldNotFound(field)
+	}
+	return pr.baseRow.Get(baseField)
+}
+
+func (pr *projectedRow) ToMap() (map[string]any, error) {
+	result := make(map[string]any)
+	for projField, baseField := range pr.toBase {
+		value, err := pr.baseRow.Get(baseField)
+		if err != nil {
+			return nil, err
+		}
+		result[projField] = value
+	}
+	return result, nil
 }

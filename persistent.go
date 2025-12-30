@@ -5,6 +5,7 @@ import (
 	"iter"
 	"slices"
 
+	"github.com/openkvlab/boltdb"
 	boltdb_errors "github.com/openkvlab/boltdb/errors"
 )
 
@@ -184,7 +185,9 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 		}
 		refs := v.ReferenceCols
 		if len(refs) > 0 {
-			key, err := pr.computeKey(obj, k)
+			key, err := pr.computeKey(&persistentRow{
+				value: obj,
+			}, k)
 			if err != nil {
 				return err
 			}
@@ -238,7 +241,7 @@ func (pr *Persistent) Delete(ranges map[string]*keyRange) error {
 		}
 		// Delete from indexes
 		for _, idxName := range pr.indexNames {
-			key, err := pr.computeKey(e.value, idxName)
+			key, err := pr.computeKey(e, idxName)
 			if err != nil {
 				return err
 			}
@@ -254,17 +257,14 @@ func (pr *Persistent) Delete(ranges map[string]*keyRange) error {
 	return nil
 }
 
-func (pr *Persistent) Select(ranges map[string]*keyRange) (iter.Seq2[map[string]any, error], error) {
+func (pr *Persistent) Select(ranges map[string]*keyRange) (iter.Seq2[Row, error], error) {
 	iterEntries, err := pr.iter(ranges)
 	if err != nil {
 		return nil, err
 	}
-	return func(yield func(map[string]any, error) bool) {
-		iterEntries(func(e entry, err error) bool {
-			if err != nil {
-				return yield(nil, err)
-			}
-			return yield(e.value, nil)
+	return func(yield func(Row, error) bool) {
+		iterEntries(func(item *persistentRow, err error) bool {
+			return yield(item, err)
 		})
 	}, nil
 }
@@ -281,7 +281,7 @@ func (pr *Persistent) Project(mapping map[string]string) Selector {
 	return newProjection(pr, mapping)
 }
 
-func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error], error) {
+func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[*persistentRow, error], error) {
 	selectedIndexes := make([]string, 0, len(ranges))
 	for _, idxName := range pr.indexNames {
 		if _, ok := ranges[idxName]; ok {
@@ -297,19 +297,19 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 		if err != nil {
 			return nil, err
 		}
-		return func(yield func(entry, error) bool) {
+		return func(yield func(*persistentRow, error) bool) {
 			for e, err := range entries {
 				if err != nil {
-					if !yield(entry{}, err) {
+					if !yield(nil, err) {
 						return
 					}
 					continue
 				}
 				value := make(map[string][]byte)
 				for k := range ranges {
-					key, err := pr.computeKey(e.value, k)
+					key, err := pr.computeKey(e, k)
 					if err != nil {
-						if !yield(entry{}, err) {
+						if !yield(nil, err) {
 							return
 						}
 						continue
@@ -318,7 +318,7 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 				}
 				matches, err := pr.matchOps(value, ranges, "")
 				if err != nil {
-					if !yield(entry{}, err) {
+					if !yield(nil, err) {
 						return
 					}
 					continue
@@ -339,7 +339,7 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 	if err != nil {
 		return nil, err
 	}
-	return func(yield func(entry, error) bool) {
+	return func(yield func(*persistentRow, error) bool) {
 		for id := range idxes {
 			values, err := pr.data.get(&keyRange{
 				includeEnd:   true,
@@ -348,14 +348,14 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 				endKey:       id[:],
 			})
 			if err != nil {
-				if !yield(entry{}, err) {
+				if !yield(nil, err) {
 					return
 				}
 				continue
 			}
 			for e, err := range values {
 				if err != nil {
-					if !yield(entry{}, err) {
+					if !yield(nil, err) {
 						return
 					}
 					continue
@@ -366,9 +366,9 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 					if k == shortestRangeIdxName {
 						continue
 					}
-					key, err := pr.computeKey(e.value, k)
+					key, err := pr.computeKey(e, k)
 					if err != nil {
-						if !yield(entry{}, err) {
+						if !yield(nil, err) {
 							return
 						}
 						continue
@@ -377,7 +377,7 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 				}
 				matches, err := pr.matchOps(value, ranges, shortestRangeIdxName)
 				if err != nil {
-					if !yield(entry{}, err) {
+					if !yield(nil, err) {
 						return
 					}
 					continue
@@ -390,7 +390,7 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 	}, nil
 }
 
-func (pr *Persistent) computeKey(obj map[string]any, name string) ([]byte, error) {
+func (pr *Persistent) computeKey(obj Row, name string) ([]byte, error) {
 	keySpec, ok := pr.fields[name]
 	if !ok {
 		return nil, ErrFieldNotFound(name)
@@ -399,16 +399,16 @@ func (pr *Persistent) computeKey(obj map[string]any, name string) ([]byte, error
 	if len(keySpec.ReferenceCols) > 0 {
 		keyParts = make([]any, 0, len(keySpec.ReferenceCols))
 		for _, refCol := range keySpec.ReferenceCols {
-			v, ok := obj[refCol]
-			if !ok {
-				return nil, ErrFieldNotFound(refCol)
+			v, err := obj.Get(refCol)
+			if err != nil {
+				return nil, err
 			}
 			keyParts = append(keyParts, v)
 		}
 	} else {
-		v, ok := obj[name]
-		if !ok {
-			return nil, ErrFieldNotFound(name)
+		v, err := obj.Get(name)
+		if err != nil {
+			return nil, err
 		}
 		keyParts = []any{v}
 	}
@@ -429,4 +429,52 @@ func (pr *Persistent) matchOps(value map[string][]byte, keyRanges map[string]*ke
 		}
 	}
 	return true, nil
+}
+
+type persistentRow struct {
+	bucket *boltdb.Bucket
+	id     [8]byte
+	value  map[string]any
+	maUn   MarshalUnmarshaler
+	fields []string
+}
+
+func newPersistentRow(bucket *boltdb.Bucket, maUn MarshalUnmarshaler, fields []string, id [8]byte) *persistentRow {
+	return &persistentRow{
+		bucket: bucket,
+		id:     id,
+		value:  make(map[string]any),
+		maUn:   maUn,
+		fields: fields,
+	}
+}
+
+func (r *persistentRow) Get(field string) (any, error) {
+	if val, ok := r.value[field]; ok {
+		return val, nil
+	} else {
+		bckField := r.bucket.Bucket([]byte(field))
+		if bckField == nil {
+			return nil, ErrFieldNotFound(field)
+		}
+		v := bckField.Get(r.id[:])
+		err := r.maUn.Unmarshal(v, &val)
+		if err != nil {
+			return nil, err
+		}
+		r.value[field] = val
+		return val, nil
+	}
+}
+
+func (r *persistentRow) ToMap() (map[string]any, error) {
+	result := make(map[string]any)
+	for _, field := range r.fields {
+		val, err := r.Get(field)
+		if err != nil {
+			return nil, err
+		}
+		result[field] = val
+	}
+	return result, nil
 }
