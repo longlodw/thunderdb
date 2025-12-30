@@ -93,12 +93,12 @@ func TestPersistent_AllOperators(t *testing.T) {
 				t.Fatalf("Select failed: %v", err)
 			}
 			count := 0
-			for val, err := range seq {
+			for row, err := range seq {
 				if err != nil {
 					t.Fatal(err)
 				}
 				count++
-				_ = val
+				_ = row
 			}
 			if count != tt.expected {
 				t.Errorf("Expected count %d, got %d", tt.expected, count)

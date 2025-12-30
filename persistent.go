@@ -453,11 +453,19 @@ func (r *persistentRow) Get(field string) (any, error) {
 	if val, ok := r.value[field]; ok {
 		return val, nil
 	} else {
-		bckField := r.bucket.Bucket([]byte(field))
+		valuesBucket := r.bucket.Bucket([]byte("values"))
+		if valuesBucket == nil {
+			return nil, boltdb_errors.ErrBucketNotFound
+		}
+		bckField := valuesBucket.Bucket([]byte(field))
 		if bckField == nil {
 			return nil, ErrFieldNotFound(field)
 		}
 		v := bckField.Get(r.id[:])
+		if v == nil {
+			return nil, ErrFieldNotFound(field)
+		}
+		var val any
 		err := r.maUn.Unmarshal(v, &val)
 		if err != nil {
 			return nil, err

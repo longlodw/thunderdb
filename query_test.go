@@ -87,19 +87,22 @@ func TestQuery_Basic(t *testing.T) {
 	}
 
 	count := 0
-	for val, err := range seq {
+	for row, err := range seq {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
-		if val["username"] != "alice" {
-			t.Errorf("Expected username alice, got %v", val["username"])
+		username, _ := row.Get("username")
+		if username != "alice" {
+			t.Errorf("Expected username alice, got %v", username)
 		}
-		if val["department"] != "engineering" {
-			t.Errorf("Expected department engineering, got %v", val["department"])
+		department, _ := row.Get("department")
+		if department != "engineering" {
+			t.Errorf("Expected department engineering, got %v", department)
 		}
-		if val["location"] != "building A" {
-			t.Errorf("Expected location building A, got %v", val["location"])
+		location, _ := row.Get("location")
+		if location != "building A" {
+			t.Errorf("Expected location building A, got %v", location)
 		}
 	}
 	if count != 1 {

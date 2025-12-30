@@ -116,13 +116,13 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	}
 
 	count := 0
-	for val, err := range seq {
+	for row, err := range seq {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
 		// Just consuming to check for termination
-		_ = val
+		_ = row
 	}
 
 	// We expect at least 2 results (A->B, A->A).

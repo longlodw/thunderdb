@@ -86,13 +86,14 @@ func (d *dataStorage) insert(value map[string]any) ([8]byte, error) {
 		}
 		fieldValue, ok := value[field]
 		if !ok {
-			return [8]byte{}, ErrFieldNotFound(field)
+			fieldValue = nil
 		}
 		fieldValueBytes, err := d.maUn.Marshal(fieldValue)
 		if err != nil {
 			return [8]byte{}, err
 		}
-		err = fieldBucket.Put(append(fieldValueBytes, idBytes[:]...), idBytes[:])
+		// idBytes as key
+		err = fieldBucket.Put(idBytes[:], fieldValueBytes)
 		if err != nil {
 			return [8]byte{}, err
 		}

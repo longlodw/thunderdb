@@ -97,16 +97,18 @@ func basicCRUD_SelectAlice(t *testing.T, db *DB) {
 	}
 
 	count := 0
-	for val, err := range seq {
+	for row, err := range seq {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
-		if val["username"] != "alice" {
-			t.Errorf("Expected username alice, got %v", val["username"])
+		username, _ := row.Get("username")
+		if username != "alice" {
+			t.Errorf("Expected username alice, got %v", username)
 		}
-		if val["age"] != 30.0 {
-			t.Errorf("Expected age 30, got %v", val["age"])
+		age, _ := row.Get("age")
+		if age != 30.0 {
+			t.Errorf("Expected age 30, got %v", age)
 		}
 	}
 	if count != 1 {
@@ -235,13 +237,14 @@ func nonIndexed_Select(t *testing.T, db *DB) {
 	}
 
 	count := 0
-	for val, err := range seq {
+	for row, err := range seq {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
-		if val["id"] != "B" {
-			t.Errorf("Expected item B, got %v", val["id"])
+		id, _ := row.Get("id")
+		if id != "B" {
+			t.Errorf("Expected item B, got %v", id)
 		}
 	}
 	if count != 1 {
@@ -315,18 +318,21 @@ func projection_Select(t *testing.T, db *DB) {
 	}
 
 	count := 0
-	for val, err := range seq {
+	for row, err := range seq {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
-		if val["login_name"] != "alice" {
-			t.Errorf("Expected login_name alice, got %v", val["login_name"])
+		loginName, _ := row.Get("login_name")
+		if loginName != "alice" {
+			t.Errorf("Expected login_name alice, got %v", loginName)
 		}
-		if val["user_age"] != 30.0 {
-			t.Errorf("Expected user_age 30, got %v", val["user_age"])
+		userAge, _ := row.Get("user_age")
+		if userAge != 30.0 {
+			t.Errorf("Expected user_age 30, got %v", userAge)
 		}
-		if _, ok := val["username"]; ok {
+		_, err := row.Get("username")
+		if err == nil {
 			t.Errorf("Did not expect original field username")
 		}
 	}
@@ -394,13 +400,14 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 		t.Fatal(err)
 	}
 	count := 0
-	for val, err := range seqGt {
+	for row, err := range seqGt {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
-		if val["price"].(float64) <= 15.0 {
-			t.Errorf("Expected price > 15, got %v", val["price"])
+		val, _ := row.Get("price")
+		if val.(float64) <= 15.0 {
+			t.Errorf("Expected price > 15, got %v", val)
 		}
 	}
 	if count != 2 { // B and C
@@ -424,12 +431,13 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 		t.Fatal(err)
 	}
 	count = 0
-	for val, err := range seqLe {
+	for row, err := range seqLe {
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		v := val["stock"].(float64)
+		val, _ := row.Get("stock")
+		v := val.(float64)
 		if v > 20.0 {
 			t.Errorf("Expected stock <= 20, got %v", v)
 		} else {
@@ -454,13 +462,15 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 		t.Fatal(err)
 	}
 	count = 0
-	for val, err := range seqMulti {
+	for row, err := range seqMulti {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
-		if val["price"].(float64) <= 10.0 || val["stock"].(float64) <= 0.0 {
-			t.Errorf("Expected price > 10 and stock > 0, got %v", val)
+		price, _ := row.Get("price")
+		stock, _ := row.Get("stock")
+		if price.(float64) <= 10.0 || stock.(float64) <= 0.0 {
+			t.Errorf("Expected price > 10 and stock > 0, got %v %v", price, stock)
 		}
 	}
 	if count != 2 { // B (20, 50) and D (15, 20). A is price 10 (not > 10). C is stock 0.
@@ -548,13 +558,15 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	}
 
 	count := 0
-	for val, err := range seq {
+	for row, err := range seq {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
-		if val["first"] != "John" || val["last"] != "Doe" {
-			t.Errorf("Expected John Doe, got %v %v", val["first"], val["last"])
+		first, _ := row.Get("first")
+		last, _ := row.Get("last")
+		if first != "John" || last != "Doe" {
+			t.Errorf("Expected John Doe, got %v %v", first, last)
 		}
 	}
 	if count != 1 {
@@ -574,13 +586,14 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 		t.Fatalf("Select failed: %v", err)
 	}
 	count = 0
-	for val, err := range seq2 {
+	for row, err := range seq2 {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
-		if val["first"] != "John" {
-			t.Errorf("Expected John, got %v", val["first"])
+		first, _ := row.Get("first")
+		if first != "John" {
+			t.Errorf("Expected John, got %v", first)
 		}
 	}
 	if count != 1 {
@@ -601,15 +614,17 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	count = 0
 	foundDoe := false
 	foundSmith := false
-	for val, err := range seq3 {
+	for row, err := range seq3 {
 		if err != nil {
 			t.Fatal(err)
 		}
 		count++
-		if val["first"] != "John" {
-			t.Errorf("Expected first name John, got %v", val["first"])
+		first, _ := row.Get("first")
+		if first != "John" {
+			t.Errorf("Expected first name John, got %v", first)
 		}
-		last := val["last"].(string)
+		val, _ := row.Get("last")
+		last := val.(string)
 		if last == "Doe" {
 			foundDoe = true
 		}

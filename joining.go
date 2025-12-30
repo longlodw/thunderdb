@@ -125,16 +125,14 @@ func (jr *Joining) join(values *joinedRow, ranges map[string]*keyRange, bodyIdx,
 	columns := body.Columns()
 	neededRanges := make(map[string]*keyRange)
 	for _, col := range columns {
-		val, err := values.Get(col)
-		if err != nil {
-			continue
+		if val, err := values.Get(col); err == nil {
+			key, err := ToKey(val)
+			if err != nil {
+				return nil, err
+			}
+			kr := KeyRange(key, key, true, true, nil)
+			neededRanges[col] = kr
 		}
-		key, err := ToKey(val)
-		if err != nil {
-			return nil, err
-		}
-		kr := KeyRange(key, key, true, true, nil)
-		neededRanges[col] = kr
 	}
 	// Add external ranges that apply to this selectable
 	for name, kr := range ranges {
@@ -204,7 +202,20 @@ func (jr *joinedRow) Get(field string) (any, error) {
 	if !ok {
 		return nil, ErrFieldNotFound(field)
 	}
-	return jr.bases[bodyIdx].Get(field)
+	if jr.bases[bodyIdx] != nil {
+		return jr.bases[bodyIdx].Get(field)
+	}
+	// Fallback: If the canonical body is nil (e.g. during intermediate join steps),
+	// check other bodies that might contain this field.
+	for i, base := range jr.bases {
+		if i == bodyIdx || base == nil {
+			continue
+		}
+		if val, err := base.Get(field); err == nil {
+			return val, nil
+		}
+	}
+	return nil, ErrFieldNotFound(field)
 }
 
 func (jr *joinedRow) ToMap() (map[string]any, error) {

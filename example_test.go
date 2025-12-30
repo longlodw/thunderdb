@@ -83,11 +83,13 @@ func Example() {
 	}
 
 	// Iterate over results
-	for val, err := range seq {
+	for row, err := range seq {
 		if err != nil {
 			panic(err)
 		}
-		fmt.Printf("Found user: %s, Role: %s\n", val["username"], val["role"])
+		username, _ := row.Get("username")
+		role, _ := row.Get("role")
+		fmt.Printf("Found user: %s, Role: %s\n", username, role)
 	}
 
 	// Output:
@@ -201,13 +203,14 @@ func Example_recursive() {
 
 	// Iterate and collect results
 	// Expect Bob (2) and Charlie (3)
-	for val, err := range seq {
+	for row, err := range seq {
 		if err != nil {
 			panic(err)
 		}
 		// Fetch the name for the descendant ID to make the output readable
 		// (In a real app, you might join back to the employees table)
-		descID := val["descendant"].(string)
+		val, _ := row.Get("descendant")
+		descID := val.(string)
 		var name string
 		switch descID {
 		case "2":

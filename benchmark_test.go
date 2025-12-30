@@ -218,22 +218,22 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 
 	// Schema setup similar to query_nested_test.go
 	users, _ := tx.CreatePersistent("users", map[string]ColumnSpec{
-		"u_id":     {Indexed: true},
-		"u_name":   {},
-		"group_id": {Indexed: true},
-		"large":    {},
+		"u_id":      {Indexed: true},
+		"u_name":    {},
+		"group_id":  {Indexed: true},
+		"u_payload": {},
 	})
 	groups, _ := tx.CreatePersistent("groups", map[string]ColumnSpec{
-		"group_id": {Indexed: true},
-		"g_name":   {},
-		"org_id":   {Indexed: true},
-		"large":    {},
+		"group_id":  {Indexed: true},
+		"g_name":    {},
+		"org_id":    {Indexed: true},
+		"g_payload": {},
 	})
 	orgs, _ := tx.CreatePersistent("orgs", map[string]ColumnSpec{
-		"org_id": {Indexed: true},
-		"o_name": {},
-		"region": {Indexed: true},
-		"large":  {},
+		"org_id":    {Indexed: true},
+		"o_name":    {},
+		"region":    {Indexed: true},
+		"o_payload": {},
 	})
 
 	// Pre-populate some data
@@ -246,28 +246,28 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			region = "South"
 		}
 		orgs.Insert(map[string]any{
-			"org_id": orgID,
-			"o_name": fmt.Sprintf("Org_%d", i),
-			"region": region,
-			"large":  largeStr,
+			"org_id":    orgID,
+			"o_name":    fmt.Sprintf("Org_%d", i),
+			"region":    region,
+			"o_payload": largeStr,
 		})
 
 		// Groups
 		groupID := fmt.Sprintf("g%d", i)
 		groups.Insert(map[string]any{
-			"group_id": groupID,
-			"g_name":   fmt.Sprintf("Group_%d", i),
-			"org_id":   orgID,
-			"large":    largeStr,
+			"group_id":  groupID,
+			"g_name":    fmt.Sprintf("Group_%d", i),
+			"org_id":    orgID,
+			"g_payload": largeStr,
 		})
 
 		// Users
 		userID := fmt.Sprintf("u%d", i)
 		users.Insert(map[string]any{
-			"u_id":     userID,
-			"u_name":   fmt.Sprintf("User_%d", i),
-			"group_id": groupID,
-			"large":    largeStr,
+			"u_id":      userID,
+			"u_name":    fmt.Sprintf("User_%d", i),
+			"group_id":  groupID,
+			"u_payload": largeStr,
 		})
 	}
 	tx.Commit()
@@ -334,16 +334,16 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		defer tx.Rollback()
 		relation := "graph_large"
 		p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
-			"source": {Indexed: true},
-			"target": {Indexed: true},
-			"large":  {},
+			"source":    {Indexed: true},
+			"target":    {Indexed: true},
+			"g_payload": {},
 		})
 
 		for i := range depth {
 			p.Insert(map[string]any{
-				"source": fmt.Sprintf("node_%d", i),
-				"target": fmt.Sprintf("node_%d", i+1),
-				"large":  largeStr,
+				"source":    fmt.Sprintf("node_%d", i),
+				"target":    fmt.Sprintf("node_%d", i+1),
+				"g_payload": largeStr,
 			})
 		}
 		tx.Commit()
@@ -353,13 +353,13 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			defer rtx.Rollback()
 
 			q, _ := rtx.CreateRecursion("descendants_large", map[string]ColumnSpec{
-				"target": {},
-				"large":  {},
+				"target":    {},
+				"g_payload": {},
 			})
 
 			// Base case
 			baseP, _ := rtx.LoadPersistent(relation)
-			baseProj := baseP.Project(map[string]string{"target": "target", "large": "large"})
+			baseProj := baseP.Project(map[string]string{"target": "target", "g_payload": "g_payload"})
 
 			startNodeRel := "start_node_large"
 			startNodeP, _ := rtx.CreatePersistent(startNodeRel, map[string]ColumnSpec{
@@ -371,7 +371,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 
 			// Recursive step
 			recP, _ := rtx.LoadPersistent(relation)
-			recProj := recP.Project(map[string]string{"target": "target", "large": "large"})
+			recProj := recP.Project(map[string]string{"target": "target", "g_payload": "g_payload"})
 			q.AddBranch(q.Join(recProj))
 
 			seq, _ := q.Select(nil)
@@ -483,8 +483,9 @@ func BenchmarkRecursion(b *testing.B) {
 				seq, _ := pLoad.Select(map[string]*keyRange{
 					"source": KeyRange(nodeKey, nodeKey, true, true, nil),
 				})
-				for row := range seq {
-					target := row["target"].(string)
+				for row, _ := range seq {
+					val, _ := row.Get("target")
+					target := val.(string)
 					if !visited[target] {
 						visited[target] = true
 						nextNodes = append(nextNodes, target)

@@ -104,15 +104,17 @@ func TestQuery_Recursive(t *testing.T) {
 	}
 
 	results := make(map[string]bool)
-	for val, err := range seq {
+	for row, err := range seq {
 		if err != nil {
 			t.Fatal(err)
 		}
 		// Expected results should have ancestor="1"
-		if val["ancestor"] != "1" {
-			t.Errorf("Expected ancestor=1, got %v", val["ancestor"])
+		ancestor, _ := row.Get("ancestor")
+		if ancestor != "1" {
+			t.Errorf("Expected ancestor=1, got %v", ancestor)
 		}
-		results[val["descendant"].(string)] = true
+		descendant, _ := row.Get("descendant")
+		results[descendant.(string)] = true
 	}
 
 	// Expected descendants: Bob (2), Charlie (3), Dave (4)
