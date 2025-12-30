@@ -101,6 +101,29 @@ func (d *dataStorage) insert(value map[string]any) ([8]byte, error) {
 	return idBytes, idsBucket.Put(idBytes[:], nil)
 }
 
+func (d *dataStorage) update(id []byte, value map[string]any) error {
+	valuesBucket := d.bucket.Bucket([]byte("values"))
+	if valuesBucket == nil {
+		return boltdb_errors.ErrBucketNotFound
+	}
+	for field, v := range value {
+		fieldBucket := valuesBucket.Bucket([]byte(field))
+		if fieldBucket == nil {
+			return ErrFieldNotFound(field)
+		}
+		fieldValueBytes, err := d.maUn.Marshal(v)
+		if err != nil {
+			return err
+		}
+		// idBytes as key
+		err = fieldBucket.Put(id, fieldValueBytes)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (d *dataStorage) get(kr *keyRange) (iter.Seq2[*persistentRow, error], error) {
 	idsBucket := d.bucket.Bucket([]byte("ids"))
 	if idsBucket == nil {
@@ -161,9 +184,4 @@ func (d *dataStorage) delete(id []byte) error {
 		}
 	}
 	return idsBucket.Delete(id)
-}
-
-type entry struct {
-	id    [8]byte
-	value map[string]any
 }

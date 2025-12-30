@@ -3,6 +3,7 @@ package thunderdb
 import (
 	"bytes"
 	"iter"
+	"maps"
 	"slices"
 
 	"github.com/openkvlab/boltdb"
@@ -205,20 +206,10 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 		}
 	}
 	// Check uniques
-	for _, uniqueName := range pr.uniqueNames {
-		idxRange := &keyRange{
-			includeEnd:   true,
-			includeStart: true,
-			startKey:     value[uniqueName],
-			endKey:       value[uniqueName],
-		}
-		exists, err := pr.indexes.get(uniqueName, idxRange)
-		if err != nil {
-			return err
-		}
-		for range exists {
-			return ErrUniqueConstraint(uniqueName, value[uniqueName])
-		}
+	if err := pr.assertUnique(&persistentRow{
+		value: obj,
+	}); err != nil {
+		return err
 	}
 
 	for _, idxName := range pr.indexNames {
@@ -252,6 +243,85 @@ func (pr *Persistent) Delete(ranges map[string]*keyRange) error {
 		// Delete from data
 		if err := pr.data.delete(e.id[:]); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (pr *Persistent) Update(ranges map[string]*keyRange, updates map[string]any) error {
+	iterEntries, err := pr.iter(ranges)
+	if err != nil {
+		return err
+	}
+	for e, err := range iterEntries {
+		if err != nil {
+			return err
+		}
+		// Prepare old index keys
+		oldIndexKeys := make(map[string][]byte)
+		for _, idxName := range pr.indexNames {
+			key, err := pr.computeKey(e, idxName)
+			if err != nil {
+				return err
+			}
+			oldIndexKeys[idxName] = key
+		}
+		// Apply updates
+		maps.Copy(e.value, updates)
+		// Check uniques
+		if err := pr.assertUnique(e); err != nil {
+			return err
+		}
+		// Prepare new index keys
+		newIndexKeys := make(map[string][]byte)
+		for _, idxName := range pr.indexNames {
+			key, err := pr.computeKey(e, idxName)
+			if err != nil {
+				return err
+			}
+			newIndexKeys[idxName] = key
+		}
+		// Update indexes
+		for _, idxName := range pr.indexNames {
+			oldKey := oldIndexKeys[idxName]
+			newKey := newIndexKeys[idxName]
+			if !bytes.Equal(oldKey, newKey) {
+				// Delete old index entry
+				if err := pr.indexes.delete(idxName, oldKey, e.id[:]); err != nil {
+					return err
+				}
+				// Insert new index entry
+				if err := pr.indexes.insert(idxName, newKey, e.id[:]); err != nil {
+					return err
+				}
+			}
+		}
+		// Update data storage
+		if err := pr.data.update(e.id[:], updates); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (pr *Persistent) assertUnique(r *persistentRow) error {
+	for _, uniqueName := range pr.uniqueNames {
+		key, err := pr.computeKey(r, uniqueName)
+		if err != nil {
+			return err
+		}
+		idxRange := &keyRange{
+			includeEnd:   true,
+			includeStart: true,
+			startKey:     key,
+			endKey:       key,
+		}
+		exists, err := pr.indexes.get(uniqueName, idxRange)
+		if err != nil {
+			return err
+		}
+		for range exists {
+			return ErrUniqueConstraint(uniqueName, key)
 		}
 	}
 	return nil
