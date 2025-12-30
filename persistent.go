@@ -320,7 +320,13 @@ func (pr *Persistent) assertUnique(r *persistentRow) error {
 		if err != nil {
 			return err
 		}
-		for range exists {
+		for id, err := range exists {
+			if err != nil {
+				return err
+			}
+			if id == r.id {
+				continue
+			}
 			return ErrUniqueConstraint(uniqueName, key)
 		}
 	}
