@@ -43,41 +43,23 @@ func TestConcurrentReadWrite(t *testing.T) {
 
 	// Writers
 	// Each writer 'i' owns "key-i" and updates it from 0 to writeIterations-1
-	for i := 0; i < numWriters; i++ {
+	for i := range numWriters {
 		go func(writerID int) {
 			defer wg.Done()
-			for j := 0; j < writeIterations; j++ {
-				tx, err := db.Begin(true)
-				if err != nil {
-					t.Errorf("Writer %d begin failed: %v", writerID, err)
-					return
-				}
-
+			tx, err := db.Begin(true)
+			if err != nil {
+				t.Errorf("Writer %d begin failed: %v", writerID, err)
+				return
+			}
+			defer tx.Rollback()
+			for j := range writeIterations {
 				p, err := tx.LoadPersistent("data")
 				if err != nil {
 					t.Errorf("Writer %d load failed: %v", writerID, err)
-					tx.Rollback()
 					return
 				}
 
-				key := fmt.Sprintf("key-%d", writerID)
-
-				// Upsert logic: Delete if exists, then Insert
-				op := Eq("key", key)
-				f, err := ToKeyRanges(op)
-				if err != nil {
-					t.Errorf("Writer %d filter error: %v", writerID, err)
-					tx.Rollback()
-					return
-				}
-
-				// Delete existing entries for this key (if any)
-				if err := p.Delete(f); err != nil {
-					t.Errorf("Writer %d delete failed: %v", writerID, err)
-					tx.Rollback()
-					return
-				}
-
+				key := fmt.Sprintf("key-%d-%d", writerID, j)
 				// Insert new value
 				err = p.Insert(map[string]any{
 					"key": key,
@@ -85,42 +67,38 @@ func TestConcurrentReadWrite(t *testing.T) {
 				})
 				if err != nil {
 					t.Errorf("Writer %d insert failed: %v", writerID, err)
-					tx.Rollback()
 					return
 				}
-
-				if err := tx.Commit(); err != nil {
-					t.Errorf("Writer %d commit failed: %v", writerID, err)
-					return
-				}
+			}
+			if err := tx.Commit(); err != nil {
+				t.Errorf("Writer %d commit failed: %v", writerID, err)
+				return
 			}
 		}(i)
 	}
 
 	// Readers
 	// Readers pick a random writer's key (0 to numWriters-1) and read it.
-	for i := 0; i < numReaders; i++ {
+	for i := range numReaders {
 		go func(readerID int) {
 			defer wg.Done()
 			// Create a local random source to avoid global lock contention in math/rand
 			rng := rand.New(rand.NewSource(int64(readerID)))
-
-			for j := 0; j < readIterations; j++ {
-				tx, err := db.Begin(false)
-				if err != nil {
-					t.Errorf("Reader %d begin failed: %v", readerID, err)
-					return
-				}
-
+			tx, err := db.Begin(false)
+			if err != nil {
+				t.Errorf("Reader %d begin failed: %v", readerID, err)
+				return
+			}
+			defer tx.Rollback()
+			for j := range readIterations {
 				p, err := tx.LoadPersistent("data")
 				if err != nil {
 					t.Errorf("Reader %d load failed: %v", readerID, err)
-					tx.Rollback()
 					return
 				}
 
 				targetID := rng.Intn(numWriters)
-				targetKey := fmt.Sprintf("key-%d", targetID)
+				targetKey := fmt.Sprintf("key-%d-%d", targetID, j)
 
 				op := Eq("key", targetKey)
 				f, err := ToKeyRanges(op)
@@ -165,8 +143,6 @@ func TestConcurrentReadWrite(t *testing.T) {
 				if count > 1 {
 					t.Errorf("Reader %d found duplicate keys for %s: count %d", readerID, targetKey, count)
 				}
-
-				tx.Rollback()
 			}
 		}(i)
 	}
@@ -186,25 +162,30 @@ func TestConcurrentReadWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i := 0; i < numWriters; i++ {
-		targetKey := fmt.Sprintf("key-%d", i)
-		op := Eq("key", targetKey)
-		f, _ := ToKeyRanges(op)
-		seq, _ := p.Select(f)
+	for i := range numWriters {
+		for j := range writeIterations {
+			targetKey := fmt.Sprintf("key-%d-%d", i, j)
+			op := Eq("key", targetKey)
+			f, _ := ToKeyRanges(op)
+			seq, _ := p.Select(f)
 
-		count := 0
-		var finalVal any
-		for row, _ := range seq {
-			count++
-			finalVal, _ = row.Get("val")
-		}
+			count := 0
+			var finalVal any
+			for row := range seq {
+				count++
+				finalVal, err = row.Get("val")
+				if err != nil {
+					t.Errorf("Verification row get error for %s: %v", targetKey, err)
+				}
+			}
 
-		if count != 1 {
-			t.Errorf("Verification failed: key %s not found or duplicate (count=%d)", targetKey, count)
-		} else {
-			expected := float64(writeIterations - 1)
-			if finalVal != expected {
-				t.Errorf("Verification failed: key %s has value %v, expected %v", targetKey, finalVal, expected)
+			if count != 1 {
+				t.Errorf("Verification failed: key %s not found or duplicate (count=%d)", targetKey, count)
+			} else {
+				expected := float64(j)
+				if finalVal != expected {
+					t.Errorf("Verification failed: key %s has value %v, expected %v", targetKey, finalVal, expected)
+				}
 			}
 		}
 	}

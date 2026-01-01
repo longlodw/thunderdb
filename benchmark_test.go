@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // setupBenchmarkDB is similar to setupTestDB but uses testing.B and handles errors for benchmarks.
@@ -588,11 +589,14 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 	}
 }
 
-// BenchmarkConcurrentReadWrite measures performance of concurrent reads and writes.
-func BenchmarkConcurrentReadWrite(b *testing.B) {
-	// Setup DB manually since we can't use setupTestDB (it takes *testing.T)
-	// We'll replicate the logic.
-	tmpfile, err := os.CreateTemp("", "thunder_bench_*.db")
+// BenchmarkConcurrency tests performance under different contention scenarios:
+// 1. ReadOnly: 100% readers (Should scale well)
+// 2. WriteOnly: 100% writers (Serialized contention)
+// 3. Mixed_90_10: 90% Read, 10% Write (Realistic web workload)
+// 4. Mixed_50_50: High contention
+func BenchmarkConcurrency(b *testing.B) {
+	// 1. Setup DB
+	tmpfile, err := os.CreateTemp("", "thunder_bench_concurrent_*.db")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -606,12 +610,12 @@ func BenchmarkConcurrentReadWrite(b *testing.B) {
 	}
 	defer db.Close()
 
-	// Initialize Schema
+	// 2. Initialize Schema
 	initTx, err := db.Begin(true)
 	if err != nil {
 		b.Fatal(err)
 	}
-	_, err = initTx.CreatePersistent("bench_table", map[string]ColumnSpec{
+	_, err = initTx.CreatePersistent("bench_concurrent", map[string]ColumnSpec{
 		"id":  {Indexed: true},
 		"val": {},
 	})
@@ -622,81 +626,92 @@ func BenchmarkConcurrentReadWrite(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	// Pre-populate some data so reads have something to hit
+	// 3. Pre-populate Data (so reads have targets)
+	// We insert 10,000 records
+	initialCount := 10000
 	{
 		tx, _ := db.Begin(true)
-		p, _ := tx.LoadPersistent("bench_table")
-		for i := range 1000 {
+		p, _ := tx.LoadPersistent("bench_concurrent")
+		for i := range initialCount {
 			p.Insert(map[string]any{
-				"id":  fmt.Sprintf("init-%d", i),
+				"id":  fmt.Sprintf("item-%d", i),
 				"val": i,
 			})
 		}
 		tx.Commit()
 	}
 
-	b.ResetTimer()
+	// Helper to run parallel workloads
+	runWorkload := func(b *testing.B, name string, writePerc int) {
+		b.Run(name, func(b *testing.B) {
+			var writeCounter int64 // Atomic counter for unique write IDs
 
-	// We will run parallel benchmarks.
-	// Some goroutines will read, others (fewer) will write.
-	// b.RunParallel launches multiple goroutines.
-	// We can use the goroutine index or random chance to decide role.
+			b.RunParallel(func(pb *testing.PB) {
+				// Thread-local random source to avoid global lock contention
+				// Use current nanotime + pointer address (or just atomic increment) to seed
+				// Here we just use time because exact determinism isn't required for load gen
+				rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	var writeCounter int64
+				for pb.Next() {
+					// Decide: Read or Write?
+					if rng.Intn(100) < writePerc {
+						// WRITE TRANSACTION
+						tx, err := db.Begin(true)
+						if err != nil {
+							b.Fatal(err)
+						}
+						p, err := tx.LoadPersistent("bench_concurrent")
+						if err != nil {
+							tx.Rollback()
+							b.Fatal(err)
+						}
 
-	b.RunParallel(func(pb *testing.PB) {
-		// Create a local random source or just use math/rand (mutex protected globally, might be slow)
-		// but for simplicity in this snippet we'll just read mostly.
+						// Unique ID for new item
+						uid := atomic.AddInt64(&writeCounter, 1)
+						err = p.Insert(map[string]any{
+							"id":  fmt.Sprintf("new-%d-%d", uid, rng.Int()),
+							"val": int(uid),
+						})
+						if err != nil {
+							tx.Rollback()
+							b.Fatal(err)
+						}
+						if err := tx.Commit(); err != nil {
+							b.Fatal(err)
+						}
 
-		for pb.Next() {
-			// 10% writes, 90% reads
-			if rand.Intn(10) == 0 {
-				// Write
-				tx, err := db.Begin(true)
-				if err != nil {
-					b.Fatal(err)
-				}
-				p, err := tx.LoadPersistent("bench_table")
-				if err != nil {
-					tx.Rollback()
-					b.Fatal(err)
-				}
+					} else {
+						// READ TRANSACTION
+						tx, err := db.Begin(false)
+						if err != nil {
+							b.Fatal(err)
+						}
+						p, err := tx.LoadPersistent("bench_concurrent")
+						if err != nil {
+							tx.Rollback()
+							b.Fatal(err)
+						}
 
-				id := atomic.AddInt64(&writeCounter, 1)
-				err = p.Insert(map[string]any{
-					"id":  fmt.Sprintf("new-%d", id),
-					"val": int(id),
-				})
-				if err != nil {
-					tx.Rollback()
-					b.Fatal(err)
-				}
-				if err := tx.Commit(); err != nil {
-					b.Fatal(err)
-				}
-			} else {
-				// Read
-				tx, err := db.Begin(false)
-				if err != nil {
-					b.Fatal(err)
-				}
-				p, err := tx.LoadPersistent("bench_table")
-				if err != nil {
-					tx.Rollback()
-					b.Fatal(err)
-				}
+						// Read a random existing item from the initial set
+						targetID := rng.Intn(initialCount)
+						op := Eq("id", fmt.Sprintf("item-%d", targetID))
+						f, _ := ToKeyRanges(op)
 
-				// Read a random ID from the initial set
-				target := rand.Intn(1000)
-				op := Eq("id", fmt.Sprintf("init-%d", target))
-				f, _ := ToKeyRanges(op)
-
-				seq, _ := p.Select(f)
-				for range seq {
-					// consume
+						seq, _ := p.Select(f)
+						count := 0
+						for range seq {
+							count++
+						}
+						tx.Rollback()
+					}
 				}
-				tx.Rollback()
-			}
-		}
-	})
+			})
+		})
+	}
+
+	// 4. Run Sub-Benchmarks
+	runWorkload(b, "ReadOnly", 0)     // 0% writes
+	runWorkload(b, "WriteOnly", 100)  // 100% writes
+	runWorkload(b, "Mixed_90_10", 10) // 10% writes
+	runWorkload(b, "Mixed_50_50", 50) // 50% writes
 }
