@@ -34,3 +34,39 @@ func (d *DB) Begin(writable bool) (*Tx, error) {
 		maUn: d.maUn,
 	}, nil
 }
+
+func (d *DB) View(fn func(*Tx) error) error {
+	return d.db.View(func(btx *boltdb.Tx) error {
+		tx := &Tx{
+			tx:      btx,
+			maUn:    d.maUn,
+			managed: true,
+		}
+		defer tx.cleanupTempTx()
+		return fn(tx)
+	})
+}
+
+func (d *DB) Update(fn func(*Tx) error) error {
+	return d.db.Update(func(btx *boltdb.Tx) error {
+		tx := &Tx{
+			tx:      btx,
+			maUn:    d.maUn,
+			managed: true,
+		}
+		defer tx.cleanupTempTx()
+		return fn(tx)
+	})
+}
+
+func (d *DB) Batch(fn func(*Tx) error) error {
+	return d.db.Batch(func(btx *boltdb.Tx) error {
+		tx := &Tx{
+			tx:      btx,
+			maUn:    d.maUn,
+			managed: true,
+		}
+		defer tx.cleanupTempTx()
+		return fn(tx)
+	})
+}

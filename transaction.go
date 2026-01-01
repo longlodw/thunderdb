@@ -13,24 +13,43 @@ type Tx struct {
 	tempDb       *boltdb.DB
 	tempFilePath string
 	maUn         MarshalUnmarshaler
+	managed      bool
 }
 
 func (tx *Tx) Commit() error {
+	if tx.managed {
+		panic("cannot commit a managed transaction")
+	}
 	return tx.tx.Commit()
 }
 
 func (tx *Tx) Rollback() error {
-	errs := []error{tx.tx.Rollback()}
+	if tx.managed {
+		panic("cannot rollback a managed transaction")
+	}
+	return errors.Join(tx.tx.Rollback(), tx.cleanupTempTx())
+}
+
+func (tx *Tx) cleanupTempTx() error {
 	if tx.tempTx != nil {
-		errs = append(errs, tx.tempTx.Rollback())
+		if err := tx.tempTx.Rollback(); err != nil {
+			return err
+		}
+		tx.tempTx = nil
 	}
 	if tx.tempDb != nil {
-		errs = append(errs, tx.tempDb.Close())
+		if err := tx.tempDb.Close(); err != nil {
+			return err
+		}
+		tx.tempDb = nil
 	}
 	if tx.tempFilePath != "" {
-		errs = append(errs, os.Remove(tx.tempFilePath))
+		if err := os.Remove(tx.tempFilePath); err != nil {
+			return err
+		}
+		tx.tempFilePath = ""
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 func (tx *Tx) ensureTempTx() (*boltdb.Tx, error) {
