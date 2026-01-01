@@ -25,7 +25,11 @@ type Persistent struct {
 func newPersistent(tx *Tx, relation string, columnSpecs map[string]ColumnSpec, emepheral bool) (*Persistent, error) {
 	tnx := tx.tx
 	if emepheral {
-		tnx = tx.tempTx
+		tempTx, err := tx.ensureTempTx()
+		if err != nil {
+			return nil, err
+		}
+		tnx = tempTx
 	}
 	maUn := tx.maUn
 	bucket, err := tnx.CreateBucketIfNotExists([]byte(relation))

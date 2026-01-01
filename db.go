@@ -28,33 +28,9 @@ func (d *DB) Begin(writable bool) (*Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	tempFile, err := os.CreateTemp("", "thunder_tempdb_*.db")
-	if err != nil {
-		tx.Rollback()
-		return nil, err
-	}
-	tempFilePath := tempFile.Name()
-	tempFile.Close()
-
-	tempDb, err := boltdb.Open(tempFilePath, 0600, nil)
-	if err != nil {
-		tx.Rollback()
-		os.Remove(tempFilePath)
-		return nil, err
-	}
-	tempTx, err := tempDb.Begin(true)
-	if err != nil {
-		tx.Rollback()
-		tempDb.Close()
-		os.Remove(tempFilePath)
-		return nil, err
-	}
 
 	return &Tx{
-		tx:           tx,
-		tempTx:       tempTx,
-		tempDb:       tempDb,
-		tempFilePath: tempFilePath,
-		maUn:         d.maUn,
+		tx:   tx,
+		maUn: d.maUn,
 	}, nil
 }

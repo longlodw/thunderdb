@@ -20,12 +20,45 @@ func (tx *Tx) Commit() error {
 }
 
 func (tx *Tx) Rollback() error {
-	return errors.Join(
-		tx.tx.Rollback(),
-		tx.tempTx.Rollback(),
-		tx.tempDb.Close(),
-		os.Remove(tx.tempFilePath),
-	)
+	errs := []error{tx.tx.Rollback()}
+	if tx.tempTx != nil {
+		errs = append(errs, tx.tempTx.Rollback())
+	}
+	if tx.tempDb != nil {
+		errs = append(errs, tx.tempDb.Close())
+	}
+	if tx.tempFilePath != "" {
+		errs = append(errs, os.Remove(tx.tempFilePath))
+	}
+	return errors.Join(errs...)
+}
+
+func (tx *Tx) ensureTempTx() (*boltdb.Tx, error) {
+	if tx.tempTx != nil {
+		return tx.tempTx, nil
+	}
+	tempFile, err := os.CreateTemp("", "thunder_tempdb_*.db")
+	if err != nil {
+		return nil, err
+	}
+	tempFilePath := tempFile.Name()
+	tempFile.Close()
+
+	tempDb, err := boltdb.Open(tempFilePath, 0600, nil)
+	if err != nil {
+		os.Remove(tempFilePath)
+		return nil, err
+	}
+	tempTx, err := tempDb.Begin(true)
+	if err != nil {
+		tempDb.Close()
+		os.Remove(tempFilePath)
+		return nil, err
+	}
+	tx.tempTx = tempTx
+	tx.tempDb = tempDb
+	tx.tempFilePath = tempFilePath
+	return tempTx, nil
 }
 
 func (tx *Tx) ID() int {
