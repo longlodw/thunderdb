@@ -626,7 +626,7 @@ func BenchmarkConcurrentReadWrite(b *testing.B) {
 	{
 		tx, _ := db.Begin(true)
 		p, _ := tx.LoadPersistent("bench_table")
-		for i := 0; i < 1000; i++ {
+		for i := range 1000 {
 			p.Insert(map[string]any{
 				"id":  fmt.Sprintf("init-%d", i),
 				"val": i,
@@ -692,7 +692,7 @@ func BenchmarkConcurrentReadWrite(b *testing.B) {
 				f, _ := ToKeyRanges(op)
 
 				seq, _ := p.Select(f)
-				for _, _ = range seq {
+				for range seq {
 					// consume
 				}
 				tx.Rollback()
