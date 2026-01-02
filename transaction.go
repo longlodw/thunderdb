@@ -63,7 +63,11 @@ func (tx *Tx) ensureTempTx() (*boltdb.Tx, error) {
 	tempFilePath := tempFile.Name()
 	tempFile.Close()
 
-	tempDb, err := boltdb.Open(tempFilePath, 0600, nil)
+	tempDb, err := boltdb.Open(tempFilePath, 0600, &DBOptions{
+		NoSync:         true,
+		NoGrowSync:     true,
+		NoFreelistSync: true,
+	})
 	if err != nil {
 		os.Remove(tempFilePath)
 		return nil, err

@@ -2,6 +2,7 @@ package thunderdb
 
 import (
 	"os"
+	"time"
 
 	"github.com/openkvlab/boltdb"
 )
@@ -11,7 +12,9 @@ type DB struct {
 	maUn MarshalUnmarshaler
 }
 
-func OpenDB(maUn MarshalUnmarshaler, path string, mode os.FileMode, options *boltdb.Options) (*DB, error) {
+type DBOptions = boltdb.Options
+
+func OpenDB(maUn MarshalUnmarshaler, path string, mode os.FileMode, options *DBOptions) (*DB, error) {
 	bdb, err := boltdb.Open(path, mode, options)
 	if err != nil {
 		return nil, err
@@ -69,4 +72,28 @@ func (d *DB) Batch(fn func(*Tx) error) error {
 		defer tx.cleanupTempTx()
 		return fn(tx)
 	})
+}
+
+func (d *DB) SetMaxBatchDelay(delay time.Duration) {
+	d.db.MaxBatchDelay = delay
+}
+
+func (d *DB) SetMaxBatchSize(size int) {
+	d.db.MaxBatchSize = size
+}
+
+func (d *DB) SetAllocSize(size int) {
+	d.db.AllocSize = size
+}
+
+func (d *DB) MaxBatchDelay() time.Duration {
+	return d.db.MaxBatchDelay
+}
+
+func (d *DB) MaxBatchSize() int {
+	return d.db.MaxBatchSize
+}
+
+func (d *DB) AllocSize() int {
+	return d.db.AllocSize
 }
