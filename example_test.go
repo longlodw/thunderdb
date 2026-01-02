@@ -27,69 +27,66 @@ func Example() {
 	defer db.Close()
 
 	// 1. Setup Schema and Insert Data
-	tx, err := db.Begin(true)
-	if err != nil {
-		panic(err)
-	}
-	defer tx.Rollback() // Safe to call, will be ignored if committed
+	err = db.Update(func(tx *thunderdb.Tx) error {
+		// Create 'users' relation
+		usersRel := "users"
+		users, err := tx.CreatePersistent(usersRel, map[string]thunderdb.ColumnSpec{
+			"id":       {},
+			"username": {Indexed: true},
+			"role":     {Indexed: true},
+		})
+		if err != nil {
+			return err
+		}
 
-	// Create 'users' relation
-	usersRel := "users"
-	users, err := tx.CreatePersistent(usersRel, map[string]thunderdb.ColumnSpec{
-		"id":       {},
-		"username": {Indexed: true},
-		"role":     {Indexed: true},
+		// Insert Data
+		if err := users.Insert(map[string]any{"id": "1", "username": "alice", "role": "admin"}); err != nil {
+			return err
+		}
+		if err := users.Insert(map[string]any{"id": "2", "username": "bob", "role": "user"}); err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		panic(err)
 	}
 
-	// Insert Data
-	if err := users.Insert(map[string]any{"id": "1", "username": "alice", "role": "admin"}); err != nil {
-		panic(err)
-	}
-	if err := users.Insert(map[string]any{"id": "2", "username": "bob", "role": "user"}); err != nil {
-		panic(err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		panic(err)
-	}
-
 	// 2. Query Data
-	tx, err = db.Begin(false) // Read-only transaction
-	if err != nil {
-		panic(err)
-	}
-	defer tx.Rollback()
-
-	// Load the relation
-	users, err = tx.LoadPersistent(usersRel)
-	if err != nil {
-		panic(err)
-	}
-
-	// Create a filter: username == "alice"
-	op := thunderdb.Eq("username", "alice")
-	f, err := thunderdb.ToKeyRanges(op)
-	if err != nil {
-		panic(err)
-	}
-
-	// Execute Select
-	seq, err := users.Select(f)
-	if err != nil {
-		panic(err)
-	}
-
-	// Iterate over results
-	for row, err := range seq {
+	err = db.View(func(tx *thunderdb.Tx) error {
+		// Load the relation
+		usersRel := "users"
+		users, err := tx.LoadPersistent(usersRel)
 		if err != nil {
-			panic(err)
+			return err
 		}
-		username, _ := row.Get("username")
-		role, _ := row.Get("role")
-		fmt.Printf("Found user: %s, Role: %s\n", username, role)
+
+		// Create a filter: username == "alice"
+		op := thunderdb.Eq("username", "alice")
+		f, err := thunderdb.ToKeyRanges(op)
+		if err != nil {
+			return err
+		}
+
+		// Execute Select
+		seq, err := users.Select(f)
+		if err != nil {
+			return err
+		}
+
+		// Iterate over results
+		for row, err := range seq {
+			if err != nil {
+				return err
+			}
+			username, _ := row.Get("username")
+			role, _ := row.Get("role")
+			fmt.Printf("Found user: %s, Role: %s\n", username, role)
+		}
+		return nil
+	})
+	if err != nil {
+		panic(err)
 	}
 
 	// Output:
@@ -115,110 +112,113 @@ func Example_recursive() {
 	defer db.Close()
 
 	// 2. Insert Hierarchy Data
-	tx, err := db.Begin(true)
-	if err != nil {
-		panic(err)
-	}
-	defer tx.Rollback()
+	err = db.Update(func(tx *thunderdb.Tx) error {
+		employees, err := tx.CreatePersistent("employees", map[string]thunderdb.ColumnSpec{
+			"id":         {},
+			"name":       {},
+			"manager_id": {}, // The link to the parent node
+		})
+		if err != nil {
+			return err
+		}
 
-	employees, err := tx.CreatePersistent("employees", map[string]thunderdb.ColumnSpec{
-		"id":         {},
-		"name":       {},
-		"manager_id": {}, // The link to the parent node
+		// Hierarchy: Alice (CEO) -> Bob -> Charlie
+		if err := employees.Insert(map[string]any{"id": "1", "name": "Alice", "manager_id": ""}); err != nil {
+			return err
+		}
+		if err := employees.Insert(map[string]any{"id": "2", "name": "Bob", "manager_id": "1"}); err != nil {
+			return err
+		}
+		if err := employees.Insert(map[string]any{"id": "3", "name": "Charlie", "manager_id": "2"}); err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
-		panic(err)
-	}
-
-	// Hierarchy: Alice (CEO) -> Bob -> Charlie
-	employees.Insert(map[string]any{"id": "1", "name": "Alice", "manager_id": ""})
-	employees.Insert(map[string]any{"id": "2", "name": "Bob", "manager_id": "1"})
-	employees.Insert(map[string]any{"id": "3", "name": "Charlie", "manager_id": "2"})
-
-	if err := tx.Commit(); err != nil {
 		panic(err)
 	}
 
 	// 3. Define and Execute Recursive Query
-	tx, err = db.Begin(true) // Needs write lock to create temp tables for recursion
-	if err != nil {
-		panic(err)
-	}
-	defer tx.Rollback()
+	// Needs write lock (Update) to create temp tables for recursion
+	err = db.Update(func(tx *thunderdb.Tx) error {
+		employees, _ := tx.LoadPersistent("employees")
 
-	employees, _ = tx.LoadPersistent("employees")
-
-	// Create a recursive query named "path"
-	// Schema: ancestor, descendant
-	// recursive=true
-	qPath, err := tx.CreateRecursion("path", map[string]thunderdb.ColumnSpec{
-		"ancestor":   {},
-		"descendant": {},
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	// Rule 1 (Base Case): Direct reports
-	// path(manager_id, id) :- employees(id, ..., manager_id)
-	baseProj := employees.Project(map[string]string{
-		"ancestor":   "manager_id",
-		"descendant": "id",
-	})
-	if err := qPath.AddBranch(baseProj); err != nil {
-		panic(err)
-	}
-
-	// Rule 2 (Recursive Step): Indirect reports
-	// path(a, c) :- employees(b, ..., a), path(b, c)
-	// We join 'employees' (manager=a, id=b) with 'path' (ancestor=b, descendant=c)
-	// Join key is implicit 'b' (mapped to the same name "join_key")
-
-	edgeProj := employees.Project(map[string]string{
-		"ancestor": "manager_id", // a
-		"join_key": "id",         // b
-	})
-
-	pathProj := qPath.Project(map[string]string{
-		"join_key":   "ancestor",   // b
-		"descendant": "descendant", // c
-	})
-
-	if err := qPath.AddBranch(edgeProj.Join(pathProj).Project(map[string]string{
-		"ancestor":   "ancestor",
-		"descendant": "descendant",
-	})); err != nil {
-		panic(err)
-	}
-
-	// Execute: Find all descendants of Alice (id=1)
-	f, err := thunderdb.ToKeyRanges(thunderdb.Eq("ancestor", "1"))
-	if err != nil {
-		panic(err)
-	}
-	seq, err := qPath.Select(f)
-	if err != nil {
-		panic(err)
-	}
-
-	// Iterate and collect results
-	// Expect Bob (2) and Charlie (3)
-	for row, err := range seq {
+		// Create a recursive query named "path"
+		// Schema: ancestor, descendant
+		// recursive=true
+		qPath, err := tx.CreateRecursion("path", map[string]thunderdb.ColumnSpec{
+			"ancestor":   {},
+			"descendant": {},
+		})
 		if err != nil {
-			panic(err)
+			return err
 		}
-		// Fetch the name for the descendant ID to make the output readable
-		// (In a real app, you might join back to the employees table)
-		val, _ := row.Get("descendant")
-		descID := val.(string)
-		var name string
-		switch descID {
-		case "2":
-			name = "Bob"
-		case "3":
-			name = "Charlie"
+
+		// Rule 1 (Base Case): Direct reports
+		// path(manager_id, id) :- employees(id, ..., manager_id)
+		baseProj := employees.Project(map[string]string{
+			"ancestor":   "manager_id",
+			"descendant": "id",
+		})
+		if err := qPath.AddBranch(baseProj); err != nil {
+			return err
 		}
-		fmt.Printf("Descendant of Alice: %s (ID: %s)\n", name, descID)
+
+		// Rule 2 (Recursive Step): Indirect reports
+		// path(a, c) :- employees(b, ..., a), path(b, c)
+		// We join 'employees' (manager=a, id=b) with 'path' (ancestor=b, descendant=c)
+		// Join key is implicit 'b' (mapped to the same name "join_key")
+
+		edgeProj := employees.Project(map[string]string{
+			"ancestor": "manager_id", // a
+			"join_key": "id",         // b
+		})
+
+		pathProj := qPath.Project(map[string]string{
+			"join_key":   "ancestor",   // b
+			"descendant": "descendant", // c
+		})
+
+		if err := qPath.AddBranch(edgeProj.Join(pathProj).Project(map[string]string{
+			"ancestor":   "ancestor",
+			"descendant": "descendant",
+		})); err != nil {
+			return err
+		}
+
+		// Execute: Find all descendants of Alice (id=1)
+		f, err := thunderdb.ToKeyRanges(thunderdb.Eq("ancestor", "1"))
+		if err != nil {
+			return err
+		}
+		seq, err := qPath.Select(f)
+		if err != nil {
+			return err
+		}
+
+		// Iterate and collect results
+		// Expect Bob (2) and Charlie (3)
+		for row, err := range seq {
+			if err != nil {
+				return err
+			}
+			// Fetch the name for the descendant ID to make the output readable
+			// (In a real app, you might join back to the employees table)
+			val, _ := row.Get("descendant")
+			descID := val.(string)
+			var name string
+			switch descID {
+			case "2":
+				name = "Bob"
+			case "3":
+				name = "Charlie"
+			}
+			fmt.Printf("Descendant of Alice: %s (ID: %s)\n", name, descID)
+		}
+		return nil
+	})
+	if err != nil {
+		panic(err)
 	}
 
 	// Unordered output is common in map iteration, but for deterministic test output:

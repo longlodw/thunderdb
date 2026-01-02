@@ -62,6 +62,16 @@ func (d *DB) Update(fn func(*Tx) error) error {
 	})
 }
 
+// Batch executes a function within the context of a read-write managed transaction.
+// If multiple goroutines call Batch simultaneously, the internal DB will attempt to
+// coalesce them into a single disk sync (group commit).
+//
+// This is useful for high-concurrency write scenarios where throughput is more
+// important than the latency of individual writes.
+//
+// The transaction is automatically committed if the function returns nil.
+// If the function returns an error, the transaction is rolled back.
+// If the function panics, the transaction is rolled back and the panic is propagated.
 func (d *DB) Batch(fn func(*Tx) error) error {
 	return d.db.Batch(func(btx *boltdb.Tx) error {
 		tx := &Tx{
@@ -74,26 +84,39 @@ func (d *DB) Batch(fn func(*Tx) error) error {
 	})
 }
 
+// SetMaxBatchDelay sets the maximum amount of time that the batcher will wait
+// for additional transactions before closing the batch.
+//
+// A higher delay can increase throughput by allowing more transactions to participate
+// in a single batch, but it increases the latency of individual transactions.
 func (d *DB) SetMaxBatchDelay(delay time.Duration) {
 	d.db.MaxBatchDelay = delay
 }
 
+// SetMaxBatchSize sets the maximum size of a batch.
+//
+// If a batch exceeds this size, it is committed immediately, even if MaxBatchDelay
+// has not been reached.
 func (d *DB) SetMaxBatchSize(size int) {
 	d.db.MaxBatchSize = size
 }
 
+// SetAllocSize sets the size of the initial memory allocation for the database.
 func (d *DB) SetAllocSize(size int) {
 	d.db.AllocSize = size
 }
 
+// MaxBatchDelay returns the current maximum batch delay.
 func (d *DB) MaxBatchDelay() time.Duration {
 	return d.db.MaxBatchDelay
 }
 
+// MaxBatchSize returns the current maximum batch size.
 func (d *DB) MaxBatchSize() int {
 	return d.db.MaxBatchSize
 }
 
+// AllocSize returns the current allocation size.
 func (d *DB) AllocSize() int {
 	return d.db.AllocSize
 }

@@ -49,51 +49,74 @@ func main() {
 	}
 	defer db.Close()
 
-	// 2. Start a Read-Write Transaction
-	tx, err := db.Begin(true)
-	if err != nil {
-		panic(err)
-	}
-	defer tx.Rollback()
+	// 2. Insert Data (Read-Write Transaction)
+	// We use Update() for automatic transaction management
+	err = db.Update(func(tx *thunderdb.Tx) error {
+		// 3. Define Schema (Create a Relation)
+		users, err := tx.CreatePersistent("users", map[string]thunderdb.ColumnSpec{
+			"id":       {},
+			"username": {Indexed: true},
+			"role":     {},
+		})
+		if err != nil {
+			return err
+		}
 
-	// 3. Define Schema (Create a Relation)
-	users, err := tx.CreatePersistent("users", map[string]thunderdb.ColumnSpec{
-		"id":       {},
-		"username": {Indexed: true},
-		"role":     {},
+		// 4. Insert Data
+		return users.Insert(map[string]any{"id": "1", "username": "alice", "role": "admin"})
 	})
 	if err != nil {
 		panic(err)
 	}
 
-	// 4. Insert Data
-	err = users.Insert(map[string]any{"id": "1", "username": "alice", "role": "admin"})
+	// 5. Query Data (Read-Only Transaction)
+	// We use View() for read-only operations
+	err = db.View(func(tx *thunderdb.Tx) error {
+		users, err := tx.LoadPersistent("users")
+		if err != nil {
+			return err
+		}
+
+		// Filter for username "alice"
+		// ToKeyRanges converts high-level operators into key ranges for the query engine
+		filter, err := thunderdb.ToKeyRanges(thunderdb.Eq("username", "alice"))
+		if err != nil {
+			return err
+		}
+		
+		// Execute Select
+		results, err := users.Select(filter)
+		if err != nil {
+			return err
+		}
+
+		for row := range results {
+			fmt.Printf("User: %s, Role: %s\n", row["username"], row["role"])
+		}
+		return nil
+	})
 	if err != nil {
 		panic(err)
 	}
-
-	// Commit changes
-	if err := tx.Commit(); err != nil {
-		panic(err)
-	}
-
-	// 5. Query Data (Read-Only Transaction)
-	tx, _ = db.Begin(false)
-	defer tx.Rollback()
-
-	users, _ = tx.LoadPersistent("users")
-
-	// Filter for username "alice"
-	// ToKeyRanges converts high-level operators into key ranges for the query engine
-	filter, _ := thunderdb.ToKeyRanges(thunderdb.Eq("username", "alice"))
-	
-	// Execute Select
-	results, _ := users.Select(filter)
-
-	for row, _ := range results {
-		fmt.Printf("User: %s, Role: %s\n", row["username"], row["role"])
-	}
 }
+```
+
+### Batch Updates (Group Commit)
+
+For high-concurrency write scenarios, use `Batch()`. This allows multiple concurrent updates to be grouped into a single disk sync, significantly improving throughput at the cost of slightly higher latency per transaction.
+
+```go
+// Concurrent goroutines can call this safely
+err := db.Batch(func(tx *thunderdb.Tx) error {
+    users, _ := tx.LoadPersistent("users")
+    return users.Insert(userData)
+})
+```
+
+You can tune the batching behavior:
+```go
+db.SetMaxBatchSize(1000)          // Max size of a batch
+db.SetMaxBatchDelay(10 * time.Millisecond) // Max wait time for a batch
 ```
 
 ### Uniques and Composite Indexes
