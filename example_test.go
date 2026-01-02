@@ -93,6 +93,71 @@ func Example() {
 	// Found user: alice, Role: admin
 }
 
+// ExampleDB_ManualTx demonstrates how to manually manage transactions using Begin/Commit/Rollback.
+// This is useful when you need to maintain a transaction handle across multiple function calls
+// or have complex logic that doesn't fit well into a closure.
+func Example_manualTx() {
+	// 1. Setup Database
+	tmpfile, err := os.CreateTemp("", "thunder_example_manual_*.db")
+	if err != nil {
+		panic(err)
+	}
+	dbPath := tmpfile.Name()
+	tmpfile.Close()
+	defer os.Remove(dbPath)
+
+	db, err := thunderdb.OpenDB(&thunderdb.MsgpackMaUn, dbPath, 0600, nil)
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	// 2. Start a Read-Write Transaction manually
+	tx, err := db.Begin(true)
+	if err != nil {
+		panic(err)
+	}
+	// Always defer Rollback to ensure safety if a panic occurs or we return early with error
+	defer tx.Rollback()
+
+	// 3. Define Schema
+	users, err := tx.CreatePersistent("users", map[string]thunderdb.ColumnSpec{
+		"id":   {},
+		"name": {},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// 4. Insert Data
+	if err := users.Insert(map[string]any{"id": "1", "name": "Manual User"}); err != nil {
+		panic(err)
+	}
+
+	// 5. Commit Changes explicitly
+	// If Commit succeeds, the deferred Rollback becomes a no-op
+	if err := tx.Commit(); err != nil {
+		panic(err)
+	}
+
+	// 6. Verify with Read-Only Transaction
+	readTx, err := db.Begin(false)
+	if err != nil {
+		panic(err)
+	}
+	defer readTx.Rollback()
+
+	users, _ = readTx.LoadPersistent("users")
+	iter, _ := users.Select(nil)
+	for row, _ := range iter {
+		name, _ := row.Get("name")
+		fmt.Printf("Found: %s\n", name)
+	}
+
+	// Output:
+	// Found: Manual User
+}
+
 // ExampleDB_Recursive demonstrates a recursive query to find descendants
 // in a hierarchical organizational structure (Employee -> Manager).
 func Example_recursive() {

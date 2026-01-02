@@ -119,6 +119,28 @@ db.SetMaxBatchSize(1000)          // Max size of a batch
 db.SetMaxBatchDelay(10 * time.Millisecond) // Max wait time for a batch
 ```
 
+### Manual Transaction Management
+
+While `Update`, `View`, and `Batch` are recommended for most use cases, you can also manage transactions manually if you need fine-grained control (e.g., maintaining a transaction handle across multiple function calls).
+
+**Important:** You must always ensure `Rollback()` is called. If you commit successfully, the deferred rollback will be a no-op and only clean up resources.
+
+```go
+// Start a Read-Write Transaction
+tx, err := db.Begin(true)
+if err != nil {
+    panic(err)
+}
+defer tx.Rollback()
+
+// ... perform operations ...
+
+// Commit changes explicitly
+if err := tx.Commit(); err != nil {
+    panic(err)
+}
+```
+
 ### Uniques and Composite Indexes
 
 Thunderdb supports defining unique constraints and composite indexes.
