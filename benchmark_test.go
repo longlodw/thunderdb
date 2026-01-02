@@ -485,7 +485,7 @@ func BenchmarkRecursion(b *testing.B) {
 				seq, _ := pLoad.Select(map[string]*keyRange{
 					"source": KeyRange(nodeKey, nodeKey, true, true, nil),
 				})
-				for row, _ := range seq {
+				for row := range seq {
 					val, _ := row.Get("target")
 					target := val.(string)
 					if !visited[target] {
@@ -710,6 +710,170 @@ func BenchmarkConcurrency(b *testing.B) {
 	}
 
 	// 4. Run Sub-Benchmarks
+	b.SetParallelism(100)             // Force high parallelism to simulate realistic load
+	runWorkload(b, "ReadOnly", 0)     // 0% writes
+	runWorkload(b, "WriteOnly", 100)  // 100% writes
+	runWorkload(b, "Mixed_90_10", 10) // 10% writes
+	runWorkload(b, "Mixed_50_50", 50) // 50% writes
+}
+
+func BenchmarkUpdateSequential(b *testing.B) {
+	db, cleanup := setupBenchmarkDB(b) // Uses MsgpackMaUn
+	defer cleanup()
+
+	// Setup data
+	tx, err := db.Begin(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	p, err := tx.CreatePersistent("update_seq", map[string]ColumnSpec{
+		"id":  {Indexed: true},
+		"val": {},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// Insert a record to update
+	err = p.Insert(map[string]any{
+		"id":  "1",
+		"val": 0,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; b.Loop(); i++ {
+		err := db.Update(func(tx *Tx) error {
+			p, err := tx.LoadPersistent("update_seq")
+			if err != nil {
+				return err
+			}
+
+			// Update the record
+			op := Eq("id", "1")
+			ranges, err := ToKeyRanges(op)
+			if err != nil {
+				return err
+			}
+
+			return p.Update(ranges, map[string]any{
+				"val": i,
+			})
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBatchConcurrent(b *testing.B) {
+	// 1. Setup DB
+	db, cleanup := setupBenchmarkDB(b) // Uses MsgpackMaUn
+	defer cleanup()
+
+	// 2. Initialize Schema
+	initTx, err := db.Begin(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, err = initTx.CreatePersistent("bench_batch_concurrent", map[string]ColumnSpec{
+		"id":  {Indexed: true},
+		"val": {},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := initTx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+
+	// 3. Pre-populate Data (so reads have targets)
+	// We insert 10,000 records
+	initialCount := 10000
+	{
+		tx, _ := db.Begin(true)
+		p, _ := tx.LoadPersistent("bench_batch_concurrent")
+		for i := range initialCount {
+			p.Insert(map[string]any{
+				"id":  fmt.Sprintf("item-%d", i),
+				"val": i,
+			})
+		}
+		tx.Commit()
+	}
+
+	// Helper to run parallel workloads using Batch
+	runWorkload := func(b *testing.B, name string, writePerc int) {
+		b.Run(name, func(b *testing.B) {
+			var writeCounter int64 // Atomic counter for unique write IDs
+
+			b.RunParallel(func(pb *testing.PB) {
+				// Thread-local random source
+				rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+				for pb.Next() {
+					// Decide: Read or Write?
+					if rng.Intn(100) < writePerc {
+						// WRITE TRANSACTION (Batched)
+						err := db.Batch(func(tx *Tx) error {
+							p, err := tx.LoadPersistent("bench_batch_concurrent")
+							if err != nil {
+								return err
+							}
+
+							// Unique ID for new item
+							uid := atomic.AddInt64(&writeCounter, 1)
+							return p.Insert(map[string]any{
+								"id":  fmt.Sprintf("new-%d-%d", uid, rng.Int()),
+								"val": int(uid),
+							})
+						})
+						if err != nil {
+							b.Fatal(err)
+						}
+
+					} else {
+						// READ TRANSACTION (Batched/View)
+						// Reads are typically NOT batched in BoltDB in the same way,
+						// but usually just separate Views.
+						// However, if we want to use Batch for everything, we can.
+						// Typically we use View for reads.
+						err := db.View(func(tx *Tx) error {
+							p, err := tx.LoadPersistent("bench_batch_concurrent")
+							if err != nil {
+								return err
+							}
+
+							// Read a random existing item from the initial set
+							targetID := rng.Intn(initialCount)
+							op := Eq("id", fmt.Sprintf("item-%d", targetID))
+							f, _ := ToKeyRanges(op)
+
+							seq, _ := p.Select(f)
+							count := 0
+							for range seq {
+								count++
+							}
+							return nil
+						})
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		})
+	}
+
+	// 4. Run Sub-Benchmarks (same mixed workloads as BenchmarkConcurrency)
+	// Note: ReadOnly isn't interesting for Batch comparisons usually, but good for baseline.
+	// WriteOnly is where we expect Batch to shine vs UpdateSequential (if concurrent).
+	b.SetParallelism(100)             // Force high parallelism to simulate realistic load
 	runWorkload(b, "ReadOnly", 0)     // 0% writes
 	runWorkload(b, "WriteOnly", 100)  // 100% writes
 	runWorkload(b, "Mixed_90_10", 10) // 10% writes
