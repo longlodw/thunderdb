@@ -44,8 +44,8 @@ func (p *Projection) parents() []*queryParent {
 	return p.parentsList
 }
 
-func (p *Projection) Select(ranges map[string]*keyRange) (iter.Seq2[Row, error], error) {
-	baseRanges := make(map[string]*keyRange)
+func (p *Projection) Select(ranges map[string]*BytesRange, refRange map[string]*RefRange) (iter.Seq2[Row, error], error) {
+	baseRanges := make(map[string]*BytesRange)
 	for projField, kr := range ranges {
 		baseField, ok := p.toBase[projField]
 		if !ok {
@@ -53,7 +53,15 @@ func (p *Projection) Select(ranges map[string]*keyRange) (iter.Seq2[Row, error],
 		}
 		baseRanges[baseField] = kr
 	}
-	baseSeq, err := p.base.Select(baseRanges)
+	baseRangesRef := make(map[string]*RefRange)
+	for projField, rr := range refRange {
+		baseField, ok := p.toBase[projField]
+		if !ok {
+			return nil, ErrFieldNotFound(projField)
+		}
+		baseRangesRef[baseField] = rr
+	}
+	baseSeq, err := p.base.Select(baseRanges, baseRangesRef)
 	if err != nil {
 		return nil, err
 	}

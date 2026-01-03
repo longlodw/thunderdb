@@ -482,8 +482,8 @@ func BenchmarkRecursion(b *testing.B) {
 					b.Fatal(err)
 				}
 
-				seq, _ := pLoad.Select(map[string]*keyRange{
-					"source": KeyRange(nodeKey, nodeKey, true, true, nil),
+				seq, _ := pLoad.Select(map[string]*BytesRange{
+					"source": NewBytesRange(nodeKey, nodeKey, true, true, nil),
 				})
 				for row := range seq {
 					val, _ := row.Get("target")

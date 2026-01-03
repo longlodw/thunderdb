@@ -14,6 +14,7 @@ const (
 	ErrCodeMetaDataNotFound
 	ErrCodeCorruptedIndexEntry
 	ErrCodeCorruptedMetaDataEntry
+	ErrCodeCannotEvaluateExpression
 )
 
 type ThunderError struct {

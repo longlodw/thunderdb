@@ -124,7 +124,7 @@ func (d *dataStorage) update(id []byte, value map[string]any) error {
 	return nil
 }
 
-func (d *dataStorage) get(kr *keyRange) (iter.Seq2[*persistentRow, error], error) {
+func (d *dataStorage) get(kr *BytesRange) (iter.Seq2[*persistentRow, error], error) {
 	idsBucket := d.bucket.Bucket([]byte("ids"))
 	if idsBucket == nil {
 		return nil, boltdb_errors.ErrBucketNotFound
@@ -132,15 +132,15 @@ func (d *dataStorage) get(kr *keyRange) (iter.Seq2[*persistentRow, error], error
 	return func(yield func(*persistentRow, error) bool) {
 		c := idsBucket.Cursor()
 		lessThan := func(k []byte) bool {
-			if kr.endKey == nil {
+			if kr.end == nil {
 				return true
 			}
-			cmp := bytes.Compare(k, kr.endKey)
+			cmp := bytes.Compare(k, kr.end)
 			return cmp < 0 || (cmp == 0 && kr.includeEnd)
 		}
 		var k, _ []byte
-		if kr.startKey != nil {
-			k, _ = c.Seek(kr.startKey)
+		if kr.start != nil {
+			k, _ = c.Seek(kr.start)
 		} else {
 			k, _ = c.First()
 		}
@@ -148,7 +148,7 @@ func (d *dataStorage) get(kr *keyRange) (iter.Seq2[*persistentRow, error], error
 			k, _ = c.Next()
 		}
 		for ; k != nil && lessThan(k); k, _ = c.Next() {
-			if !kr.contains(k) {
+			if !kr.Contains(k) {
 				continue
 			}
 			idFixed := [8]byte{}

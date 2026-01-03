@@ -67,8 +67,8 @@ func Le(field string, value ...any) Op {
 	}
 }
 
-func ToKeyRanges(ops ...Op) (map[string]*keyRange, error) {
-	keyRanges := make(map[string]*keyRange)
+func ToKeyRanges(ops ...Op) (map[string]*BytesRange, error) {
+	keyRanges := make(map[string]*BytesRange)
 	for _, op := range ops {
 		encodedKey, err := ToKey(op.value...)
 		if err != nil {
@@ -76,39 +76,39 @@ func ToKeyRanges(ops ...Op) (map[string]*keyRange, error) {
 		}
 		kr, exists := keyRanges[op.field]
 		if !exists {
-			kr = &keyRange{}
+			kr = &BytesRange{}
 			keyRanges[op.field] = kr
 		}
 		switch op.opType {
 		case OpEq:
-			if kr.startKey == nil || bytes.Compare(encodedKey, kr.startKey) > 0 {
-				kr.startKey = encodedKey
+			if kr.start == nil || bytes.Compare(encodedKey, kr.start) > 0 {
+				kr.start = encodedKey
 				kr.includeStart = true
 			}
-			if kr.endKey == nil || bytes.Compare(encodedKey, kr.endKey) < 0 {
-				kr.endKey = encodedKey
+			if kr.end == nil || bytes.Compare(encodedKey, kr.end) < 0 {
+				kr.end = encodedKey
 				kr.includeEnd = true
 			}
 		case OpNe:
 			kr.excludes = append(kr.excludes, encodedKey)
 		case OpGt:
-			if kr.startKey == nil || bytes.Compare(encodedKey, kr.startKey) >= 0 {
-				kr.startKey = encodedKey
+			if kr.start == nil || bytes.Compare(encodedKey, kr.start) >= 0 {
+				kr.start = encodedKey
 				kr.includeStart = false
 			}
 		case OpGe:
-			if kr.startKey == nil || bytes.Compare(encodedKey, kr.startKey) > 0 {
-				kr.startKey = encodedKey
+			if kr.start == nil || bytes.Compare(encodedKey, kr.start) > 0 {
+				kr.start = encodedKey
 				kr.includeStart = true
 			}
 		case OpLt:
-			if kr.endKey == nil || bytes.Compare(encodedKey, kr.endKey) <= 0 {
-				kr.endKey = encodedKey
+			if kr.end == nil || bytes.Compare(encodedKey, kr.end) <= 0 {
+				kr.end = encodedKey
 				kr.includeEnd = false
 			}
 		case OpLe:
-			if kr.endKey == nil || bytes.Compare(encodedKey, kr.endKey) < 0 {
-				kr.endKey = encodedKey
+			if kr.end == nil || bytes.Compare(encodedKey, kr.end) < 0 {
+				kr.end = encodedKey
 				kr.includeEnd = true
 			}
 		}

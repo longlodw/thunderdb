@@ -225,8 +225,8 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 	return nil
 }
 
-func (pr *Persistent) Delete(ranges map[string]*keyRange) error {
-	iterEntries, err := pr.iter(ranges)
+func (pr *Persistent) Delete(ranges map[string]*BytesRange, refRanges map[string]*RefRange) error {
+	iterEntries, err := pr.iter(ranges, refRanges)
 	if err != nil {
 		return err
 	}
@@ -252,8 +252,8 @@ func (pr *Persistent) Delete(ranges map[string]*keyRange) error {
 	return nil
 }
 
-func (pr *Persistent) Update(ranges map[string]*keyRange, updates map[string]any) error {
-	iterEntries, err := pr.iter(ranges)
+func (pr *Persistent) Update(ranges map[string]*BytesRange, refRanges map[string]*RefRange, updates map[string]any) error {
+	iterEntries, err := pr.iter(ranges, refRanges)
 	if err != nil {
 		return err
 	}
@@ -314,11 +314,11 @@ func (pr *Persistent) assertUnique(r *persistentRow) error {
 		if err != nil {
 			return err
 		}
-		idxRange := &keyRange{
+		idxRange := &BytesRange{
 			includeEnd:   true,
 			includeStart: true,
-			startKey:     key,
-			endKey:       key,
+			start:        key,
+			end:          key,
 		}
 		exists, err := pr.indexes.get(uniqueName, idxRange)
 		if err != nil {
@@ -337,8 +337,8 @@ func (pr *Persistent) assertUnique(r *persistentRow) error {
 	return nil
 }
 
-func (pr *Persistent) Select(ranges map[string]*keyRange) (iter.Seq2[Row, error], error) {
-	iterEntries, err := pr.iter(ranges)
+func (pr *Persistent) Select(ranges map[string]*BytesRange, refRanges map[string]*RefRange) (iter.Seq2[Row, error], error) {
+	iterEntries, err := pr.iter(ranges, refRanges)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +361,7 @@ func (pr *Persistent) Project(mapping map[string]string) Selector {
 	return newProjection(pr, mapping)
 }
 
-func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[*persistentRow, error], error) {
+func (pr *Persistent) iter(ranges map[string]*BytesRange, refRanges map[string]*RefRange) (iter.Seq2[*persistentRow, error], error) {
 	selectedIndexes := make([]string, 0, len(ranges))
 	for _, idxName := range pr.indexNames {
 		if _, ok := ranges[idxName]; ok {
@@ -370,7 +370,7 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[*persistentRo
 	}
 	if len(selectedIndexes) == 0 {
 		// No indexes defined, full scan
-		entries, err := pr.data.get(&keyRange{
+		entries, err := pr.data.get(&BytesRange{
 			includeEnd:   true,
 			includeStart: true,
 		})
@@ -385,18 +385,17 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[*persistentRo
 					}
 					continue
 				}
-				value := make(map[string][]byte)
-				for k := range ranges {
-					key, err := pr.computeKey(e, k)
-					if err != nil {
-						if !yield(nil, err) {
-							return
-						}
-						continue
+				matches, err := pr.matchBytesRanges(e, ranges, "")
+				if err != nil {
+					if !yield(nil, err) {
+						return
 					}
-					value[k] = key
+					continue
 				}
-				matches, err := pr.matchOps(value, ranges, "")
+				if !matches {
+					continue
+				}
+				matches, err = pr.matchRefRanges(e, refRanges)
 				if err != nil {
 					if !yield(nil, err) {
 						return
@@ -421,11 +420,11 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[*persistentRo
 	}
 	return func(yield func(*persistentRow, error) bool) {
 		for id := range idxes {
-			values, err := pr.data.get(&keyRange{
+			values, err := pr.data.get(&BytesRange{
 				includeEnd:   true,
 				includeStart: true,
-				startKey:     id[:],
-				endKey:       id[:],
+				start:        id[:],
+				end:          id[:],
 			})
 			if err != nil {
 				if !yield(nil, err) {
@@ -441,21 +440,7 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[*persistentRo
 					continue
 				}
 				// Match other ops
-				value := make(map[string][]byte)
-				for k := range ranges {
-					if k == shortestRangeIdxName {
-						continue
-					}
-					key, err := pr.computeKey(e, k)
-					if err != nil {
-						if !yield(nil, err) {
-							return
-						}
-						continue
-					}
-					value[k] = key
-				}
-				matches, err := pr.matchOps(value, ranges, shortestRangeIdxName)
+				matches, err := pr.matchBytesRanges(e, ranges, shortestRangeIdxName)
 				if err != nil {
 					if !yield(nil, err) {
 						return
@@ -495,16 +480,33 @@ func (pr *Persistent) computeKey(obj Row, name string) ([]byte, error) {
 	return ToKey(keyParts...)
 }
 
-func (pr *Persistent) matchOps(value map[string][]byte, keyRanges map[string]*keyRange, skip string) (bool, error) {
+func (pr *Persistent) matchBytesRanges(value Row, keyRanges map[string]*BytesRange, skip string) (bool, error) {
 	for name, r := range keyRanges {
 		if name == skip {
 			continue
 		}
-		v, ok := value[name]
-		if !ok {
+		vBytes, err := pr.computeKey(value, name)
+		if err != nil {
+			return false, err
+		}
+		if !r.Contains(vBytes) {
 			return false, nil
 		}
-		if !r.contains(v) {
+	}
+	return true, nil
+}
+
+func (pr *Persistent) matchRefRanges(value Row, refRanges map[string]*RefRange) (bool, error) {
+	for name, r := range refRanges {
+		vBytes, err := pr.computeKey(value, name)
+		if err != nil {
+			return false, err
+		}
+		contains, err := r.Contains(value, vBytes)
+		if err != nil {
+			return false, err
+		}
+		if !contains {
 			return false, nil
 		}
 	}

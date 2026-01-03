@@ -71,7 +71,7 @@ func (idx *indexStorage) delete(name string, key, id []byte) error {
 	return indexBk.Delete(compositeKey)
 }
 
-func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, error], error) {
+func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, error], error) {
 	idxBk := idx.bucket.Bucket([]byte(name))
 	if idxBk == nil {
 		return nil, ErrIndexNotFound(name)
@@ -82,8 +82,8 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, erro
 		var seekPrefix []byte
 		var err error
 
-		if kr.startKey != nil {
-			seekPrefix, err = ToKey(kr.startKey)
+		if kr.start != nil {
+			seekPrefix, err = ToKey(kr.start)
 			if err != nil {
 				if !yield([8]byte{}, err) {
 					return
@@ -96,10 +96,10 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, erro
 		}
 
 		lessThanEnd := func(k []byte) bool {
-			if kr.endKey == nil {
+			if kr.end == nil {
 				return true
 			}
-			cmpEnd := bytes.Compare(k, kr.endKey)
+			cmpEnd := bytes.Compare(k, kr.end)
 			return cmpEnd < 0 || (cmpEnd == 0 && kr.includeEnd)
 		}
 
@@ -167,7 +167,7 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, erro
 			if !lessThanEnd(valBytes) {
 				break
 			}
-			if !kr.contains(valBytes) {
+			if !kr.Contains(valBytes) {
 				continue
 			}
 

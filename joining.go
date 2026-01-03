@@ -63,9 +63,9 @@ func (jr *Joining) parents() []*queryParent {
 	return jr.parentsList
 }
 
-func (jr *Joining) Select(ranges map[string]*keyRange) (iter.Seq2[Row, error], error) {
+func (jr *Joining) Select(ranges map[string]*BytesRange, refRanges map[string]*RefRange) (iter.Seq2[Row, error], error) {
 	seedIdx := jr.bestBodyIndex(ranges)
-	seq, err := jr.bodies[seedIdx].Select(ranges)
+	seq, err := jr.bodies[seedIdx].Select(ranges, refRanges)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (jr *Joining) Select(ranges map[string]*keyRange) (iter.Seq2[Row, error], e
 			joinedBases := make([]Row, len(jr.bodies))
 			joinedBases[seedIdx] = item
 			joinedItem := newJoinedRow(joinedBases, jr.firstOccurences)
-			nextSeq, err := jr.join(joinedItem, ranges, 0, seedIdx)
+			nextSeq, err := jr.join(joinedItem, ranges, refRanges, 0, seedIdx)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -100,7 +100,7 @@ func (jr *Joining) Join(bodies ...Selector) Selector {
 	return newJoining(append(linkedBodies, jr.bodies...))
 }
 
-func (jr *Joining) bestBodyIndex(ranges map[string]*keyRange) int {
+func (jr *Joining) bestBodyIndex(ranges map[string]*BytesRange) int {
 	if len(ranges) == 0 {
 		return 0
 	}
@@ -112,25 +112,25 @@ func (jr *Joining) bestBodyIndex(ranges map[string]*keyRange) int {
 	return jr.firstOccurences[shortest]
 }
 
-func (jr *Joining) join(values *joinedRow, ranges map[string]*keyRange, bodyIdx, skip int) (iter.Seq2[Row, error], error) {
+func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, refRanges map[string]*RefRange, bodyIdx, skip int) (iter.Seq2[Row, error], error) {
 	if bodyIdx >= len(jr.bodies) {
 		return func(yield func(Row, error) bool) {
 			yield(values, nil)
 		}, nil
 	}
 	if bodyIdx == skip {
-		return jr.join(values, ranges, bodyIdx+1, skip)
+		return jr.join(values, ranges, refRanges, bodyIdx+1, skip)
 	}
 	body := jr.bodies[bodyIdx]
 	columns := body.Columns()
-	neededRanges := make(map[string]*keyRange)
+	neededRanges := make(map[string]*BytesRange)
 	for _, col := range columns {
 		if val, err := values.Get(col); err == nil {
 			key, err := ToKey(val)
 			if err != nil {
 				return nil, err
 			}
-			kr := KeyRange(key, key, true, true, nil)
+			kr := NewBytesRange(key, key, true, true, nil)
 			neededRanges[col] = kr
 		}
 	}
@@ -141,13 +141,13 @@ func (jr *Joining) join(values *joinedRow, ranges map[string]*keyRange, bodyIdx,
 				neededRanges[name] = kr
 			} else {
 				changed := false
-				if r.startKey == nil || (kr.startKey != nil && bytes.Compare(kr.startKey, r.startKey) > 0) {
-					r.startKey = kr.startKey
+				if r.start == nil || (kr.start != nil && bytes.Compare(kr.start, r.start) > 0) {
+					r.start = kr.start
 					r.includeStart = kr.includeStart
 					changed = true
 				}
-				if r.endKey == nil || (kr.endKey != nil && bytes.Compare(kr.endKey, r.endKey) < 0) {
-					r.endKey = kr.endKey
+				if r.end == nil || (kr.end != nil && bytes.Compare(kr.end, r.end) < 0) {
+					r.end = kr.end
 					r.includeEnd = kr.includeEnd
 					changed = true
 				}
@@ -158,7 +158,13 @@ func (jr *Joining) join(values *joinedRow, ranges map[string]*keyRange, bodyIdx,
 		}
 	}
 
-	iterEntries, err := body.Select(neededRanges)
+	neededRangesRef := make(map[string]*RefRange)
+	for name, rr := range refRanges {
+		if slices.Contains(columns, name) {
+			neededRangesRef[name] = rr
+		}
+	}
+	iterEntries, err := body.Select(neededRanges, neededRangesRef)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +179,7 @@ func (jr *Joining) join(values *joinedRow, ranges map[string]*keyRange, bodyIdx,
 			combinedBases := slices.Clone(values.bases)
 			combinedBases[bodyIdx] = en
 			combined := newJoinedRow(combinedBases, jr.firstOccurences)
-			nextSeq, err := jr.join(combined, ranges, bodyIdx+1, skip)
+			nextSeq, err := jr.join(combined, ranges, refRanges, bodyIdx+1, skip)
 			if err != nil {
 				if !yield(nil, err) {
 					return

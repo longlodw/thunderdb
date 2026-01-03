@@ -56,7 +56,7 @@ func TestDB_View(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		iter, err := p.Select(nil)
+		iter, err := p.Select(nil, nil)
 		if err != nil {
 			return err
 		}
@@ -104,7 +104,7 @@ func TestDB_Update(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		iter, err := p.Select(nil)
+		iter, err := p.Select(nil, nil)
 		if err != nil {
 			return err
 		}
@@ -174,7 +174,7 @@ func TestDB_Batch(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		iter, err := p.Select(nil)
+		iter, err := p.Select(nil, nil)
 		if err != nil {
 			return err
 		}
@@ -233,7 +233,7 @@ func TestDB_Batch_PanicProtection(t *testing.T) {
 	// Check if Worker 2's data made it
 	db.View(func(tx *Tx) error {
 		p, _ := tx.LoadPersistent("data")
-		iter, _ := p.Select(nil)
+		iter, _ := p.Select(nil, nil)
 		count := 0
 		for range iter {
 			count++
