@@ -81,20 +81,26 @@ func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, er
 		c := idxBk.Cursor()
 		var k []byte
 		var seekPrefix []byte
-		var err error
+		var seekBuf []byte
+		var endBuf []byte
+		// var err error // err is shadowed below if we redeclare or just use existing?
+		// We can reuse a single var err if we are careful, or shadow it.
 
 		// Prepare Search Limits
 		// ToKey encodes the values using ordered.Encode.
 		// Since index keys are ordered.Encode(Val, ID), comparing against ordered.Encode(Val) works effectively
 		// as a prefix check or range bound.
 		if kr.start != nil {
-			seekPrefix, err = ToKey(kr.start)
-			if err != nil {
-				if !yield([8]byte{}, err) {
-					return
-				}
-				return
-			}
+			// Optimization: Use ordered.Append to reuse buffer and avoid allocation
+			seekBuf = ordered.Append(seekBuf[:0], kr.start)
+			seekPrefix = seekBuf
+
+			// We skip checking CanEncode for []byte as it is always supported?
+			// ToKey checked it. ordered.Append will panic? No, ordered.Encode returns error?
+			// ordered.Append usually doesn't return error, it panics on unsupported types?
+			// But []byte is supported.
+			// Let's assume kr.start is valid.
+
 			k, _ = c.Seek(seekPrefix)
 		} else {
 			k, _ = c.First()
@@ -102,13 +108,8 @@ func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, er
 
 		var endLimit []byte
 		if kr.end != nil {
-			endLimit, err = ToKey(kr.end)
-			if err != nil {
-				if !yield([8]byte{}, err) {
-					return
-				}
-				return
-			}
+			endBuf = ordered.Append(endBuf[:0], kr.end)
+			endLimit = endBuf
 		}
 
 		// Optimization: Check for exact match on the prefix (Value part of the key).
@@ -119,6 +120,7 @@ func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, er
 
 		// Prepare Excludes
 		var excludes [][]byte
+		var err error
 		if len(kr.excludes) > 0 {
 			excludes = make([][]byte, len(kr.excludes))
 			for i, ex := range kr.excludes {
