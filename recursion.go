@@ -144,7 +144,17 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 			if err != nil {
 				return err
 			}
-			if err := r.propagateUp(row, branch, ranges, refRanges); err != nil {
+			valMap, err := row.ToMap()
+			if err != nil {
+				return err
+			}
+			if err := r.backing.Insert(valMap); err != nil {
+				if thunderErr, ok := err.(*ThunderError); ok && thunderErr.Code == ErrCodeUniqueConstraint {
+					continue
+				}
+				return err
+			}
+			if err := r.propagateUp(row, r, ranges, refRanges); err != nil {
 				return err
 			}
 		}
