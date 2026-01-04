@@ -111,6 +111,12 @@ func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, er
 			}
 		}
 
+		// Optimization: Check for exact match on the prefix (Value part of the key).
+		// If seekPrefix == endLimit, we are looking for a specific Value.
+		// In this case, the key 'k' starts with seekPrefix, and the remainder is the Encoded ID.
+		// We can skip decoding the Value and just decode the ID from the suffix.
+		exactMatch := seekPrefix != nil && endLimit != nil && bytes.Equal(seekPrefix, endLimit)
+
 		// Prepare Excludes
 		var excludes [][]byte
 		if len(kr.excludes) > 0 {
@@ -132,12 +138,6 @@ func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, er
 		// We reuse these slices across iterations.
 		var valBuf []byte
 		var idBuf []byte
-
-		// Optimization: Check for exact match on the prefix (Value part of the key).
-		// If seekPrefix == endLimit, we are looking for a specific Value.
-		// In this case, the key 'k' starts with seekPrefix, and the remainder is the Encoded ID.
-		// We can skip decoding the Value and just decode the ID from the suffix.
-		exactMatch := seekPrefix != nil && endLimit != nil && bytes.Equal(seekPrefix, endLimit)
 
 		for ; k != nil; k, _ = c.Next() {
 			// 1. Check End of Range
