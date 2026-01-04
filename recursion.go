@@ -193,8 +193,17 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 				joinedBases[idx] = top.value
 				joinedValues := newJoinedRow(joinedBases, p.firstOccurences)
 
+				// Optimization: Check if the seed row satisfies the global ranges.
+				// If the seed itself violates the constraints, we can skip the entire join.
+
+				// Calculate join order for propagateUp
+				// Since we are propagating UP, we already have the value at 'idx'.
+				// We need to join with all OTHER bodies to complete the row.
+				// This is essentially the same as Select logic: treat 'idx' as the seed.
+				joinOrder := p.joinPlans[idx]
+
 				// Use global ranges, may results in bugs where correct rows are filtered out
-				entries, err := p.join(joinedValues, ranges, refRanges, 0, idx)
+				entries, err := p.join(joinedValues, ranges, refRanges, joinOrder, 0)
 				if err != nil {
 					return err
 				}

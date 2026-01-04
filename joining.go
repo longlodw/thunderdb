@@ -13,6 +13,7 @@ type Joining struct {
 	firstOccurences map[string]int
 	parentsList     []*queryParent
 	recursive       bool
+	joinPlans       map[int][]int
 }
 
 func newJoining(bodies []linkedSelector) Selector {
@@ -40,6 +41,59 @@ func newJoining(bodies []linkedSelector) Selector {
 	result.bodies = bodies
 	result.firstOccurences = firstOccurences
 	result.recursive = recursive
+	result.joinPlans = make(map[int][]int)
+
+	// Precompute join plans for each body acting as a seed
+	for seedIdx := range bodies {
+		resolvedColumns := make(map[string]bool)
+		for _, col := range bodies[seedIdx].Columns() {
+			resolvedColumns[col] = true
+		}
+		remainingIndices := make([]int, 0, len(bodies)-1)
+		for i := range bodies {
+			if i != seedIdx {
+				remainingIndices = append(remainingIndices, i)
+			}
+		}
+		joinOrder := make([]int, 0, len(remainingIndices))
+
+		for len(remainingIndices) > 0 {
+			bestIdx := -1
+			bestScore := -1
+
+			for i, idx := range remainingIndices {
+				score := 0
+				for _, col := range bodies[idx].Columns() {
+					if resolvedColumns[col] {
+						score++
+					}
+				}
+				// Prefer bodies that share columns with already resolved set
+				if score > bestScore {
+					bestScore = score
+					bestIdx = i
+				}
+			}
+
+			if bestIdx == -1 {
+				bestIdx = 0
+			}
+
+			// Move best candidate to order
+			selectedBodyIdx := remainingIndices[bestIdx]
+			joinOrder = append(joinOrder, selectedBodyIdx)
+
+			// Add its columns to resolved set
+			for _, col := range bodies[selectedBodyIdx].Columns() {
+				resolvedColumns[col] = true
+			}
+
+			// Remove from remaining
+			remainingIndices = slices.Delete(remainingIndices, bestIdx, bestIdx+1)
+		}
+		result.joinPlans[seedIdx] = joinOrder
+	}
+
 	return result
 }
 
@@ -81,6 +135,9 @@ func (jr *Joining) Select(ranges map[string]*BytesRange, refRanges map[string][]
 		}
 	}
 
+	// Build execution order
+	joinOrder := jr.joinPlans[seedIdx]
+
 	seq, err := body.Select(neededRanges, neededRangesRef)
 	if err != nil {
 		return nil, err
@@ -96,7 +153,7 @@ func (jr *Joining) Select(ranges map[string]*BytesRange, refRanges map[string][]
 			joinedBases := make([]Row, len(jr.bodies))
 			joinedBases[seedIdx] = item
 			joinedItem := newJoinedRow(joinedBases, jr.firstOccurences)
-			nextSeq, err := jr.join(joinedItem, ranges, refRanges, 0, seedIdx)
+			nextSeq, err := jr.join(joinedItem, ranges, refRanges, joinOrder, 0)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -128,15 +185,14 @@ func (jr *Joining) bestBodyIndex(ranges map[string]*BytesRange) int {
 	return jr.firstOccurences[shortest]
 }
 
-func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, refRanges map[string][]*RefRange, bodyIdx, skip int) (iter.Seq2[Row, error], error) {
-	if bodyIdx >= len(jr.bodies) {
+func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, refRanges map[string][]*RefRange, order []int, step int) (iter.Seq2[Row, error], error) {
+	if step >= len(order) {
 		return func(yield func(Row, error) bool) {
 			yield(values, nil)
 		}, nil
 	}
-	if bodyIdx == skip {
-		return jr.join(values, ranges, refRanges, bodyIdx+1, skip)
-	}
+	bodyIdx := order[step]
+
 	body := jr.bodies[bodyIdx]
 	columns := body.Columns()
 	neededRanges := make(map[string]*BytesRange)
@@ -195,7 +251,7 @@ func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, refRan
 			combinedBases := slices.Clone(values.bases)
 			combinedBases[bodyIdx] = en
 			combined := newJoinedRow(combinedBases, jr.firstOccurences)
-			nextSeq, err := jr.join(combined, ranges, refRanges, bodyIdx+1, skip)
+			nextSeq, err := jr.join(combined, ranges, refRanges, order, step+1)
 			if err != nil {
 				if !yield(nil, err) {
 					return
