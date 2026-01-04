@@ -179,6 +179,18 @@ func (pr *Persistent) Join(bodies ...Selector) Selector {
 }
 
 func (pr *Persistent) Insert(obj map[string]any) error {
+	if len(obj) != len(pr.columns) {
+		return ErrFieldCountMismatch(len(pr.columns), len(obj))
+	}
+
+	// Check uniques before inserting data
+	if err := pr.assertUnique(&persistentRow{
+		value:  obj,
+		fields: pr.columns,
+	}); err != nil {
+		return err
+	}
+
 	id, err := pr.data.insert(obj)
 	if err != nil {
 		return err
@@ -208,12 +220,6 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 			}
 			value[k] = vBytes
 		}
-	}
-	// Check uniques
-	if err := pr.assertUnique(&persistentRow{
-		value: obj,
-	}); err != nil {
-		return err
 	}
 
 	for _, idxName := range pr.indexNames {

@@ -743,8 +743,8 @@ func TestPersistent_RefRange(t *testing.T) {
 
 	// Find rows where value is >= min AND value <= max
 	// This uses RefRange to compare columns within the same row
-	refs := map[string]*RefRange{
-		"value": NewRefRange([]string{"min"}, []string{"max"}, true, true, nil),
+	refs := map[string][]*RefRange{
+		"value": {NewRefRange([]string{"min"}, []string{"max"}, true, true, nil)},
 	}
 
 	seq, err := p.Select(nil, refs)

@@ -15,6 +15,7 @@ type Recursion struct {
 	explored      map[string]bool
 	backing       *Persistent
 	interestedSet map[linkedSelector]bool
+	callCount     int
 }
 
 func newRecursive(tx *Tx, relation string, columnSpecs map[string]ColumnSpec) (*Recursion, error) {
@@ -122,31 +123,57 @@ func (r *Recursion) Select(ranges map[string]*BytesRange, refRanges map[string][
 }
 
 func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) error {
-	stack := []any{&downStack{
-		ranges:    ranges,
-		refRanges: refRanges,
-		selector:  r,
-	}}
+	r.callCount++
+	defer func() {
+		r.callCount--
+		if r.callCount == 0 {
+			r.explored = make(map[string]bool)
+		}
+	}()
+	hashKey := hashOperators(ranges, refRanges)
+	if r.explored[hashKey] {
+		return nil
+	}
+	r.explored[hashKey] = true
+	for _, branch := range r.branches {
+		seq, err := branch.Select(ranges, refRanges)
+		if err != nil {
+			return err
+		}
+		for row, err := range seq {
+			if err != nil {
+				return err
+			}
+			if err := r.propagateUp(row, branch); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Recursion) propagateUp(row Row, selector linkedSelector) error {
+	stack := make([]upStackItem, 0)
+	stack = append(stack, upStackItem{
+		selector: selector,
+		value:    row,
+	})
 	for len(stack) > 0 {
 		top := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		switch v := top.(type) {
-		case *downStack:
-			// Handle down stack logic
-			if !v.selector.IsRecursive() {
-				neededRanges := make(map[string]*BytesRange)
-				for name, kr := range v.ranges {
-					if slices.Contains(v.selector.Columns(), name) {
-						neededRanges[name] = kr
-					}
-				}
-				neededRangesRef := make(map[string][]*RefRange)
-				for name, rr := range v.refRanges {
-					if slices.Contains(v.selector.Columns(), name) {
-						neededRangesRef[name] = rr
-					}
-				}
-				entries, err := v.selector.Select(neededRanges, neededRangesRef)
+		for _, parent := range top.selector.parents() {
+			if !r.interestedSet[parent.parent] {
+				continue
+			}
+			idx := parent.index
+			switch p := parent.parent.(type) {
+			case *Joining:
+				// Handle joining parent
+				joinedBases := make([]Row, len(p.bodies))
+				joinedBases[idx] = top.value
+				joinedValues := newJoinedRow(joinedBases, p.firstOccurences)
+
+				entries, err := p.join(joinedValues, nil, nil, 0, idx)
 				if err != nil {
 					return err
 				}
@@ -154,140 +181,36 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 					if err != nil {
 						return err
 					}
-					stack = append(stack, &upStack{
-						selector:  v.selector,
-						value:     e,
-						ranges:    v.ranges,
-						refRanges: v.refRanges,
+					stack = append(stack, upStackItem{
+						selector: p,
+						value:    e,
 					})
 				}
-				continue
-			}
-			switch sel := v.selector.(type) {
-			case *Recursion:
-				key := hashOperators(v.ranges, v.refRanges)
-				if sel.explored[key] {
-					continue
-				}
-				sel.explored[key] = true
-				for _, branch := range sel.branches {
-					stack = append(stack, &downStack{
-						ranges:    v.ranges,
-						selector:  branch,
-						refRanges: v.refRanges,
-					})
-				}
-			case *Joining:
-				bestIdx := sel.bestBodyIndex(v.ranges)
-				stack = append(stack, &downStack{
-					ranges:    v.ranges,
-					selector:  sel.bodies[bestIdx],
-					refRanges: v.refRanges,
-				})
 			case *Projection:
-				for projField, baseField := range sel.toBase {
-					if kr, ok := v.ranges[projField]; ok {
-						v.ranges[baseField] = kr
-						delete(v.ranges, projField)
-					}
+				// Handle projection parent
+				projValue := newProjectedRow(top.value, p.toBase)
+				stack = append(stack, upStackItem{
+					selector: p,
+					value:    projValue,
+				})
+			case *Recursion:
+				// Handle recursive parent
+				valMap, err := top.value.ToMap()
+				if err != nil {
+					return err
 				}
-				for projField, baseField := range sel.toBase {
-					if rr, ok := v.refRanges[projField]; ok {
-						v.refRanges[baseField] = rr
-						delete(v.refRanges, projField)
+				if err := p.backing.Insert(valMap); err != nil {
+					if thunderErr, ok := err.(*ThunderError); ok && thunderErr.Code == ErrCodeUniqueConstraint {
+						continue
 					}
+					return err
 				}
-				stack = append(stack, &downStack{
-					ranges:    v.ranges,
-					selector:  sel.base,
-					refRanges: v.refRanges,
+				stack = append(stack, upStackItem{
+					selector: p,
+					value:    top.value,
 				})
 			default:
 				return ErrUnsupportedSelector()
-			}
-		case *upStack:
-			// Handle up stack logic
-			for _, parent := range v.selector.parents() {
-				if !r.interestedSet[parent.parent] {
-					continue
-				}
-				idx := parent.index
-				switch p := parent.parent.(type) {
-				case *Joining:
-					// Handle joining parent
-					joinedBases := make([]Row, len(p.bodies))
-					joinedBases[idx] = v.value
-					joinedValues := newJoinedRow(joinedBases, p.firstOccurences)
-
-					neededRanges := make(map[string]*BytesRange)
-					for name, kr := range v.ranges {
-						if slices.Contains(p.Columns(), name) {
-							neededRanges[name] = kr
-						}
-					}
-					neededRangesRef := make(map[string][]*RefRange)
-					for name, rr := range v.refRanges {
-						if slices.Contains(p.Columns(), name) {
-							neededRangesRef[name] = rr
-						}
-					}
-					entries, err := p.join(joinedValues, neededRanges, neededRangesRef, 0, idx)
-					if err != nil {
-						return err
-					}
-					for e, err := range entries {
-						if err != nil {
-							return err
-						}
-						stack = append(stack, &upStack{
-							selector:  p,
-							value:     e,
-							ranges:    v.ranges,
-							refRanges: v.refRanges,
-						})
-					}
-				case *Projection:
-					// Handle projection parent
-					projValue := newProjectedRow(v.value, p.toBase)
-					for projField, baseField := range p.toBase {
-						if kr, ok := v.ranges[baseField]; ok {
-							v.ranges[projField] = kr
-							delete(v.ranges, baseField)
-						}
-					}
-					for projField, baseField := range p.toBase {
-						if rr, ok := v.refRanges[baseField]; ok {
-							v.refRanges[projField] = rr
-							delete(v.refRanges, baseField)
-						}
-					}
-					stack = append(stack, &upStack{
-						selector:  p,
-						value:     projValue,
-						ranges:    v.ranges,
-						refRanges: v.refRanges,
-					})
-				case *Recursion:
-					// Handle recursive parent
-					valMap, err := v.value.ToMap()
-					if err != nil {
-						return err
-					}
-					if err := p.backing.Insert(valMap); err != nil {
-						if thunderErr, ok := err.(*ThunderError); ok && thunderErr.Code == ErrCodeUniqueConstraint {
-							continue
-						}
-						return err
-					}
-					stack = append(stack, &upStack{
-						selector:  p,
-						value:     v.value,
-						ranges:    v.ranges,
-						refRanges: v.refRanges,
-					})
-				default:
-					return ErrUnsupportedSelector()
-				}
 			}
 		}
 	}
@@ -312,17 +235,9 @@ func hashOperators(ranges map[string]*BytesRange, refRange map[string][]*RefRang
 	return result
 }
 
-type downStack struct {
-	ranges    map[string]*BytesRange
-	selector  linkedSelector
-	refRanges map[string][]*RefRange
-}
-
-type upStack struct {
-	selector  linkedSelector
-	value     Row
-	ranges    map[string]*BytesRange
-	refRanges map[string][]*RefRange
+type upStackItem struct {
+	selector linkedSelector
+	value    Row
 }
 
 const queryAllUniqueCol = "__all_unique"

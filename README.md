@@ -78,14 +78,16 @@ func main() {
 		}
 
 		// Filter for username "alice"
-		// ToKeyRanges converts high-level operators into key ranges for the query engine
-		filter, err := thunderdb.ToKeyRanges(thunderdb.Eq("username", "alice"))
+		key, err := thunderdb.ToKey("alice")
 		if err != nil {
 			return err
 		}
+		filter := map[string]*thunderdb.BytesRange{
+			"username": thunderdb.NewBytesRange(key, key, true, true, nil),
+		}
 		
 		// Execute Select
-		results, err := users.Select(filter)
+		results, err := users.Select(filter, nil)
 		if err != nil {
 			return err
 		}
@@ -170,8 +172,11 @@ users, err := tx.CreatePersistent("users", map[string]thunderdb.ColumnSpec{
 
 // Querying using the composite index
 // Note: Pass values as a slice in the same order as ReferenceCols
-filter, _ := thunderdb.ToKeyRanges(thunderdb.Eq("name", []any{"John", "Doe"}))
-results, _ := users.Select(filter)
+key, _ := thunderdb.ToKey("John", "Doe")
+filter := map[string]*thunderdb.BytesRange{
+    "name": thunderdb.NewBytesRange(key, key, true, true, nil),
+}
+results, _ := users.Select(filter, nil)
 ```
 
 ### Recursive Queries
@@ -222,8 +227,11 @@ recursiveStep := edgeProj.Join(pathProj).Project(map[string]string{
 qPath.AddBranch(recursiveStep)
 
 // Execute query to find descendants of ID "1"
-filter, _ := thunderdb.ToKeyRanges(thunderdb.Eq("ancestor", "1"))
-results, _ := qPath.Select(filter)
+key, _ := thunderdb.ToKey("1")
+filter := map[string]*thunderdb.BytesRange{
+    "ancestor": thunderdb.NewBytesRange(key, key, true, true, nil),
+}
+results, _ := qPath.Select(filter, nil)
 ```
 
 ## License
