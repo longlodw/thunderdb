@@ -90,7 +90,9 @@ func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, er
 		if kr.start != nil {
 			seekPrefix, err = ToKey(kr.start)
 			if err != nil {
-				if !yield([8]byte{}, err) { return }
+				if !yield([8]byte{}, err) {
+					return
+				}
 				return
 			}
 			k, _ = c.Seek(seekPrefix)
@@ -102,7 +104,9 @@ func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, er
 		if kr.end != nil {
 			endLimit, err = ToKey(kr.end)
 			if err != nil {
-				if !yield([8]byte{}, err) { return }
+				if !yield([8]byte{}, err) {
+					return
+				}
 				return
 			}
 		}
@@ -114,18 +118,26 @@ func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, er
 			for i, ex := range kr.excludes {
 				excludes[i], err = ToKey(ex)
 				if err != nil {
-					if !yield([8]byte{}, err) { return }
+					if !yield([8]byte{}, err) {
+						return
+					}
 					return
 				}
 			}
 		}
 
 		var id [8]byte
-		
+
 		// Buffers for decoding to reduce allocation
 		// We reuse these slices across iterations.
 		var valBuf []byte
 		var idBuf []byte
+
+		// Optimization: Check for exact match on the prefix (Value part of the key).
+		// If seekPrefix == endLimit, we are looking for a specific Value.
+		// In this case, the key 'k' starts with seekPrefix, and the remainder is the Encoded ID.
+		// We can skip decoding the Value and just decode the ID from the suffix.
+		exactMatch := seekPrefix != nil && endLimit != nil && bytes.Equal(seekPrefix, endLimit)
 
 		for ; k != nil; k, _ = c.Next() {
 			// 1. Check End of Range
@@ -172,15 +184,28 @@ func (idx *indexStorage) get(name string, kr *BytesRange) (iter.Seq2[[8]byte, er
 			// 4. Decode ID
 			// We decoded everything else via raw bytes, now we just need the ID.
 			// using typed Decode is significantly faster than Unmarshal/DecodeAny.
-			
-			valBuf = valBuf[:0]
+
 			idBuf = idBuf[:0]
-			
-			if err := ordered.Decode(k, &valBuf, &idBuf); err != nil {
-				if !yield([8]byte{}, err) {
-					return
+
+			if exactMatch {
+				// Optimization: Skip Value decoding
+				// k = [seekPrefix][EncodedID]
+				// We just decode [EncodedID]
+				suffix := k[len(seekPrefix):]
+				if err := ordered.Decode(suffix, &idBuf); err != nil {
+					if !yield([8]byte{}, err) {
+						return
+					}
+					continue
 				}
-				continue
+			} else {
+				valBuf = valBuf[:0]
+				if err := ordered.Decode(k, &valBuf, &idBuf); err != nil {
+					if !yield([8]byte{}, err) {
+						return
+					}
+					continue
+				}
 			}
 
 			if len(idBuf) != 8 {
