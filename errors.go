@@ -15,6 +15,7 @@ const (
 	ErrCodeCorruptedIndexEntry
 	ErrCodeCorruptedMetaDataEntry
 	ErrCodeCannotEvaluateExpression
+	ErrCodeRecursionDepthExceeded
 )
 
 type ThunderError struct {
@@ -86,5 +87,12 @@ func ErrCorruptedMetaDataEntry(relation, metaName string) error {
 	return &ThunderError{
 		Code:    ErrCodeCorruptedMetaDataEntry,
 		Message: fmt.Sprintf("corrupted meta data entry %s in relation %s", metaName, relation),
+	}
+}
+
+func ErrRecursionDepthExceeded(depth int) error {
+	return &ThunderError{
+		Code:    ErrCodeRecursionDepthExceeded,
+		Message: fmt.Sprintf("recursion depth exceeded: %d", depth),
 	}
 }

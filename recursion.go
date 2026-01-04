@@ -16,6 +16,7 @@ type Recursion struct {
 	backing       *Persistent
 	interestedSet map[linkedSelector]bool
 	callCount     int
+	maxDepth      int
 }
 
 func newRecursive(tx *Tx, relation string, columnSpecs map[string]ColumnSpec) (*Recursion, error) {
@@ -40,6 +41,7 @@ func newRecursive(tx *Tx, relation string, columnSpecs map[string]ColumnSpec) (*
 		explored:      make(map[string]bool),
 		backing:       backing,
 		interestedSet: interestedSet,
+		maxDepth:      50, // Default depth limit
 	}
 	interestedSet[result] = true
 	return result, nil
@@ -51,6 +53,10 @@ func (r *Recursion) Columns() []string {
 
 func (r *Recursion) IsRecursive() bool {
 	return true
+}
+
+func (r *Recursion) SetMaxDepth(depth int) {
+	r.maxDepth = depth
 }
 
 func (r *Recursion) addParent(parent *queryParent) {
@@ -123,6 +129,9 @@ func (r *Recursion) Select(ranges map[string]*BytesRange, refRanges map[string][
 }
 
 func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) error {
+	if r.callCount > r.maxDepth {
+		return ErrRecursionDepthExceeded(r.maxDepth)
+	}
 	r.callCount++
 	defer func() {
 		r.callCount--
@@ -150,7 +159,6 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 				return err
 			}
 			if err := r.backing.Insert(valMap); err != nil {
-
 				if thunderErr, ok := err.(*ThunderError); ok && thunderErr.Code == ErrCodeUniqueConstraint {
 					continue
 				}
@@ -185,8 +193,7 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 				joinedBases[idx] = top.value
 				joinedValues := newJoinedRow(joinedBases, p.firstOccurences)
 
-				// Use global ranges if available and applicable?
-				// For now, use top.ranges which are mapped up from children
+				// Use global ranges, may results in bugs where correct rows are filtered out
 				entries, err := p.join(joinedValues, ranges, refRanges, 0, idx)
 				if err != nil {
 					return err
@@ -261,12 +268,21 @@ func (r *Recursion) checkBeforeInsert(row Row, ranges map[string]*BytesRange, re
 func hashOperators(ranges map[string]*BytesRange, refRange map[string][]*RefRange) string {
 	var opStrings []string
 	for name, rangeObj := range ranges {
-		opStrings = append(opStrings, fmt.Sprintf("%s:%v", name, rangeObj))
+		excludes := make([]string, len(rangeObj.excludes))
+		for i, ex := range rangeObj.excludes {
+			excludes[i] = string(ex)
+		}
+		slices.Sort(excludes)
+		opStrings = append(opStrings, fmt.Sprintf("%s:%v %v %v %v %v", name, string(rangeObj.start), string(rangeObj.end), rangeObj.includeStart, rangeObj.includeEnd, strings.Join(excludes, ",")))
 	}
 	for name, rangeObj := range refRange {
 		refs := make([]string, len(rangeObj))
 		for i, rr := range rangeObj {
-			refs[i] = fmt.Sprintf("%v", rr)
+			excludeStrs := make([]string, len(rr.excludes))
+			for j, ex := range rr.excludes {
+				excludeStrs[j] = strings.Join(ex, ",")
+			}
+			refs[i] = fmt.Sprintf("%v %v %v %v %v", strings.Join(rr.start, ","), strings.Join(rr.end, ","), rr.includeStart, rr.includeEnd, strings.Join(excludeStrs, "/"))
 		}
 		slices.Sort(refs)
 		opStrings = append(opStrings, fmt.Sprintf("%s:%v", name, refs))

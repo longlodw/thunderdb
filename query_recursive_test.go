@@ -2,7 +2,6 @@ package thunderdb
 
 import (
 	"fmt"
-	"iter"
 	"testing"
 )
 
@@ -930,43 +929,6 @@ func TestQuery_MutualRecursion(t *testing.T) {
 	}
 }
 
-type BadSelector struct {
-	real linkedSelector
-}
-
-func (b *BadSelector) Select(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) (iter.Seq2[Row, error], error) {
-	// INTENTIONALLY IGNORE RANGES to simulate a "leaky" selector (e.g. Full Scan)
-	return b.real.Select(nil, nil)
-}
-
-func (b *BadSelector) Columns() []string {
-	return b.real.Columns()
-}
-
-func (b *BadSelector) IsRecursive() bool {
-	return b.real.IsRecursive()
-}
-
-func (b *BadSelector) addParent(parent *queryParent) {
-	b.real.addParent(parent)
-}
-
-func (b *BadSelector) parents() []*queryParent {
-	return b.real.parents()
-}
-
-func (b *BadSelector) Project(mapping map[string]string) Selector {
-	return newProjection(b, mapping)
-}
-
-func (b *BadSelector) Join(bodies ...Selector) Selector {
-	// Not needed for this test, but satisfied Selector interface if we added it to interface?
-	// Selector interface only has Select and Columns.
-	// But in tests I might use Join.
-	// For this test, I won't call Join on BadSelector.
-	return nil
-}
-
 // TestQuery_Recursive_BackingStoreNoise ...
 func TestQuery_Recursive_BackingStoreNoise(t *testing.T) {
 	db, cleanup := setupTestDB(t)
@@ -1075,5 +1037,187 @@ func TestQuery_Recursive_BackingStoreNoise(t *testing.T) {
 	// Relevant count ~ 3.
 	if backingCount > 3 {
 		t.Errorf("Performance Leak: Backing store contains %d items, likely including noise. Expected < 10.", backingCount)
+	}
+}
+
+// TestQuery_Recursive_WeirdTriangle tests the "weird triangle" recursion.
+// tri(a, b, c) :- edge(a, b), edge(b, c), edge(c, a).
+// weird_tri(a, b, c) :- tri(a, b, c).
+// weird_tri(a, b, c) :- weird_tri(a0, a1, a2), edge(a0, b0), weird_tri(b0, b1, b2), edge(b1, c1), weird_tri(c0, c1, c2), edge(c2, a2).
+// Implicit mapping of head(a,b,c) to body: a=a1, b=b2, c=c0.
+func TestQuery_Recursive_WeirdTriangle(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// 1. Setup Data
+	edges, err := tx.CreatePersistent("edges", map[string]ColumnSpec{
+		"u": {Indexed: true},
+		"v": {Indexed: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Triangles:
+	// T1: 1->2->3->1
+	edges.Insert(map[string]any{"u": "1", "v": "2"})
+	edges.Insert(map[string]any{"u": "2", "v": "3"})
+	edges.Insert(map[string]any{"u": "3", "v": "1"})
+
+	// T2: 4->5->6->4
+	edges.Insert(map[string]any{"u": "4", "v": "5"})
+	edges.Insert(map[string]any{"u": "5", "v": "6"})
+	edges.Insert(map[string]any{"u": "6", "v": "4"})
+
+	// T3: 7->8->9->7
+	edges.Insert(map[string]any{"u": "7", "v": "8"})
+	edges.Insert(map[string]any{"u": "8", "v": "9"})
+	edges.Insert(map[string]any{"u": "9", "v": "7"})
+
+	// Inter-triangle edges
+	// 1->4 (a0->b0)
+	edges.Insert(map[string]any{"u": "1", "v": "4"})
+	// 5->8 (b1->c1)
+	edges.Insert(map[string]any{"u": "5", "v": "8"})
+	// 9->3 (c2->a2)
+	edges.Insert(map[string]any{"u": "9", "v": "3"})
+
+	// T4: Disconnected component (10->11->12->10)
+	edges.Insert(map[string]any{"u": "10", "v": "11"})
+	edges.Insert(map[string]any{"u": "11", "v": "12"})
+	edges.Insert(map[string]any{"u": "12", "v": "10"})
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(true)
+	defer tx.Rollback()
+	edges, _ = tx.LoadPersistent("edges")
+
+	// 2. Define weird_tri
+	weird, err := tx.CreateRecursion("weird_tri", map[string]ColumnSpec{
+		"a": {Indexed: true},
+		"b": {Indexed: true},
+		"c": {Indexed: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Base: tri(a,b,c)
+	// tri = E(u=a, v=b) join E(u=b, v=c) join E(u=c, v=a)
+
+	e1 := edges.Project(map[string]string{
+		"a": "u",
+		"b": "v",
+	})
+	e2 := edges.Project(map[string]string{
+		"b": "u",
+		"c": "v",
+	})
+	e3 := edges.Project(map[string]string{
+		"c": "u",
+		"a": "v",
+	})
+
+	// Join(e1, e2) on b -> (a, b, c)
+	// Join(..., e3) on c, a -> (a, b, c)
+	tri := e1.Join(e2).Join(e3).Project(map[string]string{
+		"a": "a",
+		"b": "b",
+		"c": "c",
+	})
+	weird.AddBranch(tri)
+
+	// Recursive Step:
+	// W1(a0, a1, a2) + E1(a0, b0) + W2(b0, b1, b2) + E2(b1, c1) + W3(c0, c1, c2) + E3(c2, a2)
+	// Result: a=a1, b=b2, c=c0
+
+	w1 := weird.Project(map[string]string{
+		"j_a0":  "a",
+		"res_a": "b", // a1
+		"j_a2":  "c",
+	})
+
+	edge1 := edges.Project(map[string]string{
+		"j_a0": "u",
+		"j_b0": "v",
+	})
+
+	w2 := weird.Project(map[string]string{
+		"j_b0":  "a",
+		"j_b1":  "b",
+		"res_b": "c", // b2 (wait, w2 is b0, b1, b2 -> a, b, c. So c is b2)
+	})
+
+	edge2 := edges.Project(map[string]string{
+		"j_b1": "u",
+		"j_c1": "v",
+	})
+
+	w3 := weird.Project(map[string]string{
+		"res_c": "a", // c0 (w3 is c0, c1, c2 -> a, b, c. So a is c0)
+		"j_c1":  "b",
+		"j_c2":  "c",
+	})
+
+	edge3 := edges.Project(map[string]string{
+		"j_c2": "u",
+		"j_a2": "v", // Closing loop to w1
+	})
+
+	// Chain Joins
+	// Start with w1
+	// Join edge1 (on j_a0)
+	// Join w2 (on j_b0)
+	// Join edge2 (on j_b1)
+	// Join w3 (on j_c1)
+	// Join edge3 (on j_c2 AND j_a2)
+
+	recBranch := w1.Join(edge1).Join(w2).Join(edge2).Join(w3).Join(edge3).Project(map[string]string{
+		"a": "res_a",
+		"b": "res_b",
+		"c": "res_c",
+	})
+
+	weird.AddBranch(recBranch)
+
+	// 3. Query: weird_tri(?, 6, ?)
+	// Expect:
+	// - Base: tri(5, 6, 4). b=6.
+	// - Rec: (2, 6, 7). b=6.
+
+	key6, _ := ToKey("6")
+	f := map[string]*BytesRange{
+		"b": NewBytesRange(key6, key6, true, true, nil),
+	}
+
+	seq, err := weird.Select(f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := make(map[string]bool)
+	for row := range seq {
+		a, _ := row.Get("a")
+		b, _ := row.Get("b")
+		c, _ := row.Get("c")
+		str := fmt.Sprintf("(%s, %s, %s)", a, b, c)
+		// t.Logf("Found weird_tri: %s", str)
+		found[str] = true
+	}
+
+	if !found["(5, 6, 4)"] {
+		t.Error("Expected base tri (5, 6, 4)")
+	}
+	if !found["(2, 6, 7)"] {
+		t.Error("Expected recursive weird_tri (2, 6, 7)")
 	}
 }
