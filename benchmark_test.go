@@ -562,6 +562,7 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 			p.Insert(map[string]any{
 				"source": fmt.Sprintf("node_%d", depth),
 				"target": "node_0",
+				"type":   "path",
 			})
 			tx.Commit()
 
@@ -597,9 +598,10 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 
 				// Filter to only follow "path" type edges
 				startKey, _ := ToKey("node_0")
+				pathKey, _ := ToKey("path")
 				filters := map[string]*BytesRange{
 					"source": NewBytesRange(startKey, startKey, true, true, nil),
-					"type":   NewBytesRange([]byte("path"), []byte("path"), true, true, nil),
+					"type":   NewBytesRange(pathKey, pathKey, true, true, nil),
 				}
 
 				// Execute

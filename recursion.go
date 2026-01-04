@@ -144,7 +144,7 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 			if err != nil {
 				return err
 			}
-			if err := r.propagateUp(row, branch); err != nil {
+			if err := r.propagateUp(row, branch, ranges, refRanges); err != nil {
 				return err
 			}
 		}
@@ -152,11 +152,13 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 	return nil
 }
 
-func (r *Recursion) propagateUp(row Row, selector linkedSelector) error {
+func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[string]*BytesRange, refRanges map[string][]*RefRange) error {
 	stack := make([]upStackItem, 0)
 	stack = append(stack, upStackItem{
-		selector: selector,
-		value:    row,
+		selector:  selector,
+		value:     row,
+		ranges:    ranges,
+		refRanges: refRanges,
 	})
 	for len(stack) > 0 {
 		top := stack[len(stack)-1]
@@ -173,7 +175,7 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector) error {
 				joinedBases[idx] = top.value
 				joinedValues := newJoinedRow(joinedBases, p.firstOccurences)
 
-				entries, err := p.join(joinedValues, nil, nil, 0, idx)
+				entries, err := p.join(joinedValues, ranges, refRanges, 0, idx)
 				if err != nil {
 					return err
 				}
@@ -182,16 +184,30 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector) error {
 						return err
 					}
 					stack = append(stack, upStackItem{
-						selector: p,
-						value:    e,
+						selector:  p,
+						value:     e,
+						ranges:    top.ranges,
+						refRanges: top.refRanges,
 					})
 				}
 			case *Projection:
 				// Handle projection parent
 				projValue := newProjectedRow(top.value, p.toBase)
+				projectedRanges := make(map[string]*BytesRange)
+				projectedRefRanges := make(map[string][]*RefRange)
+				for projCol, baseCol := range p.toBase {
+					if br, ok := top.ranges[projCol]; ok {
+						projectedRanges[baseCol] = br
+					}
+					if rr, ok := top.refRanges[projCol]; ok {
+						projectedRefRanges[baseCol] = rr
+					}
+				}
 				stack = append(stack, upStackItem{
-					selector: p,
-					value:    projValue,
+					selector:  p,
+					value:     projValue,
+					ranges:    projectedRanges,
+					refRanges: projectedRefRanges,
 				})
 			case *Recursion:
 				// Handle recursive parent
@@ -206,8 +222,10 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector) error {
 					return err
 				}
 				stack = append(stack, upStackItem{
-					selector: p,
-					value:    top.value,
+					selector:  p,
+					value:     top.value,
+					ranges:    top.ranges,
+					refRanges: top.refRanges,
 				})
 			default:
 				return ErrUnsupportedSelector()
@@ -236,8 +254,10 @@ func hashOperators(ranges map[string]*BytesRange, refRange map[string][]*RefRang
 }
 
 type upStackItem struct {
-	selector linkedSelector
-	value    Row
+	selector  linkedSelector
+	value     Row
+	ranges    map[string]*BytesRange
+	refRanges map[string][]*RefRange
 }
 
 const queryAllUniqueCol = "__all_unique"
