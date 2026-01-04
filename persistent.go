@@ -225,7 +225,7 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 	return nil
 }
 
-func (pr *Persistent) Delete(ranges map[string]*BytesRange, refRanges map[string]*RefRange) error {
+func (pr *Persistent) Delete(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) error {
 	iterEntries, err := pr.iter(ranges, refRanges)
 	if err != nil {
 		return err
@@ -252,7 +252,7 @@ func (pr *Persistent) Delete(ranges map[string]*BytesRange, refRanges map[string
 	return nil
 }
 
-func (pr *Persistent) Update(ranges map[string]*BytesRange, refRanges map[string]*RefRange, updates map[string]any) error {
+func (pr *Persistent) Update(ranges map[string]*BytesRange, refRanges map[string][]*RefRange, updates map[string]any) error {
 	iterEntries, err := pr.iter(ranges, refRanges)
 	if err != nil {
 		return err
@@ -337,7 +337,7 @@ func (pr *Persistent) assertUnique(r *persistentRow) error {
 	return nil
 }
 
-func (pr *Persistent) Select(ranges map[string]*BytesRange, refRanges map[string]*RefRange) (iter.Seq2[Row, error], error) {
+func (pr *Persistent) Select(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) (iter.Seq2[Row, error], error) {
 	iterEntries, err := pr.iter(ranges, refRanges)
 	if err != nil {
 		return nil, err
@@ -361,7 +361,7 @@ func (pr *Persistent) Project(mapping map[string]string) Selector {
 	return newProjection(pr, mapping)
 }
 
-func (pr *Persistent) iter(ranges map[string]*BytesRange, refRanges map[string]*RefRange) (iter.Seq2[*persistentRow, error], error) {
+func (pr *Persistent) iter(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) (iter.Seq2[*persistentRow, error], error) {
 	selectedIndexes := make([]string, 0, len(ranges))
 	for _, idxName := range pr.indexNames {
 		if _, ok := ranges[idxName]; ok {
@@ -496,18 +496,20 @@ func (pr *Persistent) matchBytesRanges(value Row, keyRanges map[string]*BytesRan
 	return true, nil
 }
 
-func (pr *Persistent) matchRefRanges(value Row, refRanges map[string]*RefRange) (bool, error) {
-	for name, r := range refRanges {
+func (pr *Persistent) matchRefRanges(value Row, refRanges map[string][]*RefRange) (bool, error) {
+	for name, rs := range refRanges {
 		vBytes, err := pr.computeKey(value, name)
 		if err != nil {
 			return false, err
 		}
-		contains, err := r.Contains(value, vBytes)
-		if err != nil {
-			return false, err
-		}
-		if !contains {
-			return false, nil
+		for _, r := range rs {
+			contains, err := r.Contains(value, vBytes)
+			if err != nil {
+				return false, err
+			}
+			if !contains {
+				return false, nil
+			}
 		}
 	}
 	return true, nil

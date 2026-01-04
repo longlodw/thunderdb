@@ -100,15 +100,17 @@ func TestConcurrentReadWrite(t *testing.T) {
 				targetID := rng.Intn(numWriters)
 				targetKey := fmt.Sprintf("key-%d-%d", targetID, j)
 
-				op := Eq("key", targetKey)
-				f, err := ToKeyRanges(op)
+				key, err := ToKey(targetKey)
 				if err != nil {
-					t.Errorf("Reader %d filter error: %v", readerID, err)
+					t.Errorf("Reader %d key error: %v", readerID, err)
 					tx.Rollback()
 					return
 				}
+				f := map[string]*BytesRange{
+					"key": NewBytesRange(key, key, true, true, nil),
+				}
 
-				seq, err := p.Select(f)
+				seq, err := p.Select(f, nil)
 				if err != nil {
 					t.Errorf("Reader %d select failed: %v", readerID, err)
 					tx.Rollback()
@@ -165,13 +167,25 @@ func TestConcurrentReadWrite(t *testing.T) {
 	for i := range numWriters {
 		for j := range writeIterations {
 			targetKey := fmt.Sprintf("key-%d-%d", i, j)
-			op := Eq("key", targetKey)
-			f, _ := ToKeyRanges(op)
-			seq, _ := p.Select(f)
+			keyBytes, err := ToKey(targetKey)
+			if err != nil {
+				t.Fatalf("ToKey failed: %v", err)
+			}
+			f := map[string]*BytesRange{
+				"key": NewBytesRange(keyBytes, keyBytes, true, true, nil),
+			}
+			seq, err := p.Select(f, nil)
+			if err != nil {
+				t.Fatalf("Select failed: %v", err)
+			}
 
 			count := 0
 			var finalVal any
-			for row := range seq {
+			for row, err := range seq {
+				if err != nil {
+					t.Errorf("Verification row error for %s: %v", targetKey, err)
+					continue
+				}
 				count++
 				finalVal, err = row.Get("val")
 				if err != nil {

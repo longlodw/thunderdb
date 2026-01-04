@@ -138,12 +138,14 @@ func BenchmarkSelect(b *testing.B) {
 		for b.Loop() {
 			// Search for random val (non-indexed)
 			target := float64(rand.Intn(count))
-			op := Eq("val", target)
-			f, err := ToKeyRanges(op)
+			key, err := ToKey(target)
 			if err != nil {
 				b.Fatal(err)
 			}
-			seq, _ := pLoadNoIdx.Select(f)
+			f := map[string]*BytesRange{
+				"val": NewBytesRange(key, key, true, true, nil),
+			}
+			seq, _ := pLoadNoIdx.Select(f, nil)
 			for range seq {
 				// drain
 			}
@@ -154,12 +156,14 @@ func BenchmarkSelect(b *testing.B) {
 		for b.Loop() {
 			// Search for random val (indexed)
 			target := float64(rand.Intn(count))
-			op := Eq("val", target)
-			f, err := ToKeyRanges(op)
+			key, err := ToKey(target)
 			if err != nil {
 				b.Fatal(err)
 			}
-			seq, _ := pLoadIdx.Select(f)
+			f := map[string]*BytesRange{
+				"val": NewBytesRange(key, key, true, true, nil),
+			}
+			seq, _ := pLoadIdx.Select(f, nil)
 			for range seq {
 				// drain
 			}
@@ -171,13 +175,18 @@ func BenchmarkSelect(b *testing.B) {
 			// Range query (scan)
 			start := float64(rand.Intn(count - 100))
 			end := start + 50.0
-			op1 := Ge("val", start)
-			op2 := Lt("val", end)
-			f, err := ToKeyRanges(op1, op2)
+			keyStart, err := ToKey(start)
 			if err != nil {
 				b.Fatal(err)
 			}
-			seq, _ := pLoadNoIdx.Select(f)
+			keyEnd, err := ToKey(end)
+			if err != nil {
+				b.Fatal(err)
+			}
+			f := map[string]*BytesRange{
+				"val": NewBytesRange(keyStart, keyEnd, true, false, nil),
+			}
+			seq, _ := pLoadNoIdx.Select(f, nil)
 			for range seq {
 				// drain
 			}
@@ -189,13 +198,18 @@ func BenchmarkSelect(b *testing.B) {
 			// Range query (index)
 			start := float64(rand.Intn(count - 100))
 			end := start + 50.0
-			op1 := Ge("val", start)
-			op2 := Lt("val", end)
-			f, err := ToKeyRanges(op1, op2)
+			keyStart, err := ToKey(start)
 			if err != nil {
 				b.Fatal(err)
 			}
-			seq, _ := pLoadIdx.Select(f)
+			keyEnd, err := ToKey(end)
+			if err != nil {
+				b.Fatal(err)
+			}
+			f := map[string]*BytesRange{
+				"val": NewBytesRange(keyStart, keyEnd, true, false, nil),
+			}
+			seq, _ := pLoadIdx.Select(f, nil)
 			for range seq {
 				// drain
 			}
@@ -318,9 +332,14 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		b.ResetTimer()
 		for b.Loop() {
 			// Query for a specific region
-			op := Eq("region", "North")
-			f, _ := ToKeyRanges(op)
-			seq, _ := qAll.Select(f)
+			key, err := ToKey("North")
+			if err != nil {
+				b.Fatal(err)
+			}
+			f := map[string]*BytesRange{
+				"region": NewBytesRange(key, key, true, true, nil),
+			}
+			seq, _ := qAll.Select(f, nil)
 			for range seq {
 				// drain
 			}
@@ -376,7 +395,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			recProj := recP.Project(map[string]string{"target": "target", "g_payload": "g_payload"})
 			q.AddBranch(q.Join(recProj))
 
-			seq, _ := q.Select(nil)
+			seq, _ := q.Select(nil, nil)
 			for range seq {
 			}
 		}
@@ -419,7 +438,7 @@ func BenchmarkRecursion(b *testing.B) {
 
 	// Recursive Query Setup
 	// Find all descendants of node_0
-	readTx, _ := db.Begin(false) // Note: Recursive query might need write tx if it creates temp backing?
+	readTx, _ := db.Begin(false)
 	defer readTx.Rollback()
 
 	recursiveLoopBody := func() {
@@ -427,34 +446,32 @@ func BenchmarkRecursion(b *testing.B) {
 		defer rtx.Rollback()
 
 		q, _ := rtx.CreateRecursion("descendants", map[string]ColumnSpec{
+			"source": {
+				Indexed: true,
+			},
 			"target": {},
 		})
-
-		// Base case: direct children of node_0
-		baseP, _ := rtx.LoadPersistent(relation)
-		// Select target where source = node_0
-		baseProj := baseP.Project(map[string]string{"target": "target"})
-
-		// Creating a helper relation for the start node constraint
-		startNodeRel := "start_node"
-		startNodeP, _ := rtx.CreatePersistent(startNodeRel, map[string]ColumnSpec{
-			"source": {Indexed: true},
-		})
-		startNodeP.Insert(map[string]any{"source": "node_0"})
-
-		q.AddBranch(baseProj.Join(startNodeP))
-
-		// Recursive step: children of discovered targets
-		// Join graph G on G.source = descendant.target
-		recP, _ := rtx.LoadPersistent(relation)
-		recProj := recP.Project(map[string]string{"target": "target"})
-
-		// We need to join q (source of truth for recursion) with recP
-		// q(target) -> recP(source) -> output(target)
-		q.AddBranch(q.Join(recProj))
+		edge, _ := rtx.LoadPersistent(relation)
+		q.AddBranch(edge)
+		q.AddBranch(q.Project(map[string]string{
+			"source": "source",
+			"join":   "target",
+		}).Join(edge.Project(map[string]string{
+			"join":   "source",
+			"target": "target",
+		})).Project(map[string]string{
+			"source": "source",
+			"target": "target",
+		}))
 
 		// Execute
-		seq, _ := q.Select(nil)
+		startKey, _ := ToKey("node_0")
+		seq, err := q.Select(map[string]*BytesRange{
+			"source": NewBytesRange(startKey, startKey, true, true, nil),
+		}, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
 		for range seq {
 		}
 	}
@@ -484,7 +501,7 @@ func BenchmarkRecursion(b *testing.B) {
 
 				seq, _ := pLoad.Select(map[string]*BytesRange{
 					"source": NewBytesRange(nodeKey, nodeKey, true, true, nil),
-				})
+				}, nil)
 				for row := range seq {
 					val, _ := row.Get("target")
 					target := val.(string)
@@ -555,28 +572,38 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 
 				q, _ := rtx.CreateRecursion("descendants", map[string]ColumnSpec{
 					"target": {},
+					"source": {Indexed: true},
+					"type":   {Indexed: true},
 				})
 
 				// Base case: direct children of node_0
-				baseP, _ := rtx.LoadPersistent(relation)
-				baseProj := baseP.Project(map[string]string{"target": "target"})
-
-				startNodeRel := "start_node"
-				startNodeP, _ := rtx.CreatePersistent(startNodeRel, map[string]ColumnSpec{
-					"source": {Indexed: true},
-				})
-				startNodeP.Insert(map[string]any{"source": "node_0"})
-
-				q.AddBranch(baseProj.Join(startNodeP))
+				edge, _ := rtx.LoadPersistent(relation)
+				q.AddBranch(edge)
 
 				// Recursive step: children of discovered targets
-				recP, _ := rtx.LoadPersistent(relation)
-				recProj := recP.Project(map[string]string{"target": "target"})
+				q.AddBranch(q.Project(map[string]string{
+					"source": "source",
+					"join":   "target",
+					"type":   "type",
+				}).Join(edge.Project(map[string]string{
+					"join":   "source",
+					"target": "target",
+					"type":   "type",
+				})).Project(map[string]string{
+					"source": "source",
+					"target": "target",
+					"type":   "type",
+				}))
 
-				q.AddBranch(q.Join(recProj))
+				// Filter to only follow "path" type edges
+				startKey, _ := ToKey("node_0")
+				filters := map[string]*BytesRange{
+					"source": NewBytesRange(startKey, startKey, true, true, nil),
+					"type":   NewBytesRange([]byte("path"), []byte("path"), true, true, nil),
+				}
 
 				// Execute
-				seq, _ := q.Select(nil)
+				seq, _ := q.Select(filters, nil)
 				for range seq {
 				}
 			}
@@ -694,10 +721,12 @@ func BenchmarkConcurrency(b *testing.B) {
 
 						// Read a random existing item from the initial set
 						targetID := rng.Intn(initialCount)
-						op := Eq("id", fmt.Sprintf("item-%d", targetID))
-						f, _ := ToKeyRanges(op)
+						key, _ := ToKey(fmt.Sprintf("item-%d", targetID))
+						f := map[string]*BytesRange{
+							"id": NewBytesRange(key, key, true, true, nil),
+						}
 
-						seq, _ := p.Select(f)
+						seq, _ := p.Select(f, nil)
 						count := 0
 						for range seq {
 							count++
@@ -755,13 +784,15 @@ func BenchmarkUpdateSequential(b *testing.B) {
 			}
 
 			// Update the record
-			op := Eq("id", "1")
-			ranges, err := ToKeyRanges(op)
+			key, err := ToKey("1")
 			if err != nil {
 				return err
 			}
+			ranges := map[string]*BytesRange{
+				"id": NewBytesRange(key, key, true, true, nil),
+			}
 
-			return p.Update(ranges, map[string]any{
+			return p.Update(ranges, nil, map[string]any{
 				"val": i,
 			})
 		})
@@ -851,10 +882,12 @@ func BenchmarkBatchConcurrent(b *testing.B) {
 
 							// Read a random existing item from the initial set
 							targetID := rng.Intn(initialCount)
-							op := Eq("id", fmt.Sprintf("item-%d", targetID))
-							f, _ := ToKeyRanges(op)
+							key, _ := ToKey(fmt.Sprintf("item-%d", targetID))
+							f := map[string]*BytesRange{
+								"id": NewBytesRange(key, key, true, true, nil),
+							}
 
-							seq, _ := p.Select(f)
+							seq, _ := p.Select(f, nil)
 							count := 0
 							for range seq {
 								count++

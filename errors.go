@@ -40,13 +40,6 @@ func ErrFieldNotFound(field string) error {
 	}
 }
 
-func ErrUnsupportedOperator(op Op) error {
-	return &ThunderError{
-		Code:    ErrCodeUnsupportedOperator,
-		Message: fmt.Sprintf("unsupported operator: %v", op),
-	}
-}
-
 func ErrUnsupportedSelector() error {
 	return &ThunderError{
 		Code:    ErrCodeUnsupportedSelector,

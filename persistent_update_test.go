@@ -47,15 +47,17 @@ func TestPersistent_Update(t *testing.T) {
 		users, _ := tx.LoadPersistent("users")
 
 		// Update Bob's age to 26
-		op := Eq("id", "2")
-		filter, _ := ToKeyRanges(op)
+		key, _ := ToKey("2")
+		filter := map[string]*BytesRange{
+			"id": NewBytesRange(key, key, true, true, nil),
+		}
 		updates := map[string]any{"age": int64(26)}
-		if err := users.Update(filter, updates); err != nil {
+		if err := users.Update(filter, nil, updates); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify update
-		seq, _ := users.Select(filter)
+		seq, _ := users.Select(filter, nil)
 		count := 0
 		for row, err := range seq {
 			if err != nil {
@@ -79,11 +81,13 @@ func TestPersistent_Update(t *testing.T) {
 		users, _ := tx.LoadPersistent("users")
 
 		// Try to update Alice's email to Bob's email
-		op := Eq("id", "1")
-		filter, _ := ToKeyRanges(op)
+		key, _ := ToKey("1")
+		filter := map[string]*BytesRange{
+			"id": NewBytesRange(key, key, true, true, nil),
+		}
 		updates := map[string]any{"email": "bob@example.com"}
 
-		err := users.Update(filter, updates)
+		err := users.Update(filter, nil, updates)
 		if err == nil {
 			t.Fatal("Expected unique constraint violation error, got nil")
 		}
@@ -105,17 +109,21 @@ func TestPersistent_Update(t *testing.T) {
 		users, _ := tx.LoadPersistent("users")
 
 		// Update Charlie's age (indexed)
-		op := Eq("id", "3")
-		filter, _ := ToKeyRanges(op)
+		key, _ := ToKey("3")
+		filter := map[string]*BytesRange{
+			"id": NewBytesRange(key, key, true, true, nil),
+		}
 		updates := map[string]any{"age": 36}
-		if err := users.Update(filter, updates); err != nil {
+		if err := users.Update(filter, nil, updates); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify using the index
-		opNew := Eq("age", 36)
-		filterNew, _ := ToKeyRanges(opNew)
-		seq, _ := users.Select(filterNew)
+		keyNew, _ := ToKey(36)
+		filterNew := map[string]*BytesRange{
+			"age": NewBytesRange(keyNew, keyNew, true, true, nil),
+		}
+		seq, _ := users.Select(filterNew, nil)
 		count := 0
 		for _, err := range seq {
 			if err != nil {
@@ -128,9 +136,11 @@ func TestPersistent_Update(t *testing.T) {
 		}
 
 		// Verify old index value is gone
-		opOld := Eq("age", 35)
-		filterOld, _ := ToKeyRanges(opOld)
-		seqOld, _ := users.Select(filterOld)
+		keyOld, _ := ToKey(35)
+		filterOld := map[string]*BytesRange{
+			"age": NewBytesRange(keyOld, keyOld, true, true, nil),
+		}
+		seqOld, _ := users.Select(filterOld, nil)
 		countOld := 0
 		for range seqOld {
 			countOld++
@@ -149,16 +159,18 @@ func TestPersistent_Update(t *testing.T) {
 		// Update all users with age > 20 to have "active" status (adding a new field effectively if schema allowed,
 		// but here we just update 'name' to append suffix)
 		// Note: Schema is fixed in this test setup, so we update 'name'
-		op := Gt("age", 20)
-		filter, _ := ToKeyRanges(op)
+		key, _ := ToKey(20)
+		filter := map[string]*BytesRange{
+			"age": NewBytesRange(key, nil, false, true, nil),
+		}
 		updates := map[string]any{"name": "Updated"} // sets all names to "Updated"
 
-		if err := users.Update(filter, updates); err != nil {
+		if err := users.Update(filter, nil, updates); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify
-		seq, _ := users.Select(filter)
+		seq, _ := users.Select(filter, nil)
 		for row := range seq {
 			val, _ := row.Get("name")
 			if val != "Updated" {
@@ -173,11 +185,13 @@ func TestPersistent_Update(t *testing.T) {
 		defer tx.Rollback()
 		users, _ := tx.LoadPersistent("users")
 
-		op := Eq("id", "1")
-		filter, _ := ToKeyRanges(op)
+		key, _ := ToKey("1")
+		filter := map[string]*BytesRange{
+			"id": NewBytesRange(key, key, true, true, nil),
+		}
 		updates := map[string]any{"email": "alice@example.com"} // Same email
 
-		if err := users.Update(filter, updates); err != nil {
+		if err := users.Update(filter, nil, updates); err != nil {
 			t.Fatalf("Update with same unique value failed: %v", err)
 		}
 	})

@@ -76,12 +76,14 @@ func TestQuery_Basic(t *testing.T) {
 
 	// Execute Select on the Query
 	// Filter by username 'alice'
-	op := Eq("username", "alice")
-	f, err := ToKeyRanges(op)
+	key, err := ToKey("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := q.Select(f)
+	f := map[string]*BytesRange{
+		"username": NewBytesRange(key, key, true, true, nil),
+	}
+	seq, err := q.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

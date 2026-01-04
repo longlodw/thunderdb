@@ -117,12 +117,14 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 
 	// 3. Select Region="North"
 	// Should return Alice (user) and Charlie (admin)
-	op := Eq("region", "North")
-	f, err := ToKeyRanges(op)
+	key, err := ToKey("North")
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := branch1.Select(f)
+	f := map[string]*BytesRange{
+		"region": NewBytesRange(key, key, true, true, nil),
+	}
+	seq, err := branch1.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +140,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		// For this test, we expect unique u_id.
 		results = append(results, val)
 	}
-	seq2, err := branch2.Select(f)
+	seq2, err := branch2.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -94,11 +94,14 @@ func TestQuery_Recursive(t *testing.T) {
 	// 4. Execution
 	// Find all descendants of Alice (id=1).
 	// query: path(ancestor=1, descendant=X).
-	f, err := ToKeyRanges(Eq("ancestor", "1"))
+	key, err := ToKey("1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := qPath.Select(f)
+	f := map[string]*BytesRange{
+		"ancestor": NewBytesRange(key, key, true, true, nil),
+	}
+	seq, err := qPath.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

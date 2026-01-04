@@ -114,14 +114,14 @@ func (r *Recursion) AddBranch(branch Selector) error {
 	return nil
 }
 
-func (r *Recursion) Select(ranges map[string]*BytesRange, refRanges map[string]*RefRange) (iter.Seq2[Row, error], error) {
+func (r *Recursion) Select(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) (iter.Seq2[Row, error], error) {
 	if err := r.explore(ranges, refRanges); err != nil {
 		return nil, err
 	}
 	return r.backing.Select(ranges, refRanges)
 }
 
-func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]*RefRange) error {
+func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) error {
 	stack := []any{&downStack{
 		ranges:    ranges,
 		refRanges: refRanges,
@@ -134,7 +134,19 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 		case *downStack:
 			// Handle down stack logic
 			if !v.selector.IsRecursive() {
-				entries, err := v.selector.Select(v.ranges, v.refRanges)
+				neededRanges := make(map[string]*BytesRange)
+				for name, kr := range v.ranges {
+					if slices.Contains(v.selector.Columns(), name) {
+						neededRanges[name] = kr
+					}
+				}
+				neededRangesRef := make(map[string][]*RefRange)
+				for name, rr := range v.refRanges {
+					if slices.Contains(v.selector.Columns(), name) {
+						neededRangesRef[name] = rr
+					}
+				}
+				entries, err := v.selector.Select(neededRanges, neededRangesRef)
 				if err != nil {
 					return err
 				}
@@ -173,26 +185,22 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 					refRanges: v.refRanges,
 				})
 			case *Projection:
-				baseRanges := make(map[string]*BytesRange)
-				for projField, kr := range v.ranges {
-					baseField, ok := sel.toBase[projField]
-					if !ok {
-						return ErrFieldNotFound(projField)
+				for projField, baseField := range sel.toBase {
+					if kr, ok := v.ranges[projField]; ok {
+						v.ranges[baseField] = kr
+						delete(v.ranges, projField)
 					}
-					baseRanges[baseField] = kr
 				}
-				baseRangesRef := make(map[string]*RefRange)
-				for projField, rr := range v.refRanges {
-					baseField, ok := sel.toBase[projField]
-					if !ok {
-						return ErrFieldNotFound(projField)
+				for projField, baseField := range sel.toBase {
+					if rr, ok := v.refRanges[projField]; ok {
+						v.refRanges[baseField] = rr
+						delete(v.refRanges, projField)
 					}
-					baseRangesRef[baseField] = rr
 				}
 				stack = append(stack, &downStack{
-					ranges:    baseRanges,
+					ranges:    v.ranges,
 					selector:  sel.base,
-					refRanges: baseRangesRef,
+					refRanges: v.refRanges,
 				})
 			default:
 				return ErrUnsupportedSelector()
@@ -210,7 +218,20 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 					joinedBases := make([]Row, len(p.bodies))
 					joinedBases[idx] = v.value
 					joinedValues := newJoinedRow(joinedBases, p.firstOccurences)
-					entries, err := p.join(joinedValues, v.ranges, v.refRanges, 0, idx)
+
+					neededRanges := make(map[string]*BytesRange)
+					for name, kr := range v.ranges {
+						if slices.Contains(p.Columns(), name) {
+							neededRanges[name] = kr
+						}
+					}
+					neededRangesRef := make(map[string][]*RefRange)
+					for name, rr := range v.refRanges {
+						if slices.Contains(p.Columns(), name) {
+							neededRangesRef[name] = rr
+						}
+					}
+					entries, err := p.join(joinedValues, neededRanges, neededRangesRef, 0, idx)
 					if err != nil {
 						return err
 					}
@@ -228,6 +249,18 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 				case *Projection:
 					// Handle projection parent
 					projValue := newProjectedRow(v.value, p.toBase)
+					for projField, baseField := range p.toBase {
+						if kr, ok := v.ranges[baseField]; ok {
+							v.ranges[projField] = kr
+							delete(v.ranges, baseField)
+						}
+					}
+					for projField, baseField := range p.toBase {
+						if rr, ok := v.refRanges[baseField]; ok {
+							v.refRanges[projField] = rr
+							delete(v.refRanges, baseField)
+						}
+					}
 					stack = append(stack, &upStack{
 						selector:  p,
 						value:     projValue,
@@ -261,13 +294,18 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 	return nil
 }
 
-func hashOperators(ranges map[string]*BytesRange, refRange map[string]*RefRange) string {
+func hashOperators(ranges map[string]*BytesRange, refRange map[string][]*RefRange) string {
 	var opStrings []string
 	for name, rangeObj := range ranges {
 		opStrings = append(opStrings, fmt.Sprintf("%s:%v", name, rangeObj))
 	}
 	for name, rangeObj := range refRange {
-		opStrings = append(opStrings, fmt.Sprintf("%s:%v", name, rangeObj))
+		refs := make([]string, len(rangeObj))
+		for i, rr := range rangeObj {
+			refs[i] = fmt.Sprintf("%v", rr)
+		}
+		slices.Sort(refs)
+		opStrings = append(opStrings, fmt.Sprintf("%s:%v", name, refs))
 	}
 	sort.Strings(opStrings)
 	result := strings.Join(opStrings, "|")
@@ -277,14 +315,14 @@ func hashOperators(ranges map[string]*BytesRange, refRange map[string]*RefRange)
 type downStack struct {
 	ranges    map[string]*BytesRange
 	selector  linkedSelector
-	refRanges map[string]*RefRange
+	refRanges map[string][]*RefRange
 }
 
 type upStack struct {
 	selector  linkedSelector
 	value     Row
 	ranges    map[string]*BytesRange
-	refRanges map[string]*RefRange
+	refRanges map[string][]*RefRange
 }
 
 const queryAllUniqueCol = "__all_unique"

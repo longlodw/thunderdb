@@ -62,14 +62,16 @@ func Example() {
 		}
 
 		// Create a filter: username == "alice"
-		op := thunderdb.Eq("username", "alice")
-		f, err := thunderdb.ToKeyRanges(op)
+		key, err := thunderdb.ToKey("alice")
 		if err != nil {
 			return err
 		}
+		f := map[string]*thunderdb.BytesRange{
+			"username": thunderdb.NewBytesRange(key, key, true, true, nil),
+		}
 
 		// Execute Select
-		seq, err := users.Select(f)
+		seq, err := users.Select(f, nil)
 		if err != nil {
 			return err
 		}
@@ -148,7 +150,7 @@ func Example_manualTx() {
 	defer readTx.Rollback()
 
 	users, _ = readTx.LoadPersistent("users")
-	iter, _ := users.Select(nil)
+	iter, _ := users.Select(nil, nil)
 	for row, _ := range iter {
 		name, _ := row.Get("name")
 		fmt.Printf("Found: %s\n", name)
@@ -252,11 +254,15 @@ func Example_recursive() {
 		}
 
 		// Execute: Find all descendants of Alice (id=1)
-		f, err := thunderdb.ToKeyRanges(thunderdb.Eq("ancestor", "1"))
+		key, err := thunderdb.ToKey("1")
 		if err != nil {
 			return err
 		}
-		seq, err := qPath.Select(f)
+		f := map[string]*thunderdb.BytesRange{
+			"ancestor": thunderdb.NewBytesRange(key, key, true, true, nil),
+		}
+
+		seq, err := qPath.Select(f, nil)
 		if err != nil {
 			return err
 		}

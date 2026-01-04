@@ -1,6 +1,7 @@
 package thunderdb
 
 import (
+	"bytes"
 	"iter"
 	"maps"
 	"slices"
@@ -44,22 +45,40 @@ func (p *Projection) parents() []*queryParent {
 	return p.parentsList
 }
 
-func (p *Projection) Select(ranges map[string]*BytesRange, refRange map[string]*RefRange) (iter.Seq2[Row, error], error) {
+func (p *Projection) Select(ranges map[string]*BytesRange, refRange map[string][]*RefRange) (iter.Seq2[Row, error], error) {
 	baseRanges := make(map[string]*BytesRange)
 	for projField, kr := range ranges {
 		baseField, ok := p.toBase[projField]
 		if !ok {
 			return nil, ErrFieldNotFound(projField)
 		}
-		baseRanges[baseField] = kr
-	}
-	baseRangesRef := make(map[string]*RefRange)
-	for projField, rr := range refRange {
-		baseField, ok := p.toBase[projField]
-		if !ok {
-			return nil, ErrFieldNotFound(projField)
+		if current, exists := baseRanges[baseField]; exists {
+			if current.start == nil || bytes.Compare(kr.start, current.start) > 0 {
+				current.start = kr.start
+				current.includeStart = kr.includeStart
+			}
+			if current.end == nil || bytes.Compare(kr.end, current.end) < 0 {
+				current.end = kr.end
+				current.includeEnd = kr.includeEnd
+			}
+			allExcluded := map[string]bool{}
+			for _, e := range current.excludes {
+				allExcluded[string(e)] = true
+			}
+			for _, e := range kr.excludes {
+				allExcluded[string(e)] = true
+			}
+			current.excludes = make([][]byte, 0, len(allExcluded))
+			for e := range allExcluded {
+				current.excludes = append(current.excludes, []byte(e))
+			}
+		} else {
+			baseRanges[baseField] = kr
 		}
-		baseRangesRef[baseField] = rr
+	}
+	baseRangesRef, err := p.toBaseRefRanges(refRange)
+	if err != nil {
+		return nil, err
 	}
 	baseSeq, err := p.base.Select(baseRanges, baseRangesRef)
 	if err != nil {
@@ -73,6 +92,48 @@ func (p *Projection) Select(ranges map[string]*BytesRange, refRange map[string]*
 			return yield(newProjectedRow(item, p.toBase), nil)
 		})
 	}, nil
+}
+
+func (p *Projection) toBaseRefRanges(refRanges map[string][]*RefRange) (map[string][]*RefRange, error) {
+	baseRefRanges := make(map[string][]*RefRange)
+	for projField, rrs := range refRanges {
+		baseField, ok := p.toBase[projField]
+		if !ok {
+			return nil, ErrFieldNotFound(projField)
+		}
+		for _, rr := range rrs {
+			start := make([]string, len(rr.start))
+			end := make([]string, len(rr.end))
+			for i := range start {
+				baseField, ok := p.toBase[projField]
+				if !ok {
+					return nil, ErrFieldNotFound(projField)
+				}
+				start[i] = baseField
+			}
+			for i := range end {
+				baseField, ok := p.toBase[projField]
+				if !ok {
+					return nil, ErrFieldNotFound(projField)
+				}
+				end[i] = baseField
+			}
+			excludes := make([][]string, len(rr.excludes))
+			for i, e := range rr.excludes {
+				baseExcludes := make([]string, len(e))
+				for k, projField := range e {
+					baseField, ok := p.toBase[projField]
+					if !ok {
+						return nil, ErrFieldNotFound(projField)
+					}
+					baseExcludes[k] = baseField
+				}
+				excludes[i] = baseExcludes
+			}
+			baseRefRanges[baseField] = append(baseRefRanges[baseField], NewRefRange(start, end, rr.includeStart, rr.includeEnd, excludes))
+		}
+	}
+	return baseRefRanges, nil
 }
 
 func (p *Projection) Join(bodies ...Selector) Selector {

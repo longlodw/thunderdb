@@ -86,12 +86,14 @@ func basicCRUD_SelectAlice(t *testing.T, db *DB) {
 	}
 
 	// Use simple value "alice"
-	op := Eq("username", "alice")
-	f, err := ToKeyRanges(op)
+	key, err := ToKey("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := p.Select(f)
+	f := map[string]*BytesRange{
+		"username": NewBytesRange(key, key, true, true, nil),
+	}
+	seq, err := p.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,12 +131,15 @@ func basicCRUD_DeleteBob(t *testing.T, db *DB) {
 	}
 
 	// Use simple value "bob"
-	op := Eq("username", "bob")
-	f, err := ToKeyRanges(op)
+	key, err := ToKey("bob")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Delete(f); err != nil {
+	f := map[string]*BytesRange{
+		"username": NewBytesRange(key, key, true, true, nil),
+	}
+
+	if err := p.Delete(f, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -155,12 +160,14 @@ func basicCRUD_VerifyDeleteBob(t *testing.T, db *DB) {
 		t.Fatal(err)
 	}
 
-	op := Eq("username", "bob")
-	f, err := ToKeyRanges(op)
+	key, err := ToKey("bob")
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := p.Select(f)
+	f := map[string]*BytesRange{
+		"username": NewBytesRange(key, key, true, true, nil),
+	}
+	seq, err := p.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,12 +233,15 @@ func nonIndexed_Select(t *testing.T, db *DB) {
 		t.Fatal(err)
 	}
 
-	op := Eq("price", 20.0)
-	f, err := ToKeyRanges(op)
+	key, err := ToKey(20.0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := p.Select(f)
+	f := map[string]*BytesRange{
+		"price": NewBytesRange(key, key, true, true, nil),
+	}
+
+	seq, err := p.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,12 +317,15 @@ func projection_Select(t *testing.T, db *DB) {
 	}
 	proj := p.Project(mapping)
 
-	op := Eq("login_name", "alice")
-	f, err := ToKeyRanges(op)
+	key, err := ToKey("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := proj.Select(f)
+	f := map[string]*BytesRange{
+		"login_name": NewBytesRange(key, key, true, true, nil),
+	}
+
+	seq, err := proj.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,12 +403,15 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 	}
 
 	// Test Greater Than
-	opGt := Gt("price", 15.0)
-	f, err := ToKeyRanges(opGt)
+	key, err := ToKey(15.0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seqGt, err := p.Select(f)
+	f := map[string]*BytesRange{
+		"price": NewBytesRange(key, nil, false, true, nil),
+	}
+
+	seqGt, err := p.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,12 +437,15 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 	// D: stock 20
 
 	// Le(20.0) -> Expect C (0) and D (20)
-	opLe := Le("stock", 20.0)
-	f, err = ToKeyRanges(opLe)
+	key, err = ToKey(20.0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seqLe, err := p.Select(f)
+	f = map[string]*BytesRange{
+		"stock": NewBytesRange(nil, key, true, true, nil),
+	}
+
+	seqLe, err := p.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,14 +469,20 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 
 	// Test Multiple Operators (AND)
 	// Price > 10 AND Stock > 0
-	op1 := Gt("price", 10.0)
-	op2 := Gt("stock", 0.0)
-
-	f, err = ToKeyRanges(op1, op2)
+	key1, err := ToKey(10.0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seqMulti, err := p.Select(f)
+	key2, err := ToKey(0.0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f = map[string]*BytesRange{
+		"price": NewBytesRange(key1, nil, false, true, nil),
+		"stock": NewBytesRange(key2, nil, false, true, nil),
+	}
+
+	seqMulti, err := p.Select(f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,12 +572,14 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 
 	// Test 1: Exact match on composite index
 	// For composite index, we DO need a slice of values
-	op := Eq("name", "John", "Doe")
-	f, err := ToKeyRanges(op)
+	key, err := ToKey("John", "Doe")
 	if err != nil {
-		t.Fatalf("Filter failed: %v", err)
+		t.Fatal(err)
 	}
-	seq, err := p.Select(f)
+	f := map[string]*BytesRange{
+		"name": NewBytesRange(key, key, true, true, nil),
+	}
+	seq, err := p.Select(f, nil)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)
 	}
@@ -574,14 +601,19 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	}
 
 	// Test 2: Composite index AND non-indexed filter
-	op1 := Eq("name", "John", "Doe")
-	op2 := Gt("age", 20.0)
-
-	f, err = ToKeyRanges(op1, op2)
+	keyName, err := ToKey("John", "Doe")
 	if err != nil {
-		t.Fatalf("Filter failed: %v", err)
+		t.Fatal(err)
 	}
-	seq2, err := p.Select(f)
+	keyAge, err := ToKey(20.0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f = map[string]*BytesRange{
+		"name": NewBytesRange(keyName, keyName, true, true, nil),
+		"age":  NewBytesRange(keyAge, nil, false, true, nil),
+	}
+	seq2, err := p.Select(f, nil)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)
 	}
@@ -599,14 +631,22 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	if count != 1 {
 		t.Errorf("Expected 1 result, got %d", count)
 	}
-	opGe := Ge("name", "John", "Doae")
-	opLt := Lt("name", "John", "Smitz")
 
-	f, err = ToKeyRanges(opGe, opLt)
+	// Range on name between John Doae and John Smitz
+	keyStart, err := ToKey("John", "Doae")
 	if err != nil {
-		t.Fatalf("Filter failed: %v", err)
+		t.Fatal(err)
 	}
-	seq3, err := p.Select(f)
+	keyEnd, err := ToKey("John", "Smitz")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f = map[string]*BytesRange{
+		"name": NewBytesRange(keyStart, keyEnd, true, false, nil),
+	}
+
+	seq3, err := p.Select(f, nil)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)
 	}
@@ -638,5 +678,96 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 	}
 	if !foundDoe || !foundSmith {
 		t.Errorf("Expected Doe and Smith, got Doe=%v Smith=%v", foundDoe, foundSmith)
+	}
+}
+
+func TestPersistent_RefRange(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	relation := "stats"
+	p, err := tx.CreatePersistent(relation, map[string]ColumnSpec{
+		"id":    {},
+		"min":   {},
+		"max":   {},
+		"value": {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert data where value might be between min and max
+	data := []struct {
+		id    string
+		min   int
+		max   int
+		value int
+	}{
+		{"1", 10, 20, 15}, // Match
+		{"2", 10, 20, 5},  // No Match
+		{"3", 10, 20, 25}, // No Match
+		{"4", 0, 100, 50}, // Match
+	}
+
+	for _, d := range data {
+		err := p.Insert(map[string]any{
+			"id":    d.id,
+			"min":   d.min,
+			"max":   d.max,
+			"value": d.value,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	p, err = tx.LoadPersistent(relation)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Find rows where value is >= min AND value <= max
+	// This uses RefRange to compare columns within the same row
+	refs := map[string]*RefRange{
+		"value": NewRefRange([]string{"min"}, []string{"max"}, true, true, nil),
+	}
+
+	seq, err := p.Select(nil, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	count := 0
+	foundIDs := make(map[string]bool)
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+		val, _ := row.Get("id")
+		id := val.(string)
+		foundIDs[id] = true
+	}
+
+	if count != 2 {
+		t.Errorf("Expected 2 matches, got %d", count)
+	}
+	if !foundIDs["1"] || !foundIDs["4"] {
+		t.Errorf("Expected IDs 1 and 4, got %v", foundIDs)
 	}
 }
