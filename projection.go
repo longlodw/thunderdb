@@ -46,6 +46,7 @@ func (p *Projection) parents() []*queryParent {
 }
 
 func (p *Projection) Select(ranges map[string]*BytesRange, refRange map[string][]*RefRange) (iter.Seq2[Row, error], error) {
+	// fmt.Printf("DEBUG: Projection.Select ranges=%v toBase=%v\n", ranges, p.toBase)
 	baseRanges := make(map[string]*BytesRange)
 	for projField, kr := range ranges {
 		baseField, ok := p.toBase[projField]
@@ -147,12 +148,19 @@ func (p *Projection) Join(bodies ...Selector) Selector {
 
 func (p *Projection) Project(mapping map[string]string) Selector {
 	newMapping := make(map[string]string)
-	for fromField, toField := range mapping {
-		baseField, ok := p.toBase[toField]
+	for toField, fromField := range mapping {
+		// Example: p maps "col_b" -> "col_a" (p.toBase["col_b"] = "col_a")
+		// New call: Project("col_c" -> "col_b") (Project col_b as col_c)
+		// mapping: key="col_c", value="col_b"
+
+		// We want to know: what is the BASE field for "col_b"?
+		baseField, ok := p.toBase[fromField]
 		if !ok {
-			panic(ErrFieldNotFound(toField))
+			// fromField="col_b" must be in p.toBase
+			panic(ErrFieldNotFound(fromField))
 		}
-		newMapping[fromField] = baseField
+		// The new projection maps "col_c" (toField) -> "col_a" (baseField)
+		newMapping[toField] = baseField
 	}
 	return newProjection(p.base, newMapping)
 }

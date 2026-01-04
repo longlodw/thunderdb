@@ -131,6 +131,7 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 		}
 	}()
 	hashKey := hashOperators(ranges, refRanges)
+	// fmt.Printf("Explore: %s (callCount=%d)\n", hashKey, r.callCount)
 	if r.explored[hashKey] {
 		return nil
 	}
@@ -149,6 +150,7 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 				return err
 			}
 			if err := r.backing.Insert(valMap); err != nil {
+
 				if thunderErr, ok := err.(*ThunderError); ok && thunderErr.Code == ErrCodeUniqueConstraint {
 					continue
 				}
@@ -207,36 +209,14 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 				})
 			case *Recursion:
 				// Handle recursive parent
-				if p != r {
-					stack = append(stack, upStackItem{
-						selector: p,
-						value:    top.value,
-					})
-					continue
-				}
-				matched, err := r.backing.matchBytesRanges(top.value, ranges, "")
-				if err != nil {
-					return err
-				}
-				if !matched {
-					continue
-				}
-				matched, err = r.backing.matchRefRanges(top.value, refRanges)
-				if err != nil {
-					return err
-				}
-				if !matched {
-					continue
-				}
-				valMap, err := top.value.ToMap()
-				if err != nil {
-					return err
-				}
-				if err := r.backing.Insert(valMap); err != nil {
-					if thunderErr, ok := err.(*ThunderError); ok && thunderErr.Code == ErrCodeUniqueConstraint {
+				if r == p {
+					matched, err := r.checkBeforeInsert(top.value, ranges, refRanges)
+					if err != nil {
+						return err
+					}
+					if !matched {
 						continue
 					}
-					return err
 				}
 				stack = append(stack, upStackItem{
 					selector: p,
@@ -248,6 +228,34 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 		}
 	}
 	return nil
+}
+
+func (r *Recursion) checkBeforeInsert(row Row, ranges map[string]*BytesRange, refRanges map[string][]*RefRange) (bool, error) {
+	matched, err := r.backing.matchBytesRanges(row, ranges, "")
+	if err != nil {
+		return false, err
+	}
+	if !matched {
+		return false, nil
+	}
+	matched, err = r.backing.matchRefRanges(row, refRanges)
+	if err != nil {
+		return false, err
+	}
+	if !matched {
+		return false, nil
+	}
+	mapRow, err := row.ToMap()
+	if err != nil {
+		return false, err
+	}
+	if err := r.backing.Insert(mapRow); err != nil {
+		if thunderErr, ok := err.(*ThunderError); ok && thunderErr.Code == ErrCodeUniqueConstraint {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func hashOperators(ranges map[string]*BytesRange, refRange map[string][]*RefRange) string {
