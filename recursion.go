@@ -154,7 +154,7 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 				}
 				return err
 			}
-			if err := r.propagateUp(row, r, ranges, refRanges); err != nil {
+			if err := r.propagateUp(row, branch, ranges, refRanges); err != nil {
 				return err
 			}
 		}
@@ -183,7 +183,9 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 				joinedBases[idx] = top.value
 				joinedValues := newJoinedRow(joinedBases, p.firstOccurences)
 
-				entries, err := p.join(joinedValues, nil, nil, 0, idx)
+				// Use global ranges if available and applicable?
+				// For now, use top.ranges which are mapped up from children
+				entries, err := p.join(joinedValues, ranges, refRanges, 0, idx)
 				if err != nil {
 					return err
 				}
