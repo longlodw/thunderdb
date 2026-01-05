@@ -82,33 +82,66 @@ func (p *Projection) parents() []*queryParent {
 func (p *Projection) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error) {
 	// fmt.Printf("DEBUG: Projection.Select ranges=%v toBase=%v\n", ranges, p.toBase)
 	baseRanges := make(map[string]*BytesRange)
+	baseSpecs := p.base.Fields()
+
 	for projField, kr := range ranges {
 		baseField, ok := p.toBase[projField]
 		if !ok {
 			return nil, ErrFieldNotFound(projField)
 		}
-		if current, exists := baseRanges[baseField]; exists {
-			if current.start == nil || bytes.Compare(kr.start, current.start) > 0 {
-				current.start = kr.start
-				current.includeStart = kr.includeStart
-			}
-			if current.end == nil || bytes.Compare(kr.end, current.end) < 0 {
-				current.end = kr.end
-				current.includeEnd = kr.includeEnd
-			}
-			allExcluded := map[string]bool{}
-			for _, e := range current.excludes {
-				allExcluded[string(e)] = true
-			}
-			for _, e := range kr.excludes {
-				allExcluded[string(e)] = true
-			}
-			current.excludes = make([][]byte, 0, len(allExcluded))
-			for e := range allExcluded {
-				current.excludes = append(current.excludes, []byte(e))
+
+		// Handle fields with ReferenceCols by pushing down to all reference columns
+		if baseSpec, specExists := baseSpecs[baseField]; specExists && len(baseSpec.ReferenceCols) > 0 {
+			for _, refCol := range baseSpec.ReferenceCols {
+				if current, exists := baseRanges[refCol]; exists {
+					if current.start == nil || bytes.Compare(kr.start, current.start) > 0 {
+						current.start = kr.start
+						current.includeStart = kr.includeStart
+					}
+					if current.end == nil || bytes.Compare(kr.end, current.end) < 0 {
+						current.end = kr.end
+						current.includeEnd = kr.includeEnd
+					}
+					allExcluded := map[string]bool{}
+					for _, e := range current.excludes {
+						allExcluded[string(e)] = true
+					}
+					for _, e := range kr.excludes {
+						allExcluded[string(e)] = true
+					}
+					current.excludes = make([][]byte, 0, len(allExcluded))
+					for e := range allExcluded {
+						current.excludes = append(current.excludes, []byte(e))
+					}
+				} else {
+					baseRanges[refCol] = kr
+				}
 			}
 		} else {
-			baseRanges[baseField] = kr
+			// Handle regular fields without ReferenceCols
+			if current, exists := baseRanges[baseField]; exists {
+				if current.start == nil || bytes.Compare(kr.start, current.start) > 0 {
+					current.start = kr.start
+					current.includeStart = kr.includeStart
+				}
+				if current.end == nil || bytes.Compare(kr.end, current.end) < 0 {
+					current.end = kr.end
+					current.includeEnd = kr.includeEnd
+				}
+				allExcluded := map[string]bool{}
+				for _, e := range current.excludes {
+					allExcluded[string(e)] = true
+				}
+				for _, e := range kr.excludes {
+					allExcluded[string(e)] = true
+				}
+				current.excludes = make([][]byte, 0, len(allExcluded))
+				for e := range allExcluded {
+					current.excludes = append(current.excludes, []byte(e))
+				}
+			} else {
+				baseRanges[baseField] = kr
+			}
 		}
 	}
 	baseSeq, err := p.base.Select(baseRanges)

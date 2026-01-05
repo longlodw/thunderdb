@@ -14,6 +14,7 @@ type Joining struct {
 	parentsList     []*queryParent
 	recursive       bool
 	joinPlans       map[int][]int
+	fields          map[string]ColumnSpec
 }
 
 func newJoining(bodies []linkedSelector) Selector {
@@ -54,6 +55,7 @@ func newJoining(bodies []linkedSelector) Selector {
 	result.firstOccurences = firstOccurences
 	result.recursive = recursive
 	result.joinPlans = make(map[int][]int)
+	result.fields = result.makeFields()
 
 	// Precompute join plans for each body acting as a seed
 	for seedIdx := range bodies {
@@ -114,6 +116,10 @@ func (jr *Joining) Columns() []string {
 }
 
 func (jr *Joining) Fields() map[string]ColumnSpec {
+	return jr.fields
+}
+
+func (jr *Joining) makeFields() map[string]ColumnSpec {
 	result := make(map[string]ColumnSpec)
 
 	// Iterate through all bodies and collect their field specs
@@ -158,11 +164,11 @@ func (jr *Joining) parents() []*queryParent {
 func (jr *Joining) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error) {
 	seedIdx := jr.bestBodyIndex(ranges)
 	body := jr.bodies[seedIdx]
-	columns := body.Columns()
+	bodyColumns := body.Columns()
 
 	neededRanges := make(map[string]*BytesRange)
 	for name, kr := range ranges {
-		if slices.Contains(columns, name) {
+		if slices.Contains(bodyColumns, name) {
 			neededRanges[name] = kr
 		}
 	}
@@ -185,6 +191,7 @@ func (jr *Joining) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error],
 			joinedBases := make([]Row, len(jr.bodies))
 			joinedBases[seedIdx] = item
 			joinedItem := newJoinedRow(joinedBases, jr.firstOccurences)
+			// Pass original ranges (not expanded) to join, which will handle expansion
 			nextSeq, err := jr.join(joinedItem, ranges, joinOrder, 0)
 			if err != nil {
 				if !yield(nil, err) {
@@ -209,12 +216,33 @@ func (jr *Joining) bestBodyIndex(ranges map[string]*BytesRange) int {
 	if len(ranges) == 0 {
 		return 0
 	}
-	shortest := slices.MinFunc(slices.Collect(maps.Keys(ranges)), func(aKey, bKey string) int {
-		a := ranges[aKey]
-		b := ranges[bKey]
-		return bytes.Compare(a.distance, b.distance)
-	})
-	return jr.firstOccurences[shortest]
+	comp := func(f0, f1 string) int {
+		range0 := ranges[f0]
+		range1 := ranges[f1]
+		comp := bytes.Compare(range0.distance, range1.distance)
+		if comp != 0 {
+			return comp
+		}
+		// Prefer indexed or unique fields
+		spec0 := jr.fields[f0]
+		spec1 := jr.fields[f1]
+		if spec0.Unique && !spec1.Unique {
+			return 1
+		}
+		if spec1.Unique && !spec0.Unique {
+			return -1
+		}
+		// Next, prefer indexed fields
+		if spec0.Indexed && !spec1.Indexed {
+			return 1
+		}
+		if spec1.Indexed && !spec0.Indexed {
+			return -1
+		}
+		return 0
+	}
+	f := slices.MinFunc(slices.Collect(maps.Keys(ranges)), comp)
+	return jr.firstOccurences[f]
 }
 
 func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, order []int, step int) (iter.Seq2[Row, error], error) {
