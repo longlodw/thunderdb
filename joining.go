@@ -117,7 +117,7 @@ func (jr *Joining) parents() []*queryParent {
 	return jr.parentsList
 }
 
-func (jr *Joining) Select(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) (iter.Seq2[Row, error], error) {
+func (jr *Joining) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error) {
 	seedIdx := jr.bestBodyIndex(ranges)
 	body := jr.bodies[seedIdx]
 	columns := body.Columns()
@@ -128,17 +128,11 @@ func (jr *Joining) Select(ranges map[string]*BytesRange, refRanges map[string][]
 			neededRanges[name] = kr
 		}
 	}
-	neededRangesRef := make(map[string][]*RefRange)
-	for name, rr := range refRanges {
-		if slices.Contains(columns, name) {
-			neededRangesRef[name] = rr
-		}
-	}
 
 	// Build execution order
 	joinOrder := jr.joinPlans[seedIdx]
 
-	seq, err := body.Select(neededRanges, neededRangesRef)
+	seq, err := body.Select(neededRanges)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +147,7 @@ func (jr *Joining) Select(ranges map[string]*BytesRange, refRanges map[string][]
 			joinedBases := make([]Row, len(jr.bodies))
 			joinedBases[seedIdx] = item
 			joinedItem := newJoinedRow(joinedBases, jr.firstOccurences)
-			nextSeq, err := jr.join(joinedItem, ranges, refRanges, joinOrder, 0)
+			nextSeq, err := jr.join(joinedItem, ranges, joinOrder, 0)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -185,7 +179,7 @@ func (jr *Joining) bestBodyIndex(ranges map[string]*BytesRange) int {
 	return jr.firstOccurences[shortest]
 }
 
-func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, refRanges map[string][]*RefRange, order []int, step int) (iter.Seq2[Row, error], error) {
+func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, order []int, step int) (iter.Seq2[Row, error], error) {
 	if step >= len(order) {
 		return func(yield func(Row, error) bool) {
 			yield(values, nil)
@@ -230,13 +224,7 @@ func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, refRan
 		}
 	}
 
-	neededRangesRef := make(map[string][]*RefRange)
-	for name, rr := range refRanges {
-		if slices.Contains(columns, name) {
-			neededRangesRef[name] = rr
-		}
-	}
-	iterEntries, err := body.Select(neededRanges, neededRangesRef)
+	iterEntries, err := body.Select(neededRanges)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +239,7 @@ func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, refRan
 			combinedBases := slices.Clone(values.bases)
 			combinedBases[bodyIdx] = en
 			combined := newJoinedRow(combinedBases, jr.firstOccurences)
-			nextSeq, err := jr.join(combined, ranges, refRanges, order, step+1)
+			nextSeq, err := jr.join(combined, ranges, order, step+1)
 			if err != nil {
 				if !yield(nil, err) {
 					return

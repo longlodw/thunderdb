@@ -102,7 +102,7 @@ func TestQuery_Recursive(t *testing.T) {
 	f := map[string]*BytesRange{
 		"ancestor": NewBytesRange(key, key, true, true, nil),
 	}
-	seq, err := qPath.Select(f, nil)
+	seq, err := qPath.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestQuery_ComplexRecursiveBranches(t *testing.T) {
 	key1, _ := ToKey("1")
 	seq, err := qReach.Select(map[string]*BytesRange{
 		"start": NewBytesRange(key1, key1, true, true, nil),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestQuery_LongJoinChain(t *testing.T) {
 	key0, _ := ToKey("0")
 	seq, _ := qSkip.Select(map[string]*BytesRange{
 		"start": NewBytesRange(key0, key0, true, true, nil),
-	}, nil)
+	})
 
 	found := make(map[string]bool)
 	for row := range seq {
@@ -508,7 +508,7 @@ func TestQuery_ComplexProjectionFilter(t *testing.T) {
 		"color": NewBytesRange(keyGreen, keyGreen, true, true, nil),
 	}
 
-	seq, err := qPath.Select(f, nil)
+	seq, err := qPath.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +600,7 @@ func TestQuery_PushDown_DeepNestedAliases(t *testing.T) {
 		"final": NewBytesRange(key, key, true, true, nil),
 	}
 
-	seq, err := r.Select(f, nil)
+	seq, err := r.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -748,7 +748,7 @@ func TestQuery_FilterScopeConfusion(t *testing.T) {
 		"node_type": NewBytesRange(keyLeaf, keyLeaf, true, true, nil),
 	}
 
-	seq, err := qPath.Select(f, nil)
+	seq, err := qPath.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -878,7 +878,7 @@ func TestQuery_MutualRecursion(t *testing.T) {
 	// 3. Execution
 	// Select from Even
 	// Should get 0 (base), 2 (from odd 1, from even 0)
-	seqEven, err := qEven.Select(nil, nil)
+	seqEven, err := qEven.Select(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -904,7 +904,7 @@ func TestQuery_MutualRecursion(t *testing.T) {
 
 	// Select from Odd
 	// Should get 1 (from even 0), 3 (from even 2)
-	seqOdd, err := qOdd.Select(nil, nil)
+	seqOdd, err := qOdd.Select(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1006,7 +1006,7 @@ func TestQuery_Recursive_BackingStoreNoise(t *testing.T) {
 		"start": NewBytesRange(key1, key1, true, true, nil),
 	}
 
-	seq, err := qPath.Select(f, nil)
+	seq, err := qPath.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1019,7 +1019,7 @@ func TestQuery_Recursive_BackingStoreNoise(t *testing.T) {
 
 	// Access private backing store
 	backingStore := qPath.backing
-	iter, err := backingStore.Select(nil, nil)
+	iter, err := backingStore.Select(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1199,7 +1199,7 @@ func TestQuery_Recursive_WeirdTriangle(t *testing.T) {
 		"b": NewBytesRange(key6, key6, true, true, nil),
 	}
 
-	seq, err := weird.Select(f, nil)
+	seq, err := weird.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}

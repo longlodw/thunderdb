@@ -78,7 +78,7 @@ func TestQuery_Recursive_DepthLimit(t *testing.T) {
 		"start": NewBytesRange(key0, key0, true, true, nil),
 	}
 
-	seq, err := qPath.Select(f, nil)
+	seq, err := qPath.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestQuery_Recursive_DepthLimit(t *testing.T) {
 
 	// Now test the limit
 	qPath.SetMaxDepth(50)
-	_, err = qPath.Select(f, nil)
+	_, err = qPath.Select(f)
 	if err == nil {
 		t.Fatal("Expected recursion depth error with limit 50, got nil")
 	} else {

@@ -83,7 +83,7 @@ func TestQuery_Basic(t *testing.T) {
 	f := map[string]*BytesRange{
 		"username": NewBytesRange(key, key, true, true, nil),
 	}
-	seq, err := q.Select(f, nil)
+	seq, err := q.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}

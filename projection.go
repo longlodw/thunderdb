@@ -45,7 +45,7 @@ func (p *Projection) parents() []*queryParent {
 	return p.parentsList
 }
 
-func (p *Projection) Select(ranges map[string]*BytesRange, refRange map[string][]*RefRange) (iter.Seq2[Row, error], error) {
+func (p *Projection) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error) {
 	// fmt.Printf("DEBUG: Projection.Select ranges=%v toBase=%v\n", ranges, p.toBase)
 	baseRanges := make(map[string]*BytesRange)
 	for projField, kr := range ranges {
@@ -77,11 +77,7 @@ func (p *Projection) Select(ranges map[string]*BytesRange, refRange map[string][
 			baseRanges[baseField] = kr
 		}
 	}
-	baseRangesRef, err := p.toBaseRefRanges(refRange)
-	if err != nil {
-		return nil, err
-	}
-	baseSeq, err := p.base.Select(baseRanges, baseRangesRef)
+	baseSeq, err := p.base.Select(baseRanges)
 	if err != nil {
 		return nil, err
 	}
@@ -93,48 +89,6 @@ func (p *Projection) Select(ranges map[string]*BytesRange, refRange map[string][
 			return yield(newProjectedRow(item, p.toBase), nil)
 		})
 	}, nil
-}
-
-func (p *Projection) toBaseRefRanges(refRanges map[string][]*RefRange) (map[string][]*RefRange, error) {
-	baseRefRanges := make(map[string][]*RefRange)
-	for projField, rrs := range refRanges {
-		baseField, ok := p.toBase[projField]
-		if !ok {
-			return nil, ErrFieldNotFound(projField)
-		}
-		for _, rr := range rrs {
-			start := make([]string, len(rr.start))
-			end := make([]string, len(rr.end))
-			for i := range start {
-				baseField, ok := p.toBase[projField]
-				if !ok {
-					return nil, ErrFieldNotFound(projField)
-				}
-				start[i] = baseField
-			}
-			for i := range end {
-				baseField, ok := p.toBase[projField]
-				if !ok {
-					return nil, ErrFieldNotFound(projField)
-				}
-				end[i] = baseField
-			}
-			excludes := make([][]string, len(rr.excludes))
-			for i, e := range rr.excludes {
-				baseExcludes := make([]string, len(e))
-				for k, projField := range e {
-					baseField, ok := p.toBase[projField]
-					if !ok {
-						return nil, ErrFieldNotFound(projField)
-					}
-					baseExcludes[k] = baseField
-				}
-				excludes[i] = baseExcludes
-			}
-			baseRefRanges[baseField] = append(baseRefRanges[baseField], NewRefRange(start, end, rr.includeStart, rr.includeEnd, excludes))
-		}
-	}
-	return baseRefRanges, nil
 }
 
 func (p *Projection) Join(bodies ...Selector) Selector {

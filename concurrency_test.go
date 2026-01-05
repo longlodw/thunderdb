@@ -110,7 +110,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 					"key": NewBytesRange(key, key, true, true, nil),
 				}
 
-				seq, err := p.Select(f, nil)
+				seq, err := p.Select(f)
 				if err != nil {
 					t.Errorf("Reader %d select failed: %v", readerID, err)
 					tx.Rollback()
@@ -174,7 +174,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 			f := map[string]*BytesRange{
 				"key": NewBytesRange(keyBytes, keyBytes, true, true, nil),
 			}
-			seq, err := p.Select(f, nil)
+			seq, err := p.Select(f)
 			if err != nil {
 				t.Fatalf("Select failed: %v", err)
 			}

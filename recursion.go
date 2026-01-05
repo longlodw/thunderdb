@@ -121,14 +121,14 @@ func (r *Recursion) AddBranch(branch Selector) error {
 	return nil
 }
 
-func (r *Recursion) Select(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) (iter.Seq2[Row, error], error) {
-	if err := r.explore(ranges, refRanges); err != nil {
+func (r *Recursion) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error) {
+	if err := r.explore(ranges); err != nil {
 		return nil, err
 	}
-	return r.backing.Select(ranges, refRanges)
+	return r.backing.Select(ranges)
 }
 
-func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) error {
+func (r *Recursion) explore(ranges map[string]*BytesRange) error {
 	if r.callCount > r.maxDepth {
 		return ErrRecursionDepthExceeded(r.maxDepth)
 	}
@@ -139,14 +139,14 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 			r.explored = make(map[string]bool)
 		}
 	}()
-	hashKey := hashOperators(ranges, refRanges)
+	hashKey := hashOperators(ranges)
 	// fmt.Printf("Explore: %s (callCount=%d)\n", hashKey, r.callCount)
 	if r.explored[hashKey] {
 		return nil
 	}
 	r.explored[hashKey] = true
 	for _, branch := range r.branches {
-		seq, err := branch.Select(ranges, refRanges)
+		seq, err := branch.Select(ranges)
 		if err != nil {
 			return err
 		}
@@ -164,7 +164,7 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 				}
 				return err
 			}
-			if err := r.propagateUp(row, branch, ranges, refRanges); err != nil {
+			if err := r.propagateUp(row, branch, ranges); err != nil {
 				return err
 			}
 		}
@@ -172,7 +172,7 @@ func (r *Recursion) explore(ranges map[string]*BytesRange, refRanges map[string]
 	return nil
 }
 
-func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[string]*BytesRange, refRanges map[string][]*RefRange) error {
+func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[string]*BytesRange) error {
 	stack := make([]upStackItem, 0)
 	stack = append(stack, upStackItem{
 		selector: selector,
@@ -203,7 +203,7 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 				joinOrder := p.joinPlans[idx]
 
 				// Use global ranges, may results in bugs where correct rows are filtered out
-				entries, err := p.join(joinedValues, ranges, refRanges, joinOrder, 0)
+				entries, err := p.join(joinedValues, ranges, joinOrder, 0)
 				if err != nil {
 					return err
 				}
@@ -226,7 +226,7 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 			case *Recursion:
 				// Handle recursive parent
 				if r == p {
-					matched, err := r.checkBeforeInsert(top.value, ranges, refRanges)
+					matched, err := r.checkBeforeInsert(top.value, ranges)
 					if err != nil {
 						return err
 					}
@@ -246,15 +246,8 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 	return nil
 }
 
-func (r *Recursion) checkBeforeInsert(row Row, ranges map[string]*BytesRange, refRanges map[string][]*RefRange) (bool, error) {
+func (r *Recursion) checkBeforeInsert(row Row, ranges map[string]*BytesRange) (bool, error) {
 	matched, err := r.backing.matchBytesRanges(row, ranges, "")
-	if err != nil {
-		return false, err
-	}
-	if !matched {
-		return false, nil
-	}
-	matched, err = r.backing.matchRefRanges(row, refRanges)
 	if err != nil {
 		return false, err
 	}
@@ -274,7 +267,7 @@ func (r *Recursion) checkBeforeInsert(row Row, ranges map[string]*BytesRange, re
 	return true, nil
 }
 
-func hashOperators(ranges map[string]*BytesRange, refRange map[string][]*RefRange) string {
+func hashOperators(ranges map[string]*BytesRange) string {
 	var opStrings []string
 	for name, rangeObj := range ranges {
 		excludes := make([]string, len(rangeObj.excludes))
@@ -283,18 +276,6 @@ func hashOperators(ranges map[string]*BytesRange, refRange map[string][]*RefRang
 		}
 		slices.Sort(excludes)
 		opStrings = append(opStrings, fmt.Sprintf("%s:%v %v %v %v %v", name, string(rangeObj.start), string(rangeObj.end), rangeObj.includeStart, rangeObj.includeEnd, strings.Join(excludes, ",")))
-	}
-	for name, rangeObj := range refRange {
-		refs := make([]string, len(rangeObj))
-		for i, rr := range rangeObj {
-			excludeStrs := make([]string, len(rr.excludes))
-			for j, ex := range rr.excludes {
-				excludeStrs[j] = strings.Join(ex, ",")
-			}
-			refs[i] = fmt.Sprintf("%v %v %v %v %v", strings.Join(rr.start, ","), strings.Join(rr.end, ","), rr.includeStart, rr.includeEnd, strings.Join(excludeStrs, "/"))
-		}
-		slices.Sort(refs)
-		opStrings = append(opStrings, fmt.Sprintf("%s:%v", name, refs))
 	}
 	sort.Strings(opStrings)
 	result := strings.Join(opStrings, "|")

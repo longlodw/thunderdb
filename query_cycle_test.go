@@ -113,7 +113,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	f := map[string]*BytesRange{
 		"source": NewBytesRange(key, key, true, true, nil),
 	}
-	seq, err := qReach.Select(f, nil)
+	seq, err := qReach.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}

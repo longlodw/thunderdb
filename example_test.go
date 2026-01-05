@@ -71,7 +71,7 @@ func Example() {
 		}
 
 		// Execute Select
-		seq, err := users.Select(f, nil)
+		seq, err := users.Select(f)
 		if err != nil {
 			return err
 		}
@@ -150,7 +150,7 @@ func Example_manualTx() {
 	defer readTx.Rollback()
 
 	users, _ = readTx.LoadPersistent("users")
-	iter, _ := users.Select(nil, nil)
+	iter, _ := users.Select(nil)
 	for row, _ := range iter {
 		name, _ := row.Get("name")
 		fmt.Printf("Found: %s\n", name)
@@ -262,7 +262,7 @@ func Example_recursive() {
 			"ancestor": thunderdb.NewBytesRange(key, key, true, true, nil),
 		}
 
-		seq, err := qPath.Select(f, nil)
+		seq, err := qPath.Select(f)
 		if err != nil {
 			return err
 		}

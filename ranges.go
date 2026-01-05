@@ -15,26 +15,8 @@ type BytesRange struct {
 	distance     []byte
 }
 
-type RefRange struct {
-	includeStart bool
-	includeEnd   bool
-	start        []string
-	end          []string
-	excludes     [][]string
-}
-
 func ToKey(values ...any) ([]byte, error) {
 	return orderedMa.Marshal(values)
-}
-
-func NewRefRange(start, end []string, includeStart, includeEnd bool, excludes [][]string) *RefRange {
-	return &RefRange{
-		start:        start,
-		end:          end,
-		excludes:     excludes,
-		includeStart: includeStart,
-		includeEnd:   includeEnd,
-	}
 }
 
 func NewBytesRange(startKey, endKey []byte, includeStart, includeEnd bool, excludes [][]byte) *BytesRange {
@@ -75,42 +57,6 @@ func NewBytesRangeFromVals(startVals, endVals []any, includeStart, includeEnd bo
 		excludes[i] = excludeKey
 	}
 	return NewBytesRange(startKey, endKey, includeStart, includeEnd, excludes), nil
-}
-
-func (rr *RefRange) Contains(r Row, fieldKey []byte) (bool, error) {
-	startValues := make([]any, len(rr.start))
-	for i, col := range rr.start {
-		val, err := r.Get(col)
-		if err != nil {
-			return false, err
-		}
-		startValues[i] = val
-	}
-	endValues := make([]any, len(rr.end))
-	for i, col := range rr.end {
-		val, err := r.Get(col)
-		if err != nil {
-			return false, err
-		}
-		endValues[i] = val
-	}
-	excludeValues := make([][]any, len(rr.excludes))
-	for i, cols := range rr.excludes {
-		excludeRow := make([]any, len(cols))
-		for j, col := range cols {
-			val, err := r.Get(col)
-			if err != nil {
-				return false, err
-			}
-			excludeRow[j] = val
-		}
-		excludeValues[i] = excludeRow
-	}
-	bytesRange, err := NewBytesRangeFromVals(startValues, endValues, rr.includeStart, rr.includeEnd, excludeValues)
-	if err != nil {
-		return false, err
-	}
-	return bytesRange.Contains(fieldKey), nil
 }
 
 func (ir *BytesRange) Contains(key []byte) bool {

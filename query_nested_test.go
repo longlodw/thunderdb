@@ -124,7 +124,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	f := map[string]*BytesRange{
 		"region": NewBytesRange(key, key, true, true, nil),
 	}
-	seq, err := branch1.Select(f, nil)
+	seq, err := branch1.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		// For this test, we expect unique u_id.
 		results = append(results, val)
 	}
-	seq2, err := branch2.Select(f, nil)
+	seq2, err := branch2.Select(f)
 	if err != nil {
 		t.Fatal(err)
 	}

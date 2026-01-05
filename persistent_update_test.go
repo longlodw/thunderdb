@@ -52,12 +52,12 @@ func TestPersistent_Update(t *testing.T) {
 			"id": NewBytesRange(key, key, true, true, nil),
 		}
 		updates := map[string]any{"age": int64(26)}
-		if err := users.Update(filter, nil, updates); err != nil {
+		if err := users.Update(filter, updates); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify update
-		seq, _ := users.Select(filter, nil)
+		seq, _ := users.Select(filter)
 		count := 0
 		for row, err := range seq {
 			if err != nil {
@@ -87,7 +87,7 @@ func TestPersistent_Update(t *testing.T) {
 		}
 		updates := map[string]any{"email": "bob@example.com"}
 
-		err := users.Update(filter, nil, updates)
+		err := users.Update(filter, updates)
 		if err == nil {
 			t.Fatal("Expected unique constraint violation error, got nil")
 		}
@@ -114,7 +114,7 @@ func TestPersistent_Update(t *testing.T) {
 			"id": NewBytesRange(key, key, true, true, nil),
 		}
 		updates := map[string]any{"age": 36}
-		if err := users.Update(filter, nil, updates); err != nil {
+		if err := users.Update(filter, updates); err != nil {
 			t.Fatal(err)
 		}
 
@@ -123,7 +123,7 @@ func TestPersistent_Update(t *testing.T) {
 		filterNew := map[string]*BytesRange{
 			"age": NewBytesRange(keyNew, keyNew, true, true, nil),
 		}
-		seq, _ := users.Select(filterNew, nil)
+		seq, _ := users.Select(filterNew)
 		count := 0
 		for _, err := range seq {
 			if err != nil {
@@ -140,7 +140,7 @@ func TestPersistent_Update(t *testing.T) {
 		filterOld := map[string]*BytesRange{
 			"age": NewBytesRange(keyOld, keyOld, true, true, nil),
 		}
-		seqOld, _ := users.Select(filterOld, nil)
+		seqOld, _ := users.Select(filterOld)
 		countOld := 0
 		for range seqOld {
 			countOld++
@@ -165,12 +165,12 @@ func TestPersistent_Update(t *testing.T) {
 		}
 		updates := map[string]any{"name": "Updated"} // sets all names to "Updated"
 
-		if err := users.Update(filter, nil, updates); err != nil {
+		if err := users.Update(filter, updates); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify
-		seq, _ := users.Select(filter, nil)
+		seq, _ := users.Select(filter)
 		for row := range seq {
 			val, _ := row.Get("name")
 			if val != "Updated" {
@@ -191,7 +191,7 @@ func TestPersistent_Update(t *testing.T) {
 		}
 		updates := map[string]any{"email": "alice@example.com"} // Same email
 
-		if err := users.Update(filter, nil, updates); err != nil {
+		if err := users.Update(filter, updates); err != nil {
 			t.Fatalf("Update with same unique value failed: %v", err)
 		}
 	})

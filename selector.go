@@ -3,7 +3,7 @@ package thunderdb
 import "iter"
 
 type Selector interface {
-	Select(ranges map[string]*BytesRange, refRanges map[string][]*RefRange) (iter.Seq2[Row, error], error)
+	Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error)
 	Columns() []string
 	Project(mapping map[string]string) Selector
 	IsRecursive() bool

@@ -145,7 +145,7 @@ func BenchmarkSelect(b *testing.B) {
 			f := map[string]*BytesRange{
 				"val": NewBytesRange(key, key, true, true, nil),
 			}
-			seq, _ := pLoadNoIdx.Select(f, nil)
+			seq, _ := pLoadNoIdx.Select(f)
 			for range seq {
 				// drain
 			}
@@ -163,7 +163,7 @@ func BenchmarkSelect(b *testing.B) {
 			f := map[string]*BytesRange{
 				"val": NewBytesRange(key, key, true, true, nil),
 			}
-			seq, _ := pLoadIdx.Select(f, nil)
+			seq, _ := pLoadIdx.Select(f)
 			for range seq {
 				// drain
 			}
@@ -186,7 +186,7 @@ func BenchmarkSelect(b *testing.B) {
 			f := map[string]*BytesRange{
 				"val": NewBytesRange(keyStart, keyEnd, true, false, nil),
 			}
-			seq, _ := pLoadNoIdx.Select(f, nil)
+			seq, _ := pLoadNoIdx.Select(f)
 			for range seq {
 				// drain
 			}
@@ -209,7 +209,7 @@ func BenchmarkSelect(b *testing.B) {
 			f := map[string]*BytesRange{
 				"val": NewBytesRange(keyStart, keyEnd, true, false, nil),
 			}
-			seq, _ := pLoadIdx.Select(f, nil)
+			seq, _ := pLoadIdx.Select(f)
 			for range seq {
 				// drain
 			}
@@ -339,7 +339,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			f := map[string]*BytesRange{
 				"region": NewBytesRange(key, key, true, true, nil),
 			}
-			seq, _ := qAll.Select(f, nil)
+			seq, _ := qAll.Select(f)
 			for range seq {
 				// drain
 			}
@@ -395,7 +395,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			recProj := recP.Project(map[string]string{"target": "target", "g_payload": "g_payload"})
 			q.AddBranch(q.Join(recProj))
 
-			seq, _ := q.Select(nil, nil)
+			seq, _ := q.Select(nil)
 			for range seq {
 			}
 		}
@@ -468,7 +468,7 @@ func BenchmarkRecursion(b *testing.B) {
 		startKey, _ := ToKey("node_0")
 		seq, err := q.Select(map[string]*BytesRange{
 			"source": NewBytesRange(startKey, startKey, true, true, nil),
-		}, nil)
+		})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -501,7 +501,7 @@ func BenchmarkRecursion(b *testing.B) {
 
 				seq, _ := pLoad.Select(map[string]*BytesRange{
 					"source": NewBytesRange(nodeKey, nodeKey, true, true, nil),
-				}, nil)
+				})
 				for row := range seq {
 					val, _ := row.Get("target")
 					target := val.(string)
@@ -605,7 +605,7 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 				}
 
 				// Execute
-				seq, _ := q.Select(filters, nil)
+				seq, _ := q.Select(filters)
 				for range seq {
 				}
 			}
@@ -728,7 +728,7 @@ func BenchmarkConcurrency(b *testing.B) {
 							"id": NewBytesRange(key, key, true, true, nil),
 						}
 
-						seq, _ := p.Select(f, nil)
+						seq, _ := p.Select(f)
 						count := 0
 						for range seq {
 							count++
@@ -794,7 +794,7 @@ func BenchmarkUpdateSequential(b *testing.B) {
 				"id": NewBytesRange(key, key, true, true, nil),
 			}
 
-			return p.Update(ranges, nil, map[string]any{
+			return p.Update(ranges, map[string]any{
 				"val": i,
 			})
 		})
@@ -889,7 +889,7 @@ func BenchmarkBatchConcurrent(b *testing.B) {
 								"id": NewBytesRange(key, key, true, true, nil),
 							}
 
-							seq, _ := p.Select(f, nil)
+							seq, _ := p.Select(f)
 							count := 0
 							for range seq {
 								count++
