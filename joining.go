@@ -22,10 +22,22 @@ func newJoining(bodies []linkedSelector) Selector {
 	recursive := false
 	result := &Joining{}
 	for bodyIdx, body := range bodies {
+		bodyFields := body.Fields()
 		for _, col := range body.Columns() {
 			columnsSet[col] = struct{}{}
 			if _, exists := firstOccurences[col]; !exists {
 				firstOccurences[col] = bodyIdx
+			} else {
+				// Prioritize indexed or unique fields
+				currentSpec := bodyFields[col]
+				if currentSpec.Indexed || currentSpec.Unique {
+					// Check if the current first occurrence has indexed/unique
+					currentBodySpec := bodies[firstOccurences[col]].Fields()[col]
+					if !currentBodySpec.Indexed && !currentBodySpec.Unique {
+						// Replace with indexed/unique version
+						firstOccurences[col] = bodyIdx
+					}
+				}
 			}
 		}
 		if body.IsRecursive() {
@@ -99,6 +111,32 @@ func newJoining(bodies []linkedSelector) Selector {
 
 func (jr *Joining) Columns() []string {
 	return jr.columns
+}
+
+func (jr *Joining) Fields() map[string]ColumnSpec {
+	result := make(map[string]ColumnSpec)
+
+	// Iterate through all bodies and collect their field specs
+	for _, body := range jr.bodies {
+		bodyFields := body.Fields()
+		for fieldName, spec := range bodyFields {
+			// If field is not yet in result, add it
+			if _, exists := result[fieldName]; !exists {
+				result[fieldName] = spec
+				continue
+			}
+
+			// If field already exists, prioritize indexed or unique fields
+			existing := result[fieldName]
+			// Prefer the spec with indexed or unique flag set
+			if (spec.Indexed || spec.Unique) && !existing.Indexed && !existing.Unique {
+				result[fieldName] = spec
+			}
+			// If both or neither are indexed/unique, keep existing
+		}
+	}
+
+	return result
 }
 
 func (jr *Joining) Project(mapping map[string]string) Selector {

@@ -92,6 +92,10 @@ func newPersistent(tx *Tx, relation string, columnSpecs map[string]ColumnSpec, e
 	}, nil
 }
 
+func (pr *Persistent) Fields() map[string]ColumnSpec {
+	return pr.fields
+}
+
 func loadPersistent(tx *Tx, relation string) (*Persistent, error) {
 	tnx := tx.tx
 	maUn := tx.maUn

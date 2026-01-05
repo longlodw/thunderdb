@@ -51,6 +51,10 @@ func (r *Recursion) Columns() []string {
 	return r.columns
 }
 
+func (r *Recursion) Fields() map[string]ColumnSpec {
+	return r.backing.Fields()
+}
+
 func (r *Recursion) IsRecursive() bool {
 	return true
 }

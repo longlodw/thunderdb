@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"iter"
 	"maps"
-	"slices"
 )
 
 type Projection struct {
@@ -13,15 +12,46 @@ type Projection struct {
 	columns     []string
 	recursive   bool
 	parentsList []*queryParent
+	fieldSpecs  map[string]ColumnSpec
 }
 
 func newProjection(base linkedSelector, fieldsMap map[string]string) *Projection {
+	columnSpecs := make(map[string]ColumnSpec)
+	baseSpecs := base.Fields()
+	reverseMap := make(map[string]string)
+	for projField, baseField := range fieldsMap {
+		reverseMap[baseField] = projField
+	}
+	for projField, baseField := range fieldsMap {
+		if spec, ok := baseSpecs[baseField]; ok {
+			referenceCol := make([]string, len(spec.ReferenceCols))
+			for i, refCol := range referenceCol {
+				if mappedCol, exists := reverseMap[refCol]; exists {
+					referenceCol[i] = mappedCol
+				} else {
+					referenceCol[i] = refCol
+				}
+			}
+			columnSpecs[projField] = ColumnSpec{
+				ReferenceCols: referenceCol,
+				Indexed:       spec.Indexed,
+				Unique:        spec.Unique,
+			}
+		}
+	}
+	columns := make([]string, 0, len(fieldsMap))
+	for col, spec := range columnSpecs {
+		if len(spec.ReferenceCols) == 0 {
+			columns = append(columns, col)
+		}
+	}
 	result := &Projection{
 		toBase:      fieldsMap,
 		base:        base,
-		columns:     slices.Collect(maps.Keys(fieldsMap)),
+		columns:     columns,
 		recursive:   base.IsRecursive(),
 		parentsList: make([]*queryParent, 0),
+		fieldSpecs:  columnSpecs,
 	}
 	base.addParent(&queryParent{
 		parent: result,
@@ -31,6 +61,10 @@ func newProjection(base linkedSelector, fieldsMap map[string]string) *Projection
 
 func (p *Projection) Columns() []string {
 	return p.columns
+}
+
+func (p *Projection) Fields() map[string]ColumnSpec {
+	return maps.Clone(p.fieldSpecs)
 }
 
 func (p *Projection) IsRecursive() bool {
