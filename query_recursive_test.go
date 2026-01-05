@@ -1205,7 +1205,10 @@ func TestQuery_Recursive_WeirdTriangle(t *testing.T) {
 	}
 
 	found := make(map[string]bool)
-	for row := range seq {
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 		a, _ := row.Get("a")
 		b, _ := row.Get("b")
 		c, _ := row.Get("c")
