@@ -348,6 +348,10 @@ func (pr *Persistent) assertUnique(r *persistentRow) error {
 }
 
 func (pr *Persistent) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error) {
+	return pr.selectEval(ranges, false)
+}
+
+func (pr *Persistent) selectEval(ranges map[string]*BytesRange, _ bool) (iter.Seq2[Row, error], error) {
 	iterEntries, err := pr.iter(ranges)
 	if err != nil {
 		return nil, err

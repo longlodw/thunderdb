@@ -162,6 +162,10 @@ func (jr *Joining) parents() []*queryParent {
 }
 
 func (jr *Joining) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error) {
+	return jr.selectEval(ranges, false)
+}
+
+func (jr *Joining) selectEval(ranges map[string]*BytesRange, noEval bool) (iter.Seq2[Row, error], error) {
 	seedIdx := jr.bestBodyIndex(ranges)
 	body := jr.bodies[seedIdx]
 	bodyColumns := body.Columns()
@@ -176,7 +180,7 @@ func (jr *Joining) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error],
 	// Build execution order
 	joinOrder := jr.joinPlans[seedIdx]
 
-	seq, err := body.Select(neededRanges)
+	seq, err := body.selectEval(neededRanges, noEval)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +196,7 @@ func (jr *Joining) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error],
 			joinedBases[seedIdx] = item
 			joinedItem := newJoinedRow(joinedBases, jr.firstOccurences)
 			// Pass original ranges (not expanded) to join, which will handle expansion
-			nextSeq, err := jr.join(joinedItem, ranges, joinOrder, 0)
+			nextSeq, err := jr.join(joinedItem, ranges, joinOrder, 0, noEval)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -245,7 +249,7 @@ func (jr *Joining) bestBodyIndex(ranges map[string]*BytesRange) int {
 	return jr.firstOccurences[f]
 }
 
-func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, order []int, step int) (iter.Seq2[Row, error], error) {
+func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, order []int, step int, noEval bool) (iter.Seq2[Row, error], error) {
 	if step >= len(order) {
 		return func(yield func(Row, error) bool) {
 			yield(values, nil)
@@ -290,7 +294,7 @@ func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, order 
 		}
 	}
 
-	iterEntries, err := body.Select(neededRanges)
+	iterEntries, err := body.selectEval(neededRanges, noEval)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +309,7 @@ func (jr *Joining) join(values *joinedRow, ranges map[string]*BytesRange, order 
 			combinedBases := slices.Clone(values.bases)
 			combinedBases[bodyIdx] = en
 			combined := newJoinedRow(combinedBases, jr.firstOccurences)
-			nextSeq, err := jr.join(combined, ranges, order, step+1)
+			nextSeq, err := jr.join(combined, ranges, order, step+1, noEval)
 			if err != nil {
 				if !yield(nil, err) {
 					return

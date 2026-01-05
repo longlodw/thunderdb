@@ -9,6 +9,7 @@ type Selector interface {
 	Project(mapping map[string]string) Selector
 	IsRecursive() bool
 	Join(bodies ...Selector) Selector
+	selectEval(ranges map[string]*BytesRange, noEval bool) (iter.Seq2[Row, error], error)
 }
 
 type linkedSelector interface {

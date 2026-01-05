@@ -80,6 +80,10 @@ func (p *Projection) parents() []*queryParent {
 }
 
 func (p *Projection) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error) {
+	return p.selectEval(ranges, false)
+}
+
+func (p *Projection) selectEval(ranges map[string]*BytesRange, noEval bool) (iter.Seq2[Row, error], error) {
 	// fmt.Printf("DEBUG: Projection.Select ranges=%v toBase=%v\n", ranges, p.toBase)
 	baseRanges := make(map[string]*BytesRange)
 	baseSpecs := p.base.Fields()
@@ -144,7 +148,7 @@ func (p *Projection) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error
 			}
 		}
 	}
-	baseSeq, err := p.base.Select(baseRanges)
+	baseSeq, err := p.base.selectEval(baseRanges, noEval)
 	if err != nil {
 		return nil, err
 	}

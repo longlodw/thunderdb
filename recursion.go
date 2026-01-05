@@ -12,7 +12,6 @@ type Recursion struct {
 	branches      []linkedSelector
 	columns       []string
 	parentsList   []*queryParent
-	explored      map[string]bool
 	backing       *Persistent
 	interestedSet map[linkedSelector]bool
 	callCount     int
@@ -38,7 +37,6 @@ func newRecursive(tx *Tx, relation string, columnSpecs map[string]ColumnSpec) (*
 	result := &Recursion{
 		branches:      make([]linkedSelector, 0),
 		columns:       columns,
-		explored:      make(map[string]bool),
 		backing:       backing,
 		interestedSet: interestedSet,
 		maxDepth:      50, // Default depth limit
@@ -126,6 +124,13 @@ func (r *Recursion) AddBranch(branch Selector) error {
 }
 
 func (r *Recursion) Select(ranges map[string]*BytesRange) (iter.Seq2[Row, error], error) {
+	return r.selectEval(ranges, false)
+}
+
+func (r *Recursion) selectEval(ranges map[string]*BytesRange, noEval bool) (iter.Seq2[Row, error], error) {
+	if noEval {
+		return r.backing.Select(ranges)
+	}
 	if err := r.explore(ranges); err != nil {
 		return nil, err
 	}
@@ -139,18 +144,13 @@ func (r *Recursion) explore(ranges map[string]*BytesRange) error {
 	r.callCount++
 	defer func() {
 		r.callCount--
-		if r.callCount == 0 {
-			r.explored = make(map[string]bool)
-		}
 	}()
-	hashKey := hashOperators(ranges)
 	// fmt.Printf("Explore: %s (callCount=%d)\n", hashKey, r.callCount)
-	if r.explored[hashKey] {
-		return nil
-	}
-	r.explored[hashKey] = true
 	for _, branch := range r.branches {
-		seq, err := branch.Select(ranges)
+		if branch.IsRecursive() {
+			continue
+		}
+		seq, err := branch.selectEval(ranges, true)
 		if err != nil {
 			return err
 		}
@@ -207,7 +207,7 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 				joinOrder := p.joinPlans[idx]
 
 				// Use global ranges, may results in bugs where correct rows are filtered out
-				entries, err := p.join(joinedValues, ranges, joinOrder, 0)
+				entries, err := p.join(joinedValues, nil, joinOrder, 0, false)
 				if err != nil {
 					return err
 				}
@@ -229,14 +229,12 @@ func (r *Recursion) propagateUp(row Row, selector linkedSelector, ranges map[str
 				})
 			case *Recursion:
 				// Handle recursive parent
-				if r == p {
-					matched, err := r.checkBeforeInsert(top.value, ranges)
-					if err != nil {
-						return err
-					}
-					if !matched {
-						continue
-					}
+				matched, err := r.checkBeforeInsert(top.value, ranges)
+				if err != nil {
+					return err
+				}
+				if !matched {
+					continue
 				}
 				stack = append(stack, upStackItem{
 					selector: p,
