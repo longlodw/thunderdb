@@ -3,7 +3,9 @@ package thunderdb
 import (
 	"bytes"
 	"crypto/subtle"
+	"fmt"
 	"slices"
+	"strings"
 )
 
 type BytesRange struct {
@@ -73,6 +75,21 @@ func (ir *BytesRange) Contains(key []byte) bool {
 		}
 	}
 	return !ir.doesExclude(key)
+}
+
+func (ir *BytesRange) ToString() string {
+	excludesStrs := make([]string, len(ir.excludes))
+	for i, ex := range ir.excludes {
+		excludesStrs[i] = string(ex)
+	}
+	slices.Sort(excludesStrs)
+	return fmt.Sprintf("%v|%v|%v|%v|[%s]",
+		ir.start,
+		ir.end,
+		ir.includeStart,
+		ir.includeEnd,
+		strings.Join(excludesStrs, ","),
+	)
 }
 
 func (ir *BytesRange) doesExclude(key []byte) bool {

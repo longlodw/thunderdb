@@ -2,7 +2,12 @@ package thunderdb
 
 import (
 	"errors"
+	"fmt"
+	"iter"
+	"maps"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/openkvlab/boltdb"
 )
@@ -14,6 +19,7 @@ type Tx struct {
 	tempFilePath string
 	maUn         MarshalUnmarshaler
 	managed      bool
+	stores       map[string]*storage
 }
 
 func (tx *Tx) Commit() error {
@@ -88,27 +94,38 @@ func (tx *Tx) ID() int {
 	return tx.tx.ID()
 }
 
-func (tx *Tx) CreatePersistent(
+func (tx *Tx) CreateStorage(
 	relation string,
-	columnSpecs map[string]ColumnSpec,
-) (*Persistent, error) {
-	return newPersistent(tx, relation, columnSpecs, false)
+	columnSpecs []ColumnSpec,
+	computedColumnSpecs []ComputedColumnSpec,
+) error {
+	s, err := newStorage(tx.tx, relation, columnSpecs, computedColumnSpecs, tx.maUn)
+	if err != nil {
+		return err
+	}
+	tx.stores[relation] = s
+	return nil
 }
 
-func (tx *Tx) LoadPersistent(
-	relation string,
-) (*Persistent, error) {
-	return loadPersistent(tx, relation)
-}
-
-func (tx *Tx) DeletePersistent(relation string) error {
+func (tx *Tx) DeleteStorage(relation string) error {
 	tnx := tx.tx
 	if err := tnx.DeleteBucket([]byte(relation)); err != nil {
 		return err
 	}
+	delete(tx.stores, relation)
 	return nil
 }
 
-func (tx *Tx) CreateRecursion(relation string, colColumnSpec map[string]ColumnSpec) (*Recursion, error) {
-	return newRecursive(tx, relation, colColumnSpec)
+func (tx *Tx) Query(body QueryPart, ranges map[int]*BytesRange) iter.Seq2[map[int]any, error] {
+
+}
+
+func rangesToString(ranges map[int]*BytesRange) string {
+	keys := slices.Collect(maps.Keys(ranges))
+	slices.Sort(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%d:%s", k, ranges[k].ToString())
+	}
+	return strings.Join(parts, ";")
 }
