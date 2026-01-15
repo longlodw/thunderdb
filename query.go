@@ -11,13 +11,13 @@ type queryNode interface {
 	Find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex int) (iter.Seq2[*Row, error], error)
 	ColumnSpecs() []ColumnSpec
 	ComputedColumnSpecs() []ComputedColumnSpec
-	metadata() *storageMetadata
+	metadata() *Metadata
 	propagateToParents(row *Row, child queryNode) error
 }
 
 type baseQueryNode struct {
 	parents     []queryNode
-	metadataObj storageMetadata
+	metadataObj Metadata
 }
 
 func (n *baseQueryNode) AddParent(parent queryNode) {
@@ -32,7 +32,7 @@ func (n *baseQueryNode) ComputedColumnSpecs() []ComputedColumnSpec {
 	return n.metadata().ComputedColumnSpecs
 }
 
-func (n *baseQueryNode) metadata() *storageMetadata {
+func (n *baseQueryNode) metadata() *Metadata {
 	return &n.metadataObj
 }
 
@@ -45,7 +45,7 @@ type headQueryNode struct {
 func initHeadQueryNode(result *headQueryNode, backing *storage, columns []ColumnSpec, computedColumns []ComputedColumnSpec, children []queryNode) {
 	result.backing = backing
 	result.baseQueryNode = baseQueryNode{
-		metadataObj: storageMetadata{
+		metadataObj: Metadata{
 			ColumnSpecs:         columns,
 			ComputedColumnSpecs: computedColumns,
 		},
@@ -93,7 +93,7 @@ func initJoinedQueryNode(result *joinedQueryNode, left, right queryNode, conditi
 	result.right = right
 	result.conditions = conditions
 	result.baseQueryNode = baseQueryNode{
-		metadataObj: storageMetadata{
+		metadataObj: Metadata{
 			ColumnSpecs:         append(slices.Clone(left.ColumnSpecs()), right.ColumnSpecs()...),
 			ComputedColumnSpecs: append(slices.Clone(left.ComputedColumnSpecs()), right.ComputedColumnSpecs()...),
 		},
@@ -403,7 +403,7 @@ func initProjectedQueryNode(result *projectedQueryNode, child queryNode, columns
 	result.columns = columns
 	result.computedColumns = computedColumns
 	result.baseQueryNode = baseQueryNode{
-		metadataObj: storageMetadata{
+		metadataObj: Metadata{
 			ColumnSpecs:         make([]ColumnSpec, len(columns)),
 			ComputedColumnSpecs: make([]ComputedColumnSpec, len(computedColumns)),
 		},

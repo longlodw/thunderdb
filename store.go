@@ -21,12 +21,12 @@ type ColumnSpec struct {
 	IsIndexed bool
 }
 
-type storageMetadata struct {
+type Metadata struct {
 	ColumnSpecs         []ColumnSpec
 	ComputedColumnSpecs []ComputedColumnSpec
 }
 
-func (sm *storageMetadata) bestIndex(ranges map[int]*BytesRange) int {
+func (sm *Metadata) bestIndex(ranges map[int]*BytesRange) int {
 	selectedIndexes := make([]int, 0, len(ranges))
 	for i := range ranges {
 		if (i < len(sm.ColumnSpecs) && sm.ColumnSpecs[i].IsIndexed || sm.ColumnSpecs[i].IsUnique) || (i >= len(sm.ColumnSpecs) && sm.ComputedColumnSpecs[i-len(sm.ColumnSpecs)].IsUnique) {
@@ -44,7 +44,7 @@ func (sm *storageMetadata) bestIndex(ranges map[int]*BytesRange) int {
 
 type storage struct {
 	bucket   *boltdb.Bucket
-	metadata storageMetadata
+	metadata Metadata
 	maUn     MarshalUnmarshaler
 }
 
@@ -120,7 +120,7 @@ func newStorage(
 
 	s := &storage{
 		bucket: bucket,
-		metadata: storageMetadata{
+		metadata: Metadata{
 			ColumnSpecs:         collumnSpecs,
 			ComputedColumnSpecs: computedColumnSpecs,
 		},
@@ -140,7 +140,7 @@ func newStorage(
 func loadMetadata(
 	tx *boltdb.Tx,
 	name string,
-	metadata *storageMetadata,
+	metadata *Metadata,
 ) error {
 	bucket := tx.Bucket([]byte(name))
 	if bucket == nil {

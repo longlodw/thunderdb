@@ -9,7 +9,7 @@ type QueryPart interface {
 
 type Head struct {
 	bodies   []QueryPart
-	metadata storageMetadata
+	metadata Metadata
 }
 
 func NewHead(
@@ -25,7 +25,7 @@ func NewHead(
 		IsUnique:  true,
 	})
 	return &Head{
-		metadata: storageMetadata{
+		metadata: Metadata{
 			ColumnSpecs:         collumnSpecs,
 			ComputedColumnSpecs: computedColumnSpecs,
 		},
@@ -64,7 +64,7 @@ type ProjectedBody struct {
 	child        QueryPart
 	cols         []int
 	computedCols []int
-	metadata     storageMetadata
+	metadata     Metadata
 }
 
 func newProjectedBody(
@@ -114,7 +114,7 @@ type JoinedBody struct {
 	left       QueryPart
 	right      QueryPart
 	conditions []JoinOn
-	metadata   storageMetadata
+	metadata   Metadata
 }
 
 func newJoinedBody(
@@ -194,7 +194,7 @@ type JoinOn struct {
 
 type StoredBody struct {
 	storageName string
-	metadata    storageMetadata
+	metadata    Metadata
 }
 
 func (ph StoredBody) Project(cols []int, computedCols []int) QueryPart {

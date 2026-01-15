@@ -16,7 +16,7 @@ func init() {
 	gob.Register(int64(0))
 	gob.Register(float64(0))
 	gob.Register(bool(false))
-	gob.Register(storageMetadata{})
+	gob.Register(Metadata{})
 	gob.Register(ColumnSpec{})
 	gob.Register(computedColumnSpec{})
 }

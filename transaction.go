@@ -107,8 +107,17 @@ func (tx *Tx) CreateStorage(
 	return nil
 }
 
-func (tx *Tx) LoadStorage(relation string) (*storage, error) {
-	if s, ok := tx.stores[relation]; ok {
+func (tx *Tx) Insert(relation string, value map[int]any) error {
+	s, err := tx.loadStorage(relation)
+	if err != nil {
+		return err
+	}
+	return s.Insert(value)
+}
+
+func (tx *Tx) loadStorage(relation string) (*storage, error) {
+	s, ok := tx.stores[relation]
+	if ok {
 		return s, nil
 	}
 	s, err := loadStorage(tx.tx, relation, tx.maUn)
@@ -129,7 +138,7 @@ func (tx *Tx) DeleteStorage(relation string) error {
 }
 
 func (tx *Tx) LoadStoredBody(name string) (*StoredBody, error) {
-	var metadataObj storageMetadata
+	var metadataObj Metadata
 	if err := loadMetadata(tx.tx, name, &metadataObj); err != nil {
 		return nil, err
 	}
@@ -137,6 +146,14 @@ func (tx *Tx) LoadStoredBody(name string) (*StoredBody, error) {
 		storageName: name,
 		metadata:    metadataObj,
 	}, nil
+}
+
+func (tx *Tx) LoadMetadata(relation string) (*Metadata, error) {
+	var metadataObj Metadata
+	if err := loadMetadata(tx.tx, relation, &metadataObj); err != nil {
+		return nil, err
+	}
+	return &metadataObj, nil
 }
 
 func (tx *Tx) Query(body QueryPart, ranges map[int]*BytesRange) (iter.Seq2[*Row, error], error) {
