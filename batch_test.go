@@ -37,14 +37,15 @@ func TestDB_View(t *testing.T) {
 
 	// Prepare data
 	err := db.Update(func(tx *Tx) error {
-		p, err := tx.CreatePersistent("users", map[string]ColumnSpec{
-			"id":   {Unique: true},
-			"name": {},
-		})
+		// id=0, name=1
+		err := tx.CreateStorage("users", []ColumnSpec{
+			{IsUnique: true}, // id (0)
+			{},               // name (1)
+		}, nil)
 		if err != nil {
 			return err
 		}
-		return p.Insert(map[string]any{"id": "1", "name": "Alice"})
+		return tx.Insert("users", map[int]any{0: "1", 1: "Alice"})
 	})
 	if err != nil {
 		t.Fatalf("failed to prepare data: %v", err)
@@ -52,11 +53,11 @@ func TestDB_View(t *testing.T) {
 
 	// Test View
 	err = db.View(func(tx *Tx) error {
-		p, err := tx.LoadPersistent("users")
+		p, err := tx.LoadStoredBody("users")
 		if err != nil {
 			return err
 		}
-		iter, err := p.Select(nil)
+		iter, err := tx.Query(p, nil)
 		if err != nil {
 			return err
 		}
@@ -65,7 +66,10 @@ func TestDB_View(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			val, _ := row.Get("name")
+			var val string
+			if err := row.Get(1, &val); err != nil {
+				return err
+			}
 			if val != "Alice" {
 				t.Errorf("expected Alice, got %v", val)
 			}
@@ -86,13 +90,14 @@ func TestDB_Update(t *testing.T) {
 	defer cleanup()
 
 	err := db.Update(func(tx *Tx) error {
-		p, err := tx.CreatePersistent("items", map[string]ColumnSpec{
-			"id": {Unique: true},
-		})
+		// id=0
+		err := tx.CreateStorage("items", []ColumnSpec{
+			{IsUnique: true}, // id (0)
+		}, nil)
 		if err != nil {
 			return err
 		}
-		return p.Insert(map[string]any{"id": 100})
+		return tx.Insert("items", map[int]any{0: 100})
 	})
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
@@ -100,16 +105,19 @@ func TestDB_Update(t *testing.T) {
 
 	// Verify update
 	db.View(func(tx *Tx) error {
-		p, err := tx.LoadPersistent("items")
+		p, err := tx.LoadStoredBody("items")
 		if err != nil {
 			return err
 		}
-		iter, err := p.Select(nil)
+		iter, err := tx.Query(p, nil)
 		if err != nil {
 			return err
 		}
 		found := false
-		for range iter {
+		for _, err := range iter {
+			if err != nil {
+				return err
+			}
 			found = true
 			break
 		}
@@ -126,11 +134,11 @@ func TestDB_Batch(t *testing.T) {
 
 	// Initialize schema first
 	err := db.Update(func(tx *Tx) error {
-		_, err := tx.CreatePersistent("logs", map[string]ColumnSpec{
-			"ts":  {Unique: true},
-			"msg": {},
-		})
-		return err
+		// ts=0, msg=1
+		return tx.CreateStorage("logs", []ColumnSpec{
+			{IsUnique: true}, // ts (0)
+			{},               // msg (1)
+		}, nil)
 	})
 	if err != nil {
 		t.Fatalf("failed to init schema: %v", err)
@@ -145,14 +153,11 @@ func TestDB_Batch(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			err := db.Batch(func(tx *Tx) error {
-				p, err := tx.LoadPersistent("logs")
-				if err != nil {
-					return err
-				}
+				// We don't need to load anything to insert anymore, just insert directly by name
 				// Use a unique timestamp based on ID to avoid collisions in this simple test
-				return p.Insert(map[string]any{
-					"ts":  id,
-					"msg": fmt.Sprintf("worker %d", id),
+				return tx.Insert("logs", map[int]any{
+					0: id,                        // ts
+					1: fmt.Sprintf("worker %d", id), // msg
 				})
 			})
 			if err != nil {
@@ -170,16 +175,19 @@ func TestDB_Batch(t *testing.T) {
 
 	// Verify all writes succeeded
 	db.View(func(tx *Tx) error {
-		p, err := tx.LoadPersistent("logs")
+		p, err := tx.LoadStoredBody("logs")
 		if err != nil {
 			return err
 		}
-		iter, err := p.Select(nil)
+		iter, err := tx.Query(p, nil)
 		if err != nil {
 			return err
 		}
 		count := 0
-		for range iter {
+		for _, err := range iter {
+			if err != nil {
+				return err
+			}
 			count++
 		}
 		if count != workers {
@@ -199,10 +207,10 @@ func TestDB_Batch_PanicProtection(t *testing.T) {
 
 	// 1. Setup Schema
 	db.Update(func(tx *Tx) error {
-		_, err := tx.CreatePersistent("data", map[string]ColumnSpec{
-			"val": {},
-		})
-		return err
+		// val=0
+		return tx.CreateStorage("data", []ColumnSpec{
+			{}, // val
+		}, nil)
 	})
 
 	var wg sync.WaitGroup
@@ -223,8 +231,7 @@ func TestDB_Batch_PanicProtection(t *testing.T) {
 		// Sleep slightly to let them likely group together
 		time.Sleep(time.Millisecond)
 		db.Batch(func(tx *Tx) error {
-			p, _ := tx.LoadPersistent("data")
-			return p.Insert(map[string]any{"val": 123})
+			return tx.Insert("data", map[int]any{0: 123})
 		})
 	}()
 
@@ -232,11 +239,13 @@ func TestDB_Batch_PanicProtection(t *testing.T) {
 
 	// Check if Worker 2's data made it
 	db.View(func(tx *Tx) error {
-		p, _ := tx.LoadPersistent("data")
-		iter, _ := p.Select(nil)
+		p, _ := tx.LoadStoredBody("data")
+		iter, _ := tx.Query(p, nil)
 		count := 0
-		for range iter {
-			count++
+		for _, err := range iter {
+			if err == nil {
+				count++
+			}
 		}
 		if count != 1 {
 			t.Errorf("Expected 1 row from successful worker, got %d", count)

@@ -33,19 +33,11 @@ func NewHead(
 }
 
 func (h *Head) Project(cols []int, computedCols []int) QueryPart {
-	return &ProjectedBody{
-		child:        h,
-		cols:         cols,
-		computedCols: computedCols,
-	}
+	return newProjectedBody(h, cols, computedCols)
 }
 
 func (h *Head) Join(other QueryPart, conditions []JoinOn) QueryPart {
-	return &JoinedBody{
-		left:       h,
-		right:      other,
-		conditions: conditions,
-	}
+	return newJoinedBody(h, other, conditions)
 }
 
 func (h *Head) Bind(bodies []QueryPart) {
@@ -87,19 +79,11 @@ func newProjectedBody(
 }
 
 func (ph *ProjectedBody) Project(cols []int, computedCols []int) QueryPart {
-	return &ProjectedBody{
-		child:        ph.child,
-		cols:         cols,
-		computedCols: computedCols,
-	}
+	return newProjectedBody(ph, cols, computedCols)
 }
 
 func (ph *ProjectedBody) Join(other QueryPart, conditions []JoinOn) QueryPart {
-	return &JoinedBody{
-		left:       ph,
-		right:      other,
-		conditions: conditions,
-	}
+	return newJoinedBody(ph, other, conditions)
 }
 
 func (ph *ProjectedBody) ColumnSpecs() []ColumnSpec {
@@ -135,19 +119,11 @@ func newJoinedBody(
 }
 
 func (jh *JoinedBody) Project(cols []int, computedCols []int) QueryPart {
-	return &ProjectedBody{
-		child:        jh,
-		cols:         cols,
-		computedCols: computedCols,
-	}
+	return newProjectedBody(jh, cols, computedCols)
 }
 
 func (jh *JoinedBody) Join(other QueryPart, conditions []JoinOn) QueryPart {
-	return &JoinedBody{
-		left:       jh,
-		right:      other,
-		conditions: conditions,
-	}
+	return newJoinedBody(jh, other, conditions)
 }
 
 func (jh *JoinedBody) ColumnSpecs() []ColumnSpec {
@@ -197,26 +173,18 @@ type StoredBody struct {
 	metadata    Metadata
 }
 
-func (ph StoredBody) Project(cols []int, computedCols []int) QueryPart {
-	return &ProjectedBody{
-		child:        ph,
-		cols:         cols,
-		computedCols: computedCols,
-	}
+func (ph *StoredBody) Project(cols []int, computedCols []int) QueryPart {
+	return newProjectedBody(ph, cols, computedCols)
 }
 
-func (ph StoredBody) Join(other QueryPart, conditions []JoinOn) QueryPart {
-	return &JoinedBody{
-		left:       ph,
-		right:      other,
-		conditions: conditions,
-	}
+func (ph *StoredBody) Join(other QueryPart, conditions []JoinOn) QueryPart {
+	return newJoinedBody(ph, other, conditions)
 }
 
-func (ph StoredBody) ColumnSpecs() []ColumnSpec {
+func (ph *StoredBody) ColumnSpecs() []ColumnSpec {
 	return ph.metadata.ColumnSpecs
 }
 
-func (ph StoredBody) ComputedColumnSpecs() []ComputedColumnSpec {
+func (ph *StoredBody) ComputedColumnSpecs() []ComputedColumnSpec {
 	return ph.metadata.ComputedColumnSpecs
 }

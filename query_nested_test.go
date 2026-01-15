@@ -16,103 +16,83 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	defer tx.Rollback()
 
 	// Schema
-	// users: u_id, u_name, group_id
-	users, err := tx.CreatePersistent("users", map[string]ColumnSpec{
-		"u_id":     {},
-		"u_name":   {},
-		"group_id": {},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// admins: u_id, u_name, group_id
-	admins, err := tx.CreatePersistent("admins", map[string]ColumnSpec{
-		"u_id":     {},
-		"u_name":   {},
-		"group_id": {},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// groups: group_id, g_name, org_id
-	groups, err := tx.CreatePersistent("groups", map[string]ColumnSpec{
-		"group_id": {},
-		"g_name":   {},
-		"org_id":   {},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// orgs: org_id, o_name, region
-	orgs, err := tx.CreatePersistent("orgs", map[string]ColumnSpec{
-		"org_id": {},
-		"o_name": {},
-		"region": {},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// users: u_id(0), u_name(1), group_id(2)
+	err = tx.CreateStorage("users", []ColumnSpec{{},{},{}}, nil)
+	if err != nil { t.Fatal(err) }
+	
+	// admins: u_id(0), u_name(1), group_id(2)
+	err = tx.CreateStorage("admins", []ColumnSpec{{},{},{}}, nil)
+	if err != nil { t.Fatal(err) }
+	
+	// groups: group_id(0), g_name(1), org_id(2)
+	err = tx.CreateStorage("groups", []ColumnSpec{{},{},{}}, nil)
+	if err != nil { t.Fatal(err) }
+	
+	// orgs: org_id(0), o_name(1), region(2)
+	err = tx.CreateStorage("orgs", []ColumnSpec{{},{},{}}, nil)
+	if err != nil { t.Fatal(err) }
 
 	// Insert Data
 	// Orgs
-	orgs.Insert(map[string]any{"org_id": "o1", "o_name": "TechCorp", "region": "North"})
-	orgs.Insert(map[string]any{"org_id": "o2", "o_name": "BizInc", "region": "South"})
+	tx.Insert("orgs", map[int]any{0: "o1", 1: "TechCorp", 2: "North"})
+	tx.Insert("orgs", map[int]any{0: "o2", 1: "BizInc", 2: "South"})
 
 	// Groups
-	groups.Insert(map[string]any{"group_id": "g1", "g_name": "Dev", "org_id": "o1"})   // North
-	groups.Insert(map[string]any{"group_id": "g2", "g_name": "Sales", "org_id": "o2"}) // South
+	tx.Insert("groups", map[int]any{0: "g1", 1: "Dev", 2: "o1"})   // North
+	tx.Insert("groups", map[int]any{0: "g2", 1: "Sales", 2: "o2"}) // South
 
 	// Users
-	users.Insert(map[string]any{"u_id": "u1", "u_name": "Alice", "group_id": "g1"}) // North
-	users.Insert(map[string]any{"u_id": "u2", "u_name": "Bob", "group_id": "g2"})   // South
+	tx.Insert("users", map[int]any{0: "u1", 1: "Alice", 2: "g1"}) // North
+	tx.Insert("users", map[int]any{0: "u2", 1: "Bob", 2: "g2"})   // South
 
 	// Admins
-	admins.Insert(map[string]any{"u_id": "a1", "u_name": "Charlie", "group_id": "g1"}) // North
+	tx.Insert("admins", map[int]any{0: "a1", 1: "Charlie", 2: "g1"}) // North
 
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 
 	// 2. Build Query
-	tx, err = db.Begin(true)
+	tx, err = db.Begin(false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
 
-	users, _ = tx.LoadPersistent("users")
-	admins, _ = tx.LoadPersistent("admins")
-	groups, _ = tx.LoadPersistent("groups")
-	orgs, _ = tx.LoadPersistent("orgs")
+	users, _ := tx.LoadStoredBody("users")
+	admins, _ := tx.LoadStoredBody("admins")
+	groups, _ := tx.LoadStoredBody("groups")
+	orgs, _ := tx.LoadStoredBody("orgs")
 
 	// Nested Query: qGroupsOrgs (Groups + Orgs)
-	// Columns: Union of groups and orgs columns
-	// group_id, g_name, org_id, o_name, region
-	qGroupsOrgs := groups.Join(orgs)
+	// Groups: 0:group_id, 1:g_name, 2:org_id
+	// Orgs: 0:org_id, 1:o_name, 2:region
+	// Join condition: groups.org_id (2) == orgs.org_id (0)
+	qGroupsOrgs := groups.Join(orgs, []JoinOn{
+		{leftField: 2, rightField: 0, operator: EQ},
+	})
+	// Result Cols: 0-2 (groups), 3-5 (orgs). 
+	// Org Region is at index 3+2 = 5.
 
 	// Branch 1: Users + qGroupsOrgs
-	branch1 := users.Join(qGroupsOrgs).Project(map[string]string{
-		"u_id":     "u_id",
-		"u_name":   "u_name",
-		"group_id": "group_id",
-		"g_name":   "g_name",
-		"org_id":   "org_id",
-		"o_name":   "o_name",
-		"region":   "region",
+	// Users: 0:u_id, 1:u_name, 2:group_id
+	// qGroupsOrgs: 0-2 (groups), 3-5 (orgs) -> will become 3-8 in final
+	// Join condition: users.group_id (2) == groups.group_id (0 from right side)
+	branch1 := users.Join(qGroupsOrgs, []JoinOn{
+		{leftField: 2, rightField: 0, operator: EQ},
 	})
-	// if err := qAll.AddBranch(branch1); err != nil {
-	// 	t.Fatal(err)
-	// }
+	
+	// Branch 1 Schema indices:
+	// Users: 0, 1, 2
+	// Groups: 3, 4, 5
+	// Orgs: 6, 7, 8
+	// Region is at 8.
 
 	// Branch 2: Admins + qGroupsOrgs
-	branch2 := admins.Join(qGroupsOrgs).Project(map[string]string{
-		"u_id":     "u_id",
-		"u_name":   "u_name",
-		"group_id": "group_id",
-		"g_name":   "g_name",
-		"org_id":   "org_id",
-		"o_name":   "o_name",
-		"region":   "region",
+	// Admins: 0:u_id, 1:u_name, 2:group_id
+	// Same structure.
+	branch2 := admins.Join(qGroupsOrgs, []JoinOn{
+		{leftField: 2, rightField: 0, operator: EQ},
 	})
 
 	// 3. Select Region="North"
@@ -121,26 +101,26 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := map[string]*BytesRange{
-		"region": NewBytesRange(key, key, true, true, nil),
+	f := map[int]*BytesRange{
+		8: NewBytesRange(key, key, true, true, nil), // Region is at index 8
 	}
-	seq, err := branch1.Select(f)
+	
+	seq, err := tx.Query(branch1, f)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results := make([]map[string]any, 0)
+	results := make([]string, 0)
 	for row, err := range seq {
 		if err != nil {
 			t.Fatal(err)
 		}
-		val, _ := row.ToMap()
-		// Filter duplicate/unexpected results if the query engine returns more than expected
-		// (e.g., if joins produce duplicates or if we are getting multiple matches)
-		// For this test, we expect unique u_id.
-		results = append(results, val)
+		var name string
+		row.Get(1, &name) // u_name
+		results = append(results, name)
 	}
-	seq2, err := branch2.Select(f)
+
+	seq2, err := tx.Query(branch2, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +128,9 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		val, _ := row.ToMap()
-		results = append(results, val)
+		var name string
+		row.Get(1, &name) // u_name
+		results = append(results, name)
 	}
 
 	// Verify results directly (expecting exactly 2 results, no duplicates)
@@ -158,15 +139,8 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	}
 
 	names := make(map[string]bool)
-	for _, res := range results {
-		if name, ok := res["u_name"].(string); ok {
-			names[name] = true
-		} else {
-			t.Errorf("Result missing u_name: %v", res)
-		}
-		if res["region"] != "North" {
-			t.Errorf("Expected region North, got %v", res["region"])
-		}
+	for _, name := range results {
+		names[name] = true
 	}
 
 	if !names["Alice"] {

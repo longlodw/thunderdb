@@ -1,25 +1,11 @@
 package thunderdb
 
 import (
-	"encoding/gob"
 	"os"
 	"time"
 
 	"github.com/openkvlab/boltdb"
 )
-
-func init() {
-	gob.Register(map[string]interface{}{})
-	gob.Register([]interface{}{})
-	gob.Register(string(""))
-	gob.Register(int(0))
-	gob.Register(int64(0))
-	gob.Register(float64(0))
-	gob.Register(bool(false))
-	gob.Register(Metadata{})
-	gob.Register(ColumnSpec{})
-	gob.Register(computedColumnSpec{})
-}
 
 type DB struct {
 	db   *boltdb.DB
@@ -47,7 +33,7 @@ func (d *DB) Begin(writable bool) (*Tx, error) {
 	}
 
 	return &Tx{
-		tx:   tx,
+		tx: tx, stores: make(map[string]*storage),
 		maUn: d.maUn,
 	}, nil
 }
@@ -58,6 +44,7 @@ func (d *DB) View(fn func(*Tx) error) error {
 			tx:      btx,
 			maUn:    d.maUn,
 			managed: true,
+			stores:  make(map[string]*storage),
 		}
 		defer tx.cleanupTempTx()
 		return fn(tx)
@@ -70,6 +57,7 @@ func (d *DB) Update(fn func(*Tx) error) error {
 			tx:      btx,
 			maUn:    d.maUn,
 			managed: true,
+			stores:  make(map[string]*storage),
 		}
 		defer tx.cleanupTempTx()
 		return fn(tx)
@@ -92,6 +80,7 @@ func (d *DB) Batch(fn func(*Tx) error) error {
 			tx:      btx,
 			maUn:    d.maUn,
 			managed: true,
+			stores:  make(map[string]*storage),
 		}
 		defer tx.cleanupTempTx()
 		return fn(tx)

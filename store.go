@@ -29,7 +29,7 @@ type Metadata struct {
 func (sm *Metadata) bestIndex(ranges map[int]*BytesRange) int {
 	selectedIndexes := make([]int, 0, len(ranges))
 	for i := range ranges {
-		if (i < len(sm.ColumnSpecs) && sm.ColumnSpecs[i].IsIndexed || sm.ColumnSpecs[i].IsUnique) || (i >= len(sm.ColumnSpecs) && sm.ComputedColumnSpecs[i-len(sm.ColumnSpecs)].IsUnique) {
+		if (i < len(sm.ColumnSpecs) && (sm.ColumnSpecs[i].IsIndexed || sm.ColumnSpecs[i].IsUnique)) || (i >= len(sm.ColumnSpecs) && sm.ComputedColumnSpecs[i-len(sm.ColumnSpecs)].IsUnique) {
 			selectedIndexes = append(selectedIndexes, i)
 		}
 	}
@@ -175,8 +175,8 @@ func loadStorage(
 	return s, nil
 }
 
-func deleteStorage(rootBucket *boltdb.Bucket, name string) error {
-	return rootBucket.DeleteBucket([]byte(name))
+func deleteStorage(tx *boltdb.Tx, name string) error {
+	return tx.DeleteBucket([]byte(name))
 }
 
 func (s *storage) ComputedColumnsCount() int {
@@ -355,7 +355,7 @@ func (s *storage) Delete(ranges map[int]*BytesRange) error {
 	for ; k != nil && lessThan(k); k, _ = c.Next() {
 		vals := make(map[int]any)
 		// check other ranges
-		if ok, err := s.inRanges(&vals, ranges); err != nil {
+		if ok, err := s.inRanges(k[len(k)-8:], &vals, ranges); err != nil {
 			return err
 		} else if !ok {
 			continue
@@ -373,6 +373,10 @@ func (s *storage) Delete(ranges map[int]*BytesRange) error {
 				return err
 			}
 		}
+		// delete current index entry
+		if err := c.Delete(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -386,6 +390,7 @@ func (s *storage) find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex 
 				values: make(map[int][]byte),
 				maUn:   s.maUn,
 			}
+			vals := make(map[int]any)
 			c := s.dataBucket().Cursor()
 			for k, v := c.First(); k != nil; k, v = c.Next() {
 				id := k[0:8]
@@ -394,19 +399,31 @@ func (s *storage) find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex 
 					continue
 				}
 				if prev != nil && !bytes.Equal(prev, id) {
-					if !yield(results, nil) {
+					if ok, err := s.inRanges(prev, &vals, ranges); err != nil {
+						if !yield(nil, err) {
+							return
+						}
 						return
+					} else if ok {
+						if !yield(results, nil) {
+							return
+						}
 					}
 					results = &Row{
 						values: make(map[int][]byte),
 						maUn:   s.maUn,
 					}
+					vals = make(map[int]any)
 				}
 				prev = id
-				results.values[int(binary.BigEndian.Uint32(k[8:12]))] = v
+				results.values[col] = v
 			}
 			if prev != nil {
-				yield(results, nil)
+				if ok, err := s.inRanges(prev, &vals, ranges); err != nil {
+					yield(nil, err)
+				} else if ok {
+					yield(results, nil)
+				}
 			}
 		}, nil
 	}
@@ -437,7 +454,7 @@ func (s *storage) find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex 
 			}
 			vals := make(map[int]any)
 			// check other ranges
-			if ok, err := s.inRanges(&vals, ranges); err != nil {
+			if ok, err := s.inRanges(k[len(k)-8:], &vals, ranges); err != nil {
 				if !yield(nil, err) {
 					return
 				}
@@ -461,9 +478,9 @@ func (s *storage) find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex 
 	}, nil
 }
 
-func (s *storage) inRanges(vals *map[int]any, ranges map[int]*BytesRange) (bool, error) {
+func (s *storage) inRanges(id []byte, vals *map[int]any, ranges map[int]*BytesRange) (bool, error) {
 	for idx, kr := range ranges {
-		kBytes, err := s.toKey(nil, vals, idx)
+		kBytes, err := s.toKey(id, vals, idx)
 		if err != nil {
 			return false, err
 		}

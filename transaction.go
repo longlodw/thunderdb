@@ -221,6 +221,7 @@ func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *
 			return nil, err
 		}
 		initProjectedQueryNode(result, childNode, b.cols, b.computedCols)
+		return result, nil
 	case *JoinedBody:
 		result := &joinedQueryNode{}
 		explored[bf] = result
@@ -251,7 +252,6 @@ func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *
 	default:
 		panic(fmt.Sprintf("unsupported body type: %T", body))
 	}
-	panic("unreachable")
 }
 
 type bodyFilter struct {

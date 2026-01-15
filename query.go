@@ -429,8 +429,10 @@ func (n *projectedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool,
 			return nil, ErrFieldNotFound(fmt.Sprintf("column %d", field))
 		}
 	}
-	var childIndex int
-	if mainIndex < len(n.columns) {
+	var childIndex int = -1
+	if mainIndex == -1 {
+		// no index found, use full table scan
+	} else if mainIndex < len(n.columns) {
 		childIndex = n.columns[mainIndex]
 	} else if mainIndex < len(n.columns)+len(n.computedColumns) {
 		childIndex = n.computedColumns[mainIndex-len(n.columns)] + len(n.child.ColumnSpecs())
