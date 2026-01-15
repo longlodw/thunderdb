@@ -3,6 +3,7 @@ package thunderdb
 import (
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 )
 
@@ -216,9 +217,7 @@ func (n *joinedQueryNode) joinRows(leftRow, rightRow *Row) (*Row, error) {
 		values: make(map[int][]byte),
 		maUn:   leftRow.maUn,
 	}
-	for k, v := range leftRow.values {
-		newRow.values[k] = v
-	}
+	maps.Copy(newRow.values, leftRow.values)
 	for k, v := range rightRow.values {
 		newRow.values[k+len(n.left.ColumnSpecs())] = v
 	}
