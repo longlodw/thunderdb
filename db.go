@@ -1,11 +1,25 @@
 package thunderdb
 
 import (
+	"encoding/gob"
 	"os"
 	"time"
 
 	"github.com/openkvlab/boltdb"
 )
+
+func init() {
+	gob.Register(map[string]interface{}{})
+	gob.Register([]interface{}{})
+	gob.Register(string(""))
+	gob.Register(int(0))
+	gob.Register(int64(0))
+	gob.Register(float64(0))
+	gob.Register(bool(false))
+	gob.Register(storageMetadata{})
+	gob.Register(ColumnSpec{})
+	gob.Register(computedColumnSpec{})
+}
 
 type DB struct {
 	db   *boltdb.DB

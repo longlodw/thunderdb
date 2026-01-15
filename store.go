@@ -12,18 +12,34 @@ import (
 )
 
 type ComputedColumnSpec struct {
-	fieldRefs []int
-	isUnique  bool
+	FieldRefs []int
+	IsUnique  bool
 }
 
 type ColumnSpec struct {
-	isUnique  bool
-	isIndexed bool
+	IsUnique  bool
+	IsIndexed bool
 }
 
 type storageMetadata struct {
-	collumnSpecs        []ColumnSpec
-	computedColumnSpecs []ComputedColumnSpec
+	ColumnSpecs         []ColumnSpec
+	ComputedColumnSpecs []ComputedColumnSpec
+}
+
+func (sm *storageMetadata) bestIndex(ranges map[int]*BytesRange) int {
+	selectedIndexes := make([]int, 0, len(ranges))
+	for i := range ranges {
+		if (i < len(sm.ColumnSpecs) && sm.ColumnSpecs[i].IsIndexed || sm.ColumnSpecs[i].IsUnique) || (i >= len(sm.ColumnSpecs) && sm.ComputedColumnSpecs[i-len(sm.ColumnSpecs)].IsUnique) {
+			selectedIndexes = append(selectedIndexes, i)
+		}
+	}
+	if len(selectedIndexes) == 0 {
+		return -1
+	}
+	shortestIndex := slices.MinFunc(selectedIndexes, func(a, b int) int {
+		return bytes.Compare(ranges[a].distance, ranges[b].distance)
+	})
+	return shortestIndex
 }
 
 type storage struct {
@@ -32,17 +48,38 @@ type storage struct {
 	maUn     MarshalUnmarshaler
 }
 
-type storageRow struct {
+type Row struct {
 	values map[int][]byte
 	maUn   MarshalUnmarshaler
 }
 
-func (sr *storageRow) Get(idx int, v any) error {
+func (sr *Row) Get(idx int, v any) error {
 	vBytes, ok := sr.values[idx]
 	if !ok {
 		return ErrFieldNotFound(fmt.Sprintf("column %d", idx))
 	}
 	return sr.maUn.Unmarshal(vBytes, v)
+}
+
+func (sr *Row) Iter() iter.Seq2[int, Value] {
+	return func(yield func(int, Value) bool) {
+		for k, b := range sr.values {
+			var v any
+			err := sr.maUn.Unmarshal(b, &v)
+			if !yield(k, Value{value: v, err: err}) {
+				return
+			}
+		}
+	}
+}
+
+type Value struct {
+	value any
+	err   error
+}
+
+func (v *Value) Get() (any, error) {
+	return v.value, v.err
 }
 
 func newStorage(
@@ -64,7 +101,7 @@ func newStorage(
 		return nil, err
 	}
 	for i, spec := range collumnSpecs {
-		if !(spec.isUnique || spec.isIndexed) {
+		if !(spec.IsUnique || spec.IsIndexed) {
 			continue
 		}
 		var idxName [4]byte
@@ -75,7 +112,7 @@ func newStorage(
 	}
 	for i := range computedColumnSpecs {
 		var idxName [4]byte
-		binary.BigEndian.PutUint32(idxName[0:4], uint32(i))
+		binary.BigEndian.PutUint32(idxName[0:4], uint32(i+len(collumnSpecs)))
 		if _, err := idxBucket.CreateBucketIfNotExists(idxName[:]); err != nil {
 			return nil, err
 		}
@@ -84,8 +121,8 @@ func newStorage(
 	s := &storage{
 		bucket: bucket,
 		metadata: storageMetadata{
-			collumnSpecs:        collumnSpecs,
-			computedColumnSpecs: computedColumnSpecs,
+			ColumnSpecs:         collumnSpecs,
+			ComputedColumnSpecs: computedColumnSpecs,
 		},
 		maUn: maUn,
 	}
@@ -100,24 +137,39 @@ func newStorage(
 	return s, nil
 }
 
-func loadStorage(
-	rootBucket *boltdb.Bucket,
+func loadMetadata(
+	tx *boltdb.Tx,
 	name string,
-	maUn MarshalUnmarshaler,
-) (*storage, error) {
-	bucket := rootBucket.Bucket([]byte(name))
+	metadata *storageMetadata,
+) error {
+	bucket := tx.Bucket([]byte(name))
 	if bucket == nil {
-		return nil, boltdb_errors.ErrBucketNotFound
+		return boltdb_errors.ErrBucketNotFound
 	}
 	metadataBytes := bucket.Get([]byte("metadata"))
 	if metadataBytes == nil {
-		return nil, ErrMetaDataNotFound(name)
+		return ErrMetaDataNotFound(name)
+	}
+	if err := GobMaUn.Unmarshal(metadataBytes, metadata); err != nil {
+		return err
+	}
+	return nil
+}
+
+func loadStorage(
+	tx *boltdb.Tx,
+	name string,
+	maUn MarshalUnmarshaler,
+) (*storage, error) {
+	bucket := tx.Bucket([]byte(name))
+	if bucket == nil {
+		return nil, boltdb_errors.ErrBucketNotFound
 	}
 	s := &storage{
 		bucket: bucket,
 		maUn:   maUn,
 	}
-	if err := GobMaUn.Unmarshal(metadataBytes, &(s.metadata)); err != nil {
+	if err := loadMetadata(tx, name, &s.metadata); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -125,6 +177,14 @@ func loadStorage(
 
 func deleteStorage(rootBucket *boltdb.Bucket, name string) error {
 	return rootBucket.DeleteBucket([]byte(name))
+}
+
+func (s *storage) ComputedColumnsCount() int {
+	return len(s.metadata.ComputedColumnSpecs)
+}
+
+func (s *storage) ColumnsCount() int {
+	return len(s.metadata.ColumnSpecs)
 }
 
 func (s *storage) dataBucket() *boltdb.Bucket {
@@ -136,8 +196,8 @@ func (s *storage) indexBucket() *boltdb.Bucket {
 }
 
 func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip int) error {
-	for i, spec := range s.metadata.collumnSpecs {
-		if !(spec.isIndexed || spec.isUnique) || i == skip {
+	for i, spec := range s.metadata.ColumnSpecs {
+		if !(spec.IsIndexed || spec.IsUnique) || i == skip {
 			continue
 		}
 		var v any
@@ -167,12 +227,12 @@ func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip int) error 
 			return err
 		}
 	}
-	for i, spec := range s.metadata.computedColumnSpecs {
-		if i+len(s.metadata.collumnSpecs) == skip {
+	for i, spec := range s.metadata.ComputedColumnSpecs {
+		if i+len(s.metadata.ColumnSpecs) == skip {
 			continue
 		}
-		selectedValues := make([]any, len(spec.fieldRefs))
-		for j, ref := range spec.fieldRefs {
+		selectedValues := make([]any, len(spec.FieldRefs))
+		for j, ref := range spec.FieldRefs {
 			if v, ok := (*values)[j]; ok {
 				selectedValues[j] = v
 			} else {
@@ -195,7 +255,7 @@ func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip int) error 
 		copy(compositeKey, vKey)
 		binary.BigEndian.PutUint64(compositeKey[len(vKey):], binary.BigEndian.Uint64(id[0:8]))
 		idxBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(idxBytes[0:4], uint32(i+len(s.metadata.collumnSpecs)))
+		binary.BigEndian.PutUint32(idxBytes[0:4], uint32(i+len(s.metadata.ColumnSpecs)))
 		if err := s.indexBucket().Bucket(idxBytes).Delete(compositeKey); err != nil {
 			return err
 		}
@@ -204,11 +264,11 @@ func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip int) error 
 }
 
 func (s *storage) toKey(id []byte, value *map[int]any, idx int) ([]byte, error) {
-	if idx >= len(s.metadata.collumnSpecs) {
+	if idx >= len(s.metadata.ColumnSpecs) {
 		// computed column
-		spec := s.metadata.computedColumnSpecs[idx-len(s.metadata.collumnSpecs)]
-		selectedValues := make([]any, len(spec.fieldRefs))
-		for j, ref := range spec.fieldRefs {
+		spec := s.metadata.ComputedColumnSpecs[idx-len(s.metadata.ColumnSpecs)]
+		selectedValues := make([]any, len(spec.FieldRefs))
+		for j, ref := range spec.FieldRefs {
 			if v, ok := (*value)[j]; ok {
 				selectedValues[j] = v
 			} else {
@@ -245,13 +305,8 @@ func (s *storage) toKey(id []byte, value *map[int]any, idx int) ([]byte, error) 
 }
 
 func (s *storage) Delete(ranges map[int]*BytesRange) error {
-	selectedIndexes := make([]int, 0, len(ranges))
-	for i := range ranges {
-		if (i < len(s.metadata.collumnSpecs) && s.metadata.collumnSpecs[i].isIndexed || s.metadata.collumnSpecs[i].isUnique) || (i >= len(s.metadata.collumnSpecs) && s.metadata.computedColumnSpecs[i-len(s.metadata.collumnSpecs)].isUnique) {
-			selectedIndexes = append(selectedIndexes, i)
-		}
-	}
-	if len(selectedIndexes) == 0 {
+	shortestIndex := s.metadata.bestIndex(ranges)
+	if shortestIndex == -1 {
 		var prev []byte
 		vals := make(map[int]any)
 		c := s.dataBucket().Cursor()
@@ -279,9 +334,6 @@ func (s *storage) Delete(ranges map[int]*BytesRange) error {
 			}
 		}
 	}
-	shortestIndex := slices.MinFunc(selectedIndexes, func(a, b int) int {
-		return bytes.Compare(ranges[a].distance, ranges[b].distance)
-	})
 	chosenRange := ranges[shortestIndex]
 	var idxBytes [4]byte
 	binary.BigEndian.PutUint32(idxBytes[:], uint32(shortestIndex))
@@ -313,7 +365,7 @@ func (s *storage) Delete(ranges map[int]*BytesRange) error {
 			return err
 		}
 		// delete data
-		for i := 0; i < len(s.metadata.collumnSpecs); i++ {
+		for i := 0; i < len(s.metadata.ColumnSpecs); i++ {
 			var columnKey [12]byte
 			binary.BigEndian.PutUint64(columnKey[0:8], binary.BigEndian.Uint64(k[len(k)-8:]))
 			binary.BigEndian.PutUint32(columnKey[8:12], uint32(i))
@@ -325,17 +377,12 @@ func (s *storage) Delete(ranges map[int]*BytesRange) error {
 	return nil
 }
 
-func (s *storage) Find(ranges map[int]*BytesRange, cols map[int]bool) (iter.Seq2[*storageRow, error], error) {
-	selectedIndexes := make([]int, 0, len(ranges))
-	for i := range ranges {
-		if (i < len(s.metadata.collumnSpecs) && s.metadata.collumnSpecs[i].isIndexed || s.metadata.collumnSpecs[i].isUnique) || (i >= len(s.metadata.collumnSpecs) && s.metadata.computedColumnSpecs[i-len(s.metadata.collumnSpecs)].isUnique) {
-			selectedIndexes = append(selectedIndexes, i)
-		}
-	}
-	if len(selectedIndexes) == 0 {
-		return func(yield func(*storageRow, error) bool) {
+func (s *storage) find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex int) (iter.Seq2[*Row, error], error) {
+	shortestIndex := mainIndex
+	if shortestIndex < 0 {
+		return func(yield func(*Row, error) bool) {
 			var prev []byte
-			results := &storageRow{
+			results := &Row{
 				values: make(map[int][]byte),
 				maUn:   s.maUn,
 			}
@@ -350,7 +397,7 @@ func (s *storage) Find(ranges map[int]*BytesRange, cols map[int]bool) (iter.Seq2
 					if !yield(results, nil) {
 						return
 					}
-					results = &storageRow{
+					results = &Row{
 						values: make(map[int][]byte),
 						maUn:   s.maUn,
 					}
@@ -363,11 +410,8 @@ func (s *storage) Find(ranges map[int]*BytesRange, cols map[int]bool) (iter.Seq2
 			}
 		}, nil
 	}
-	shortestIndex := slices.MinFunc(selectedIndexes, func(a, b int) int {
-		return bytes.Compare(ranges[a].distance, ranges[b].distance)
-	})
 	chosenRange := ranges[shortestIndex]
-	return func(yield func(*storageRow, error) bool) {
+	return func(yield func(*Row, error) bool) {
 		var idxBytes [4]byte
 		binary.BigEndian.PutUint32(idxBytes[:], uint32(shortestIndex))
 		idxBucket := s.indexBucket().Bucket(idxBytes[:])
@@ -387,7 +431,7 @@ func (s *storage) Find(ranges map[int]*BytesRange, cols map[int]bool) (iter.Seq2
 		}
 		for ; k != nil && lessThan(k); k, _ = c.Next() {
 			// check range
-			result := &storageRow{
+			result := &Row{
 				values: make(map[int][]byte),
 				maUn:   s.maUn,
 			}
@@ -401,7 +445,7 @@ func (s *storage) Find(ranges map[int]*BytesRange, cols map[int]bool) (iter.Seq2
 			} else if !ok {
 				continue
 			}
-			for colIdx := range len(s.metadata.collumnSpecs) {
+			for colIdx := range len(s.metadata.ColumnSpecs) {
 				if !cols[colIdx] {
 					continue
 				}
@@ -450,8 +494,8 @@ func (s *storage) Insert(values map[int]any) error {
 		}
 	}
 	// check unique and insert indexes
-	for i, spec := range s.metadata.collumnSpecs {
-		if !(spec.isIndexed || spec.isUnique) {
+	for i, spec := range s.metadata.ColumnSpecs {
+		if !(spec.IsIndexed || spec.IsUnique) {
 			continue
 		}
 		v := values[i]
@@ -464,7 +508,10 @@ func (s *storage) Insert(values map[int]any) error {
 		var idxName [4]byte
 		binary.BigEndian.PutUint32(idxName[:], uint32(i))
 		curIdxBucket := s.indexBucket().Bucket(idxName[:])
-		if spec.isUnique {
+		if curIdxBucket == nil {
+			return ErrIndexNotFound(fmt.Sprintf("column %d", i))
+		}
+		if spec.IsUnique {
 			k, _ := curIdxBucket.Cursor().Seek(vKey)
 			if k != nil && bytes.Equal(k[:len(k)-8], vKey) {
 				return ErrUniqueConstraint(fmt.Sprintf("column %d", i), v)
@@ -477,9 +524,9 @@ func (s *storage) Insert(values map[int]any) error {
 			return err
 		}
 	}
-	for i, spec := range s.metadata.computedColumnSpecs {
-		selectedValues := make([]any, len(spec.fieldRefs))
-		for j, ref := range spec.fieldRefs {
+	for i, spec := range s.metadata.ComputedColumnSpecs {
+		selectedValues := make([]any, len(spec.FieldRefs))
+		for j, ref := range spec.FieldRefs {
 			selectedValues[j] = values[ref]
 		}
 		vKey, err := ToKey(selectedValues...)
@@ -489,9 +536,12 @@ func (s *storage) Insert(values map[int]any) error {
 		compositeKey := make([]byte, len(vKey)+8)
 		copy(compositeKey, vKey)
 		var idxName [4]byte
-		binary.BigEndian.PutUint32(idxName[:], uint32(i+len(s.metadata.collumnSpecs)))
+		binary.BigEndian.PutUint32(idxName[:], uint32(i+len(s.metadata.ColumnSpecs)))
 		curIdxBucket := s.indexBucket().Bucket(idxName[:])
-		if spec.isUnique {
+		if curIdxBucket == nil {
+			return ErrIndexNotFound(fmt.Sprintf("computed column %d", i))
+		}
+		if spec.IsUnique {
 			k, _ := curIdxBucket.Cursor().Seek(vKey)
 			if k != nil && bytes.Equal(k[:len(k)-8], vKey) {
 				return ErrUniqueConstraint(fmt.Sprintf("computed column %d", i), selectedValues)

@@ -107,6 +107,18 @@ func (tx *Tx) CreateStorage(
 	return nil
 }
 
+func (tx *Tx) LoadStorage(relation string) (*storage, error) {
+	if s, ok := tx.stores[relation]; ok {
+		return s, nil
+	}
+	s, err := loadStorage(tx.tx, relation, tx.maUn)
+	if err != nil {
+		return nil, err
+	}
+	tx.stores[relation] = s
+	return s, nil
+}
+
 func (tx *Tx) DeleteStorage(relation string) error {
 	tnx := tx.tx
 	if err := tnx.DeleteBucket([]byte(relation)); err != nil {
@@ -116,8 +128,118 @@ func (tx *Tx) DeleteStorage(relation string) error {
 	return nil
 }
 
-func (tx *Tx) Query(body QueryPart, ranges map[int]*BytesRange) iter.Seq2[map[int]any, error] {
+func (tx *Tx) LoadStoredBody(name string) (*StoredBody, error) {
+	var metadataObj storageMetadata
+	if err := loadMetadata(tx.tx, name, &metadataObj); err != nil {
+		return nil, err
+	}
+	return &StoredBody{
+		storageName: name,
+		metadata:    metadataObj,
+	}, nil
+}
 
+func (tx *Tx) Query(body QueryPart, ranges map[int]*BytesRange) (iter.Seq2[*Row, error], error) {
+	explored := make(map[bodyFilter]queryNode)
+	baseNodes := make([]*backedQueryNode, 0)
+	rootNode, err := tx.constructQueryGraph(explored, &baseNodes, body, ranges)
+	if err != nil {
+		return nil, err
+	}
+	for _, bn := range baseNodes {
+		if err := bn.propagateToParents(nil, nil); err != nil {
+			return nil, err
+		}
+	}
+	bestIndex := rootNode.metadata().bestIndex(ranges)
+	cols := make(map[int]bool, len(rootNode.ColumnSpecs()))
+	for i := range rootNode.ColumnSpecs() {
+		cols[i] = true
+	}
+	return rootNode.Find(ranges, cols, bestIndex)
+}
+
+func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *[]*backedQueryNode, body QueryPart, ranges map[int]*BytesRange) (queryNode, error) {
+	rangesStr := rangesToString(ranges)
+	bf := bodyFilter{
+		body:   body,
+		filter: rangesStr,
+	}
+	if node, ok := explored[bf]; ok {
+		return node, nil
+	}
+	switch b := body.(type) {
+	case *Head:
+		tempTx, err := tx.ensureTempTx()
+		if err != nil {
+			return nil, err
+		}
+		backingColumnSpecs := b.metadata.ColumnSpecs
+		backingFieldRefs := make([]int, len(b.metadata.ColumnSpecs))
+		for i := range backingFieldRefs {
+			backingFieldRefs[i] = i
+		}
+		backingName := fmt.Sprintf("head_backing_%p_%s", b, rangesStr)
+		backingStorage, err := newStorage(tempTx, backingName, backingColumnSpecs, []ComputedColumnSpec{{
+			FieldRefs: backingFieldRefs,
+			IsUnique:  true,
+		}}, tx.maUn)
+		result := &headQueryNode{}
+		explored[bf] = result
+		children := make([]queryNode, 0, len(b.bodies))
+		for _, bbody := range b.bodies {
+			childNode, err := tx.constructQueryGraph(explored, baseNodes, bbody, ranges)
+			if err != nil {
+				return nil, err
+			}
+			children = append(children, childNode)
+		}
+		initHeadQueryNode(result, backingStorage, b.ColumnSpecs(), b.ComputedColumnSpecs(), children)
+		return result, nil
+	case *ProjectedBody:
+		result := &projectedQueryNode{}
+		explored[bf] = result
+		childNode, err := tx.constructQueryGraph(explored, baseNodes, b.child, ranges)
+		if err != nil {
+			return nil, err
+		}
+		initProjectedQueryNode(result, childNode, b.cols, b.computedCols)
+	case *JoinedBody:
+		result := &joinedQueryNode{}
+		explored[bf] = result
+		leftRanges, rightRanges := b.splitRanges(ranges)
+		leftNode, err := tx.constructQueryGraph(explored, baseNodes, b.left, leftRanges)
+		if err != nil {
+			return nil, err
+		}
+		rightNode, err := tx.constructQueryGraph(explored, baseNodes, b.right, rightRanges)
+		if err != nil {
+			return nil, err
+		}
+		initJoinedQueryNode(result, leftNode, rightNode, b.conditions)
+		return result, nil
+	case *StoredBody:
+		result := &backedQueryNode{
+			ranges:            ranges,
+			propagatedParents: make(map[queryNode]bool),
+		}
+		explored[bf] = result
+		storage, err := loadStorage(tx.tx, b.storageName, tx.maUn)
+		if err != nil {
+			return nil, err
+		}
+		initBackedQueryNode(result, storage, ranges)
+		*baseNodes = append(*baseNodes, result)
+		return result, nil
+	default:
+		panic(fmt.Sprintf("unsupported body type: %T", body))
+	}
+	panic("unreachable")
+}
+
+type bodyFilter struct {
+	body   QueryPart
+	filter string
 }
 
 func rangesToString(ranges map[int]*BytesRange) string {

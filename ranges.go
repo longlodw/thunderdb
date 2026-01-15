@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -59,6 +60,33 @@ func NewBytesRangeFromVals(startVals, endVals []any, includeStart, includeEnd bo
 		excludes[i] = excludeKey
 	}
 	return NewBytesRange(startKey, endKey, includeStart, includeEnd, excludes), nil
+}
+
+func (ir *BytesRange) Merge(other *BytesRange) *BytesRange {
+	newStart := ir.start
+	newIncludeStart := ir.includeStart
+	if other.start != nil {
+		c := bytes.Compare(other.start, newStart)
+		if newStart == nil || c > 0 {
+			newStart = other.start
+			newIncludeStart = other.includeStart
+		} else if c == 0 {
+			newIncludeStart = newIncludeStart && other.includeStart
+		}
+	}
+	newEnd := ir.end
+	newIncludeEnd := ir.includeEnd
+	if other.end != nil {
+		c := bytes.Compare(other.end, newEnd)
+		if newEnd == nil || c < 0 {
+			newEnd = other.end
+			newIncludeEnd = other.includeEnd
+		} else if c == 0 {
+			newIncludeEnd = newIncludeEnd && other.includeEnd
+		}
+	}
+	newExcludes := append(ir.excludes, other.excludes...)
+	return NewBytesRange(newStart, newEnd, newIncludeStart, newIncludeEnd, newExcludes)
 }
 
 func (ir *BytesRange) Contains(key []byte) bool {
@@ -121,4 +149,17 @@ func (ir *BytesRange) computeDistance() []byte {
 	distance := make([]byte, len(start))
 	subtle.XORBytes(distance, end, start)
 	return distance
+}
+
+func MergeRangesMap(a, b map[int]*BytesRange) map[int]*BytesRange {
+	result := make(map[int]*BytesRange)
+	maps.Copy(result, a)
+	for k, v := range b {
+		if existing, ok := result[k]; ok {
+			result[k] = existing.Merge(v)
+		} else {
+			result[k] = v
+		}
+	}
+	return result
 }

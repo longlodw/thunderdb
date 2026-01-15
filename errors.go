@@ -34,6 +34,13 @@ func ErrFieldCountMismatch(expected, got int) error {
 	}
 }
 
+func ErrUnsupportedOperator(op Op) error {
+	return &ThunderError{
+		Code:    ErrCodeUnsupportedOperator,
+		Message: fmt.Sprintf("unsupported operator: %d", op),
+	}
+}
+
 func ErrFieldNotFound(field string) error {
 	return &ThunderError{
 		Code:    ErrCodeFieldNotFound,
