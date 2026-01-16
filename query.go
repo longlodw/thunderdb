@@ -5,6 +5,7 @@ import (
 	"iter"
 	"maps"
 	"slices"
+	// "github.com/davecgh/go-spew/spew"
 )
 
 type queryNode interface {
@@ -45,11 +46,9 @@ type headQueryNode struct {
 
 func initHeadQueryNode(result *headQueryNode, backing *storage, columns []ColumnSpec, computedColumns []ComputedColumnSpec, children []queryNode) {
 	result.backing = backing
-	result.baseQueryNode = baseQueryNode{
-		metadataObj: Metadata{
-			ColumnSpecs:         columns,
-			ComputedColumnSpecs: computedColumns,
-		},
+	result.baseQueryNode.metadataObj = Metadata{
+		ColumnSpecs:         columns,
+		ComputedColumnSpecs: computedColumns,
 	}
 	for _, child := range children {
 		child.AddParent(result)
@@ -61,6 +60,12 @@ func (n *headQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, main
 }
 
 func (n *headQueryNode) propagateToParents(row *Row, child queryNode) error {
+	/*
+		fmt.Printf("DEBUG: headQueryNode.propagateToParents %p. Parents: %d. Row: %v\n", n, len(n.parents), spew.Sdump(row.values))
+		for i, p := range n.parents {
+			fmt.Printf("DEBUG: Head Parent %d: %T %p\n", i, p, p)
+		}
+	*/
 	values := make(map[int]any)
 	for k, v := range row.Iter() {
 		if v.err != nil {
@@ -74,6 +79,9 @@ func (n *headQueryNode) propagateToParents(row *Row, child queryNode) error {
 		}
 		return err
 	}
+
+	// fmt.Printf("HeadNode %p stored: %v\n", n, values)
+
 	for _, parent := range n.parents {
 		if err := parent.propagateToParents(row, n); err != nil {
 			return err
@@ -93,11 +101,9 @@ func initJoinedQueryNode(result *joinedQueryNode, left, right queryNode, conditi
 	result.left = left
 	result.right = right
 	result.conditions = conditions
-	result.baseQueryNode = baseQueryNode{
-		metadataObj: Metadata{
-			ColumnSpecs:         append(slices.Clone(left.ColumnSpecs()), right.ColumnSpecs()...),
-			ComputedColumnSpecs: append(slices.Clone(left.ComputedColumnSpecs()), right.ComputedColumnSpecs()...),
-		},
+	result.baseQueryNode.metadataObj = Metadata{
+		ColumnSpecs:         append(slices.Clone(left.ColumnSpecs()), right.ColumnSpecs()...),
+		ComputedColumnSpecs: append(slices.Clone(left.ComputedColumnSpecs()), right.ComputedColumnSpecs()...),
 	}
 	left.AddParent(result)
 	right.AddParent(result)
@@ -116,7 +122,9 @@ func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 			return nil, ErrFieldNotFound(fmt.Sprintf("column %d", k))
 		}
 	}
-	if mainIndex < len(n.left.ColumnSpecs()) || (mainIndex >= len(n.metadata().ColumnSpecs) && mainIndex < len(n.metadata().ColumnSpecs)+len(n.left.ComputedColumnSpecs())) {
+	if mainIndex < len(n.left.ColumnSpecs()) ||
+		(mainIndex >= len(n.metadata().ColumnSpecs) &&
+			mainIndex < len(n.metadata().ColumnSpecs)+len(n.left.ComputedColumnSpecs())) {
 		if mainIndex >= len(n.metadata().ColumnSpecs) {
 			mainIndex = mainIndex - len(n.metadata().ColumnSpecs) + len(n.left.ColumnSpecs())
 		}
@@ -124,7 +132,6 @@ func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 		if err != nil {
 			return nil, err
 		}
-		rightMainIndex := n.right.metadata().bestIndex(rightRanges)
 		return func(yield func(*Row, error) bool) {
 			for leftRow, err := range leftSeq {
 				if err != nil {
@@ -141,6 +148,7 @@ func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 					continue
 				}
 				mergedRightRanges := MergeRangesMap(rightRanges, rowRightRanges)
+				rightMainIndex := n.right.metadata().bestIndex(mergedRightRanges)
 				rightSeq, err := n.right.Find(mergedRightRanges, rightCols, rightMainIndex)
 				if err != nil {
 					if !yield(nil, err) {
@@ -172,7 +180,6 @@ func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 	if err != nil {
 		return nil, err
 	}
-	leftMainIndex := n.left.metadata().bestIndex(leftRanges)
 	return func(yield func(*Row, error) bool) {
 		for rightRow, err := range rightSeq {
 			if err != nil {
@@ -189,6 +196,7 @@ func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 				continue
 			}
 			mergedLeftRanges := MergeRangesMap(leftRanges, rowLeftRanges)
+			leftMainIndex := n.left.metadata().bestIndex(mergedLeftRanges)
 			leftSeq, err := n.left.Find(mergedLeftRanges, leftCols, leftMainIndex)
 			if err != nil {
 				if !yield(nil, err) {
@@ -330,11 +338,14 @@ func (n *joinedQueryNode) splitRanges(ranges map[int]*BytesRange) (map[int]*Byte
 }
 
 func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
-	if child == n.left {
+	// fmt.Printf("DEBUG: JoinedNode %p propagate. Child: %p (Left: %p, Right: %p)\n", n, child, n.left, n.right)
+	switch child {
+	case n.left:
 		rightRanges, err := n.ComputeRangeForRight(row)
 		if err != nil {
 			return err
 		}
+		// fmt.Printf("DEBUG: Join Left->Right. Row: %v. Ranges: %v\n", spew.Sdump(row.values), rightRanges)
 		bestIndexRight := n.right.metadata().bestIndex(rightRanges)
 		cols := make(map[int]bool)
 		for k := range n.right.ColumnSpecs() {
@@ -352,17 +363,19 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 			if err != nil {
 				return err
 			}
-			for parent := range n.left.(*backedQueryNode).propagatedParents {
+			// Propagate to JOIN's parents, not left's parents
+			for _, parent := range n.parents {
 				if err := parent.propagateToParents(joinedRow, n); err != nil {
 					return err
 				}
 			}
 		}
-	} else if child == n.right {
+	case n.right:
 		leftRanges, err := n.ComputeRangeForLeft(row)
 		if err != nil {
 			return err
 		}
+		// fmt.Printf("DEBUG: Join Right->Left. Row: %v. Ranges: %v\n", spew.Sdump(row.values), leftRanges)
 		bestIndexLeft := n.left.metadata().bestIndex(leftRanges)
 		cols := make(map[int]bool)
 		for k := range n.left.ColumnSpecs() {
@@ -372,20 +385,27 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 		if err != nil {
 			return err
 		}
+		count := 0
 		for leftRow, err := range leftSeq {
+			count++
 			if err != nil {
 				return err
 			}
-			joinedRow, err := n.joinRows(row, leftRow)
+			// fmt.Printf("DEBUG: Join Match Found! LeftRow: %v\n", spew.Sdump(leftRow.values))
+			joinedRow, err := n.joinRows(leftRow, row)
 			if err != nil {
 				return err
 			}
-			for parent := range n.left.(*backedQueryNode).propagatedParents {
+			// Propagate to JOIN's parents, not left's parents
+			for _, parent := range n.parents {
 				if err := parent.propagateToParents(joinedRow, n); err != nil {
 					return err
 				}
 			}
 		}
+		// fmt.Printf("DEBUG: Join Right->Left Found %d matches\n", count)
+	default:
+		panic("unknown child in joinedQueryNode.propagateToParents")
 	}
 	return nil
 }
@@ -401,11 +421,9 @@ func initProjectedQueryNode(result *projectedQueryNode, child queryNode, columns
 	result.child = child
 	result.columns = columns
 	result.computedColumns = computedColumns
-	result.baseQueryNode = baseQueryNode{
-		metadataObj: Metadata{
-			ColumnSpecs:         make([]ColumnSpec, len(columns)),
-			ComputedColumnSpecs: make([]ComputedColumnSpec, len(computedColumns)),
-		},
+	result.baseQueryNode.metadataObj = Metadata{
+		ColumnSpecs:         make([]ColumnSpec, len(columns)),
+		ComputedColumnSpecs: make([]ComputedColumnSpec, len(computedColumns)),
 	}
 	child.AddParent(result)
 }
@@ -454,15 +472,14 @@ func (n *projectedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool,
 				values: make(map[int][]byte),
 				maUn:   childRow.maUn,
 			}
-			for _, col := range n.columns {
-				if val, ok := childRow.values[col]; ok {
-					newRow.values[col] = val
+			for col := range cols {
+				if col >= len(n.columns) {
+					if !yield(nil, ErrFieldNotFound(fmt.Sprintf("column %d", col))) {
+						return
+					}
+					continue
 				}
-			}
-			for _, col := range n.computedColumns {
-				if val, ok := childRow.values[col+len(n.child.ColumnSpecs())]; ok {
-					newRow.values[col+len(n.columns)] = val
-				}
+				newRow.values[col] = childRow.values[n.columns[col]]
 			}
 			if !yield(newRow, nil) {
 				return
@@ -492,9 +509,8 @@ func (n *projectedQueryNode) propagateToParents(row *Row, child queryNode) error
 }
 
 type backedQueryNode struct {
-	ranges            map[int]*BytesRange
-	backing           *storage
-	propagatedParents map[queryNode]bool
+	ranges  map[int]*BytesRange
+	backing *storage
 	baseQueryNode
 	explored bool
 }
@@ -502,10 +518,7 @@ type backedQueryNode struct {
 func initBackedQueryNode(result *backedQueryNode, backing *storage, ranges map[int]*BytesRange) {
 	result.ranges = ranges
 	result.backing = backing
-	result.propagatedParents = make(map[queryNode]bool)
-	result.baseQueryNode = baseQueryNode{
-		metadataObj: backing.metadata,
-	}
+	result.baseQueryNode.metadataObj = backing.metadata
 }
 
 func (n *backedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex int) (iter.Seq2[*Row, error], error) {
@@ -518,6 +531,7 @@ func (n *backedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 }
 
 func (n *backedQueryNode) propagateToParents(*Row, queryNode) error {
+	// fmt.Printf("DEBUG: backedQueryNode.propagateToParents %p explored=%v\n", n, n.explored)
 	if n.explored {
 		return nil
 	}
@@ -535,7 +549,7 @@ func (n *backedQueryNode) propagateToParents(*Row, queryNode) error {
 		if err != nil {
 			return err
 		}
-		for parent := range n.propagatedParents {
+		for _, parent := range n.parents {
 			if err := parent.propagateToParents(row, n); err != nil {
 				return err
 			}

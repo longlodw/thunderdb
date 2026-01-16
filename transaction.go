@@ -130,7 +130,7 @@ func (tx *Tx) loadStorage(relation string) (*storage, error) {
 
 func (tx *Tx) DeleteStorage(relation string) error {
 	tnx := tx.tx
-	if err := tnx.DeleteBucket([]byte(relation)); err != nil {
+	if err := deleteStorage(tnx, relation); err != nil {
 		return err
 	}
 	delete(tx.stores, relation)
@@ -164,6 +164,7 @@ func (tx *Tx) Query(body QueryPart, ranges map[int]*BytesRange) (iter.Seq2[*Row,
 		return nil, err
 	}
 	for _, bn := range baseNodes {
+		// fmt.Printf("Propagating from base node %p\n", bn)
 		if err := bn.propagateToParents(nil, nil); err != nil {
 			return nil, err
 		}
@@ -178,6 +179,7 @@ func (tx *Tx) Query(body QueryPart, ranges map[int]*BytesRange) (iter.Seq2[*Row,
 
 func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *[]*backedQueryNode, body QueryPart, ranges map[int]*BytesRange) (queryNode, error) {
 	rangesStr := rangesToString(ranges)
+	// fmt.Printf("DEBUG: constructQueryGraph visiting %T (%p) Ranges: %s\n", body, body, rangesStr)
 	bf := bodyFilter{
 		body:   body,
 		filter: rangesStr,
@@ -197,6 +199,8 @@ func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *
 			backingFieldRefs[i] = i
 		}
 		backingName := fmt.Sprintf("head_backing_%p_%s", b, rangesStr)
+		// fmt.Printf("DEBUG: constructQueryGraph Head NEW for %p. BackingName: %s\n", b, backingName)
+
 		backingStorage, err := newStorage(tempTx, backingName, backingColumnSpecs, []ComputedColumnSpec{{
 			FieldRefs: backingFieldRefs,
 			IsUnique:  true,
@@ -216,7 +220,20 @@ func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *
 	case *ProjectedBody:
 		result := &projectedQueryNode{}
 		explored[bf] = result
-		childNode, err := tx.constructQueryGraph(explored, baseNodes, b.child, ranges)
+
+		childRanges := make(map[int]*BytesRange)
+		for field, r := range ranges {
+			if field < len(b.cols) {
+				childRanges[b.cols[field]] = r
+			} else if field < len(b.cols)+len(b.computedCols) {
+				childIndex := b.computedCols[field-len(b.cols)] + len(b.child.ColumnSpecs())
+				childRanges[childIndex] = r
+			} else {
+				return nil, ErrFieldNotFound(fmt.Sprintf("column %d", field))
+			}
+		}
+
+		childNode, err := tx.constructQueryGraph(explored, baseNodes, b.child, childRanges)
 		if err != nil {
 			return nil, err
 		}
@@ -238,8 +255,7 @@ func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *
 		return result, nil
 	case *StoredBody:
 		result := &backedQueryNode{
-			ranges:            ranges,
-			propagatedParents: make(map[queryNode]bool),
+			ranges: ranges,
 		}
 		explored[bf] = result
 		storage, err := loadStorage(tx.tx, b.storageName, tx.maUn)
