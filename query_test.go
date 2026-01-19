@@ -3,6 +3,7 @@ package thunderdb
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func setupTestDBForQuery(t *testing.T) (*DB, func()) {
@@ -148,4 +149,337 @@ func TestQuery_Basic(t *testing.T) {
 	if count != 1 {
 		t.Errorf("Expected 1 result, got %d", count)
 	}
+}
+
+func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	// 1. Setup Data
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Schema
+	// users: u_id(0), u_name(1), group_id(2)
+	err = tx.CreateStorage("users", 3, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// admins: u_id(0), u_name(1), group_id(2)
+	err = tx.CreateStorage("admins", 3, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// groups: group_id(0), g_name(1), org_id(2)
+	err = tx.CreateStorage("groups", 3, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// orgs: org_id(0), o_name(1), region(2)
+	err = tx.CreateStorage("orgs", 3, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert Data
+	// Orgs
+	tx.Insert("orgs", map[int]any{0: "o1", 1: "TechCorp", 2: "North"})
+	tx.Insert("orgs", map[int]any{0: "o2", 1: "BizInc", 2: "South"})
+
+	// Groups
+	tx.Insert("groups", map[int]any{0: "g1", 1: "Dev", 2: "o1"})   // North
+	tx.Insert("groups", map[int]any{0: "g2", 1: "Sales", 2: "o2"}) // South
+
+	// Users
+	tx.Insert("users", map[int]any{0: "u1", 1: "Alice", 2: "g1"}) // North
+	tx.Insert("users", map[int]any{0: "u2", 1: "Bob", 2: "g2"})   // South
+
+	// Admins
+	tx.Insert("admins", map[int]any{0: "a1", 1: "Charlie", 2: "g1"}) // North
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Build Query
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	users, _ := tx.LoadStoredBody("users")
+	admins, _ := tx.LoadStoredBody("admins")
+	groups, _ := tx.LoadStoredBody("groups")
+	orgs, _ := tx.LoadStoredBody("orgs")
+
+	// Nested Query: qGroupsOrgs (Groups + Orgs)
+	// Groups: 0:group_id, 1:g_name, 2:org_id
+	// Orgs: 0:org_id, 1:o_name, 2:region
+	// Join condition: groups.org_id (2) == orgs.org_id (0)
+	qGroupsOrgs, err := groups.Join(orgs, []JoinOn{
+		{leftField: 2, rightField: 0, operator: EQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Result Cols: 0-2 (groups), 3-5 (orgs).
+	// Org Region is at index 3+2 = 5.
+
+	// Branch 1: Users + qGroupsOrgs
+	// Users: 0:u_id, 1:u_name, 2:group_id
+	// qGroupsOrgs: 0-2 (groups), 3-5 (orgs) -> will become 3-8 in final
+	// Join condition: users.group_id (2) == groups.group_id (0 from right side)
+	branch1, err := users.Join(qGroupsOrgs, []JoinOn{
+		{leftField: 2, rightField: 0, operator: EQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Branch 1 Schema indices:
+	// Users: 0, 1, 2
+	// Groups: 3, 4, 5
+	// Orgs: 6, 7, 8
+	// Region is at 8.
+
+	// Branch 2: Admins + qGroupsOrgs
+	// Admins: 0:u_id, 1:u_name, 2:group_id
+	// Same structure.
+	branch2, err := admins.Join(qGroupsOrgs, []JoinOn{
+		{leftField: 2, rightField: 0, operator: EQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Select Region="North"
+	// Should return Alice (user) and Charlie (admin)
+	key, err := ToKey("North")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := map[int]*Range{
+		8: func() *Range {
+			r, _ := NewRangeFromBytes(key, key, true, true)
+			return r
+		}(), // Region is at index 8
+	}
+
+	seq, err := tx.Select(branch1, nil, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results := make([]string, 0)
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		var name string
+		row.Get(1, &name) // u_name
+		results = append(results, name)
+	}
+
+	seq2, err := tx.Select(branch2, nil, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for row, err := range seq2 {
+		if err != nil {
+			t.Fatal(err)
+		}
+		var name string
+		row.Get(1, &name) // u_name
+		results = append(results, name)
+	}
+
+	// Verify results directly (expecting exactly 2 results, no duplicates)
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d. Raw results: %v", len(results), results)
+	}
+
+	names := make(map[string]bool)
+	for _, name := range results {
+		names[name] = true
+	}
+
+	if !names["Alice"] {
+		t.Error("Expected Alice in results")
+	}
+	if !names["Charlie"] {
+		t.Error("Expected Charlie in results")
+	}
+}
+
+func TestQuery_Recursive_Cycle(t *testing.T) {
+	// Enforce a timeout to detect infinite loops
+	done := make(chan bool)
+	go func() {
+		testQuery_Recursive_Cycle_Body(t)
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		// Test completed
+	case <-time.After(2 * time.Second):
+		t.Fatal("Test timed out - likely infinite recursion loop due to cycle")
+	}
+}
+
+func testQuery_Recursive_Cycle_Body(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// 1. Setup Schema: Node (source, target)
+	// Graph: A -> B -> A (Cycle)
+	nodesRel := "nodes"
+	// 0: source, 1: target
+	err = tx.CreateStorage(nodesRel, 2, []IndexInfo{
+		{ReferencedCols: []int{0, 1}, IsUnique: true}, // (source, target) unique
+		{ReferencedCols: []int{0}, IsUnique: false},    // index on source
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Insert Data (Cycle)
+	// A -> B
+	if err := tx.Insert(nodesRel, map[int]any{0: "A", 1: "B"}); err != nil {
+		t.Fatal(err)
+	}
+	// B -> A
+	if err := tx.Insert(nodesRel, map[int]any{0: "B", 1: "A"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	nodes, err := tx.LoadStoredBody(nodesRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Define Recursive Query: "Reach(source, target)"
+	// reach(X, Y) :- nodes(X, Y).
+	// reach(X, Z) :- reach(X, Y), nodes(Y, Z).
+
+	// Reach schema: source(0), target(1)
+	qReach, err := NewHeadQuery(2, []IndexInfo{
+		{ReferencedCols: []int{0, 1}, IsUnique: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Body 1: Base Case
+	// reach(X, Y) :- nodes(X, Y).
+	// Project nodes(0,1) -> reach(0,1)
+	baseProj, err := nodes.Project([]int{0, 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Body 2: Recursive Case (Left Recursion)
+	// reach(X, Z) :- reach(X, Y), nodes(Y, Z).
+	// Join on Y: reach.target (1) == nodes.source (0)
+	
+	// Join condition: qReach.col1 == nodes.col0
+	recJoin, err := qReach.Join(nodes, []JoinOn{
+		{leftField: 1, rightField: 0, operator: EQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Result of Join:
+	// 0: reach.source (X)
+	// 1: reach.target (Y)
+	// 2: nodes.source (Y)
+	// 3: nodes.target (Z)
+	
+	// We want Reach(X, Z) -> project cols 0 and 3
+	recProj, err := recJoin.Project([]int{0, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bind the bodies to the HeadQuery
+	qReach.Bind([]Query{baseProj, recProj})
+
+	// 4. Execution
+	// Find all reachable nodes from A.
+	// Expected: A -> B, B -> A, so reachable: B, A.
+	// If cycle is not handled, this will loop A->B->A->B...
+	key, err := ToKey("A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := map[int]*Range{
+		0: func() *Range {
+			r, _ := NewRangeFromBytes(key, key, true, true)
+			return r
+		}(), // source is at index 0
+	}
+	
+	seq, err := tx.Select(qReach, nil, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	count := 0
+	results := make([]string, 0)
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+		
+		var target string
+		if err := row.Get(1, &target); err != nil {
+			t.Fatalf("failed to get target: %v", err)
+		}
+		results = append(results, target)
+	}
+
+	// We expect at least 2 results (A->B, A->A).
+	// Standard Datalog usually implies Set semantics, so 2 results if uniqueness is handled.
+	// If Bag semantics (or just naive loop), it could be infinite, but we have a timeout.
+	// Since we defined a Unique Index on qReach (source, target), duplicates should be suppressed 
+	// by the backing storage of the HeadQuery node if implemented correctly.
+	
+	if count < 2 {
+		t.Errorf("Expected at least 2 reachable paths, got %d. Results: %v", count, results)
+	}
+	
+	foundA := false
+	foundB := false
+	for _, res := range results {
+		if res == "A" { foundA = true }
+		if res == "B" { foundB = true }
+	}
+	if !foundA { t.Error("Expected A to be reachable from A (A->B->A)") }
+	if !foundB { t.Error("Expected B to be reachable from A (A->B)") }
 }
