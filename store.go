@@ -228,9 +228,10 @@ func (s *storage) Delete(equals map[int]*Value, ranges map[int]*Range, excludes 
 				return err
 			}
 		}
+		return nil
 	}
-	var idxBytes [4]byte
-	binary.BigEndian.PutUint32(idxBytes[:], uint32(shortestIndex))
+	var idxBytes [8]byte
+	binary.BigEndian.PutUint64(idxBytes[:], shortestIndex)
 	idxBucket := s.indexBucket().Bucket(idxBytes[:])
 	c := idxBucket.Cursor()
 	var k []byte
@@ -413,7 +414,7 @@ func (s *storage) inRanges(id []byte, vals *map[int]any, equals map[int]*Value, 
 		if err != nil {
 			return false, err
 		}
-		kVals := ValueOfRaw(kBytes, orderedMaUn)
+		kVals := ValueOfRaw(kBytes, s.maUn)
 		if con, err := kr.Contains(kVals); err != nil {
 			return false, err
 		} else if !con {
