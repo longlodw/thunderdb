@@ -96,14 +96,19 @@ func (tx *Tx) ID() int {
 
 func (tx *Tx) CreateStorage(
 	relation string,
-	columnSpecs []ColumnSpec,
-	computedColumnSpecs []ComputedColumnSpec,
+	columnCount int,
+	indexInfos []IndexInfo,
 ) error {
-	s, err := newStorage(tx.tx, relation, columnSpecs, computedColumnSpecs, tx.maUn)
-	if err != nil {
+	var metadataObj Metadata
+	if err := initStoredMetadata(&metadataObj, columnCount, indexInfos); err != nil {
 		return err
 	}
-	tx.stores[relation] = s
+	if err := initStoredMetadata(&metadataObj, columnCount, indexInfos); err != nil {
+		return err
+	}
+	if _, err := newStorage(tx.tx, relation, metadataObj.ColumnsCount, metadataObj.Indexes, tx.maUn); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -156,10 +161,15 @@ func (tx *Tx) LoadMetadata(relation string) (*Metadata, error) {
 	return &metadataObj, nil
 }
 
-func (tx *Tx) Query(body QueryPart, ranges map[int]*BytesRange) (iter.Seq2[*Row, error], error) {
+func (tx *Tx) Query(
+	body QueryPart,
+	equals map[int]*Value,
+	ranges map[int]*BytesRange,
+	exclusion map[int][]*Value,
+) (iter.Seq2[*Row, error], error) {
 	explored := make(map[bodyFilter]queryNode)
 	baseNodes := make([]*backedQueryNode, 0)
-	rootNode, err := tx.constructQueryGraph(explored, &baseNodes, body, ranges)
+	rootNode, err := tx.constructQueryGraph(explored, &baseNodes, body, equals, ranges, exclusion)
 	if err != nil {
 		return nil, err
 	}
@@ -169,15 +179,25 @@ func (tx *Tx) Query(body QueryPart, ranges map[int]*BytesRange) (iter.Seq2[*Row,
 			return nil, err
 		}
 	}
-	bestIndex := rootNode.metadata().bestIndex(ranges)
-	cols := make(map[int]bool, len(rootNode.ColumnSpecs()))
-	for i := range rootNode.ColumnSpecs() {
+	bestIndex, bestIndexRange, err := rootNode.metadata().bestIndex(equals, ranges)
+	if err != nil {
+		return nil, err
+	}
+	cols := make(map[int]bool, rootNode.metadata().ColumnsCount)
+	for i := range rootNode.metadata().ColumnsCount {
 		cols[i] = true
 	}
-	return rootNode.Find(ranges, cols, bestIndex)
+	return rootNode.Find(bestIndex, bestIndexRange, equals, ranges, exclusion, cols)
 }
 
-func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *[]*backedQueryNode, body QueryPart, ranges map[int]*BytesRange) (queryNode, error) {
+func (tx *Tx) constructQueryGraph(
+	explored map[bodyFilter]queryNode,
+	baseNodes *[]*backedQueryNode,
+	body QueryPart,
+	equals map[int]*Value,
+	ranges map[int]*BytesRange,
+	exclusion map[int][]*Value,
+) (queryNode, error) {
 	rangesStr := rangesToString(ranges)
 	// fmt.Printf("DEBUG: constructQueryGraph visiting %T (%p) Ranges: %s\n", body, body, rangesStr)
 	bf := bodyFilter{
@@ -193,61 +213,76 @@ func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *
 		if err != nil {
 			return nil, err
 		}
-		backingColumnSpecs := b.metadata.ColumnSpecs
-		backingFieldRefs := make([]int, len(b.metadata.ColumnSpecs))
-		for i := range backingFieldRefs {
-			backingFieldRefs[i] = i
+		allBacking := uint64(0)
+		for i := range b.Metadata().ColumnsCount {
+			allBacking |= (1 << uint64(i))
 		}
 		backingName := fmt.Sprintf("head_backing_%p_%s", b, rangesStr)
+		indexes := maps.Clone(b.Metadata().Indexes)
+		indexes[allBacking] = true
 		// fmt.Printf("DEBUG: constructQueryGraph Head NEW for %p. BackingName: %s\n", b, backingName)
 
-		backingStorage, err := newStorage(tempTx, backingName, backingColumnSpecs, []ComputedColumnSpec{{
-			FieldRefs: backingFieldRefs,
-			IsUnique:  true,
-		}}, tx.maUn)
+		backingStorage, err := newStorage(
+			tempTx,
+			backingName,
+			b.Metadata().ColumnsCount,
+			indexes,
+			tx.maUn,
+		)
+		if err != nil {
+			return nil, err
+		}
 		result := &headQueryNode{}
 		explored[bf] = result
 		children := make([]queryNode, 0, len(b.bodies))
 		for _, bbody := range b.bodies {
-			childNode, err := tx.constructQueryGraph(explored, baseNodes, bbody, ranges)
+			childNode, err := tx.constructQueryGraph(explored, baseNodes, bbody, equals, ranges, exclusion)
 			if err != nil {
 				return nil, err
 			}
 			children = append(children, childNode)
 		}
-		initHeadQueryNode(result, backingStorage, b.ColumnSpecs(), b.ComputedColumnSpecs(), children)
+		initHeadQueryNode(result, backingStorage, children)
 		return result, nil
 	case *ProjectedBody:
 		result := &projectedQueryNode{}
 		explored[bf] = result
 
+		childEquals := make(map[int]*Value)
+		for field, v := range equals {
+			if field < len(b.cols) {
+				childEquals[b.cols[field]] = v
+			}
+		}
 		childRanges := make(map[int]*BytesRange)
 		for field, r := range ranges {
 			if field < len(b.cols) {
 				childRanges[b.cols[field]] = r
-			} else if field < len(b.cols)+len(b.computedCols) {
-				childIndex := b.computedCols[field-len(b.cols)] + len(b.child.ColumnSpecs())
-				childRanges[childIndex] = r
-			} else {
-				return nil, ErrFieldNotFound(fmt.Sprintf("column %d", field))
 			}
 		}
-
-		childNode, err := tx.constructQueryGraph(explored, baseNodes, b.child, childRanges)
+		childExclusion := make(map[int][]*Value)
+		for field, vals := range exclusion {
+			if field < len(b.cols) {
+				childExclusion[b.cols[field]] = vals
+			}
+		}
+		childNode, err := tx.constructQueryGraph(explored, baseNodes, b.child, childEquals, childRanges, childExclusion)
 		if err != nil {
 			return nil, err
 		}
-		initProjectedQueryNode(result, childNode, b.cols, b.computedCols)
+		initProjectedQueryNode(result, childNode, b.cols)
 		return result, nil
 	case *JoinedBody:
 		result := &joinedQueryNode{}
 		explored[bf] = result
-		leftRanges, rightRanges := b.splitRanges(ranges)
-		leftNode, err := tx.constructQueryGraph(explored, baseNodes, b.left, leftRanges)
+		equalsLeft, equalsRight := splitEquals(b.left.Metadata(), b.right.Metadata(), equals)
+		rangesLeft, rangesRight := splitRanges(b.left.Metadata(), b.right.Metadata(), ranges)
+		exclusionLeft, exclusionRight := splitExclusion(b.left.Metadata(), b.right.Metadata(), exclusion)
+		leftNode, err := tx.constructQueryGraph(explored, baseNodes, b.left, equalsLeft, rangesLeft, exclusionLeft)
 		if err != nil {
 			return nil, err
 		}
-		rightNode, err := tx.constructQueryGraph(explored, baseNodes, b.right, rightRanges)
+		rightNode, err := tx.constructQueryGraph(explored, baseNodes, b.right, equalsRight, rangesRight, exclusionRight)
 		if err != nil {
 			return nil, err
 		}
@@ -262,7 +297,7 @@ func (tx *Tx) constructQueryGraph(explored map[bodyFilter]queryNode, baseNodes *
 		if err != nil {
 			return nil, err
 		}
-		initBackedQueryNode(result, storage, ranges)
+		initBackedQueryNode(result, storage, equals, ranges, exclusion)
 		*baseNodes = append(*baseNodes, result)
 		return result, nil
 	default:

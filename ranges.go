@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 )
 
 type BytesRange struct {
@@ -14,19 +13,17 @@ type BytesRange struct {
 	includeEnd   bool
 	start        []byte
 	end          []byte
-	excludes     [][]byte
 	distance     []byte
 }
 
 func ToKey(values ...any) ([]byte, error) {
-	return orderedMa.Marshal(values)
+	return orderedMaUn.Marshal(values)
 }
 
-func NewBytesRange(startKey, endKey []byte, includeStart, includeEnd bool, excludes [][]byte) *BytesRange {
+func NewBytesRange(startKey, endKey []byte, includeStart, includeEnd bool) *BytesRange {
 	res := &BytesRange{
 		start:        startKey,
 		end:          endKey,
-		excludes:     excludes,
 		includeStart: includeStart,
 		includeEnd:   includeEnd,
 	}
@@ -34,32 +31,24 @@ func NewBytesRange(startKey, endKey []byte, includeStart, includeEnd bool, exclu
 	return res
 }
 
-func NewBytesRangeFromVals(startVals, endVals []any, includeStart, includeEnd bool, excludeVals [][]any) (*BytesRange, error) {
+func NewBytesRangeFromVals(startVals, endVals any, includeStart, includeEnd bool) (*BytesRange, error) {
 	var startKey []byte = nil
-	if len(startVals) > 0 {
+	if startVals != nil {
 		var err error
-		startKey, err = ToKey(startVals...)
+		startKey, err = ToKey(startVals)
 		if err != nil {
 			return nil, err
 		}
 	}
 	var endKey []byte = nil
-	if len(endVals) > 0 {
+	if endVals != nil {
 		var err error
-		endKey, err = ToKey(endVals...)
+		endKey, err = ToKey(endVals)
 		if err != nil {
 			return nil, err
 		}
 	}
-	excludes := make([][]byte, len(excludeVals))
-	for i, vals := range excludeVals {
-		excludeKey, err := ToKey(vals...)
-		if err != nil {
-			return nil, err
-		}
-		excludes[i] = excludeKey
-	}
-	return NewBytesRange(startKey, endKey, includeStart, includeEnd, excludes), nil
+	return NewBytesRange(startKey, endKey, includeStart, includeEnd), nil
 }
 
 func (ir *BytesRange) Merge(other *BytesRange) *BytesRange {
@@ -85,8 +74,7 @@ func (ir *BytesRange) Merge(other *BytesRange) *BytesRange {
 			newIncludeEnd = newIncludeEnd && other.includeEnd
 		}
 	}
-	newExcludes := append(ir.excludes, other.excludes...)
-	return NewBytesRange(newStart, newEnd, newIncludeStart, newIncludeEnd, newExcludes)
+	return NewBytesRange(newStart, newEnd, newIncludeStart, newIncludeEnd)
 }
 
 func (ir *BytesRange) Contains(key []byte) bool {
@@ -102,31 +90,16 @@ func (ir *BytesRange) Contains(key []byte) bool {
 			return false
 		}
 	}
-	return !ir.doesExclude(key)
+	return true
 }
 
 func (ir *BytesRange) ToString() string {
-	excludesStrs := make([]string, len(ir.excludes))
-	for i, ex := range ir.excludes {
-		excludesStrs[i] = string(ex)
-	}
-	slices.Sort(excludesStrs)
 	return fmt.Sprintf("%v|%v|%v|%v|[%s]",
 		ir.start,
 		ir.end,
 		ir.includeStart,
 		ir.includeEnd,
-		strings.Join(excludesStrs, ","),
 	)
-}
-
-func (ir *BytesRange) doesExclude(key []byte) bool {
-	for _, exKey := range ir.excludes {
-		if bytes.Equal(key, exKey) {
-			return true
-		}
-	}
-	return false
 }
 
 func (ir *BytesRange) computeDistance() []byte {

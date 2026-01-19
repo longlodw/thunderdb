@@ -4,15 +4,12 @@ import (
 	"fmt"
 	"iter"
 	"maps"
-	"slices"
 	// "github.com/davecgh/go-spew/spew"
 )
 
 type queryNode interface {
 	AddParent(parent queryNode)
-	Find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex int) (iter.Seq2[*Row, error], error)
-	ColumnSpecs() []ColumnSpec
-	ComputedColumnSpecs() []ComputedColumnSpec
+	Find(mainIndex uint64, indexRange *BytesRange, equals map[int]*Value, ranges map[int]*BytesRange, exclusion map[int][]*Value, cols map[int]bool) (iter.Seq2[*Row, error], error)
 	metadata() *Metadata
 	propagateToParents(row *Row, child queryNode) error
 }
@@ -26,14 +23,6 @@ func (n *baseQueryNode) AddParent(parent queryNode) {
 	n.parents = append(n.parents, parent)
 }
 
-func (n *baseQueryNode) ColumnSpecs() []ColumnSpec {
-	return n.metadata().ColumnSpecs
-}
-
-func (n *baseQueryNode) ComputedColumnSpecs() []ComputedColumnSpec {
-	return n.metadata().ComputedColumnSpecs
-}
-
 func (n *baseQueryNode) metadata() *Metadata {
 	return &n.metadataObj
 }
@@ -44,19 +33,26 @@ type headQueryNode struct {
 	baseQueryNode
 }
 
-func initHeadQueryNode(result *headQueryNode, backing *storage, columns []ColumnSpec, computedColumns []ComputedColumnSpec, children []queryNode) {
+func initHeadQueryNode(result *headQueryNode, backing *storage, children []queryNode) {
 	result.backing = backing
 	result.baseQueryNode.metadataObj = Metadata{
-		ColumnSpecs:         columns,
-		ComputedColumnSpecs: computedColumns,
+		ColumnsCount: backing.metadata.ColumnsCount,
+		Indexes:      backing.metadata.Indexes,
 	}
 	for _, child := range children {
 		child.AddParent(result)
 	}
 }
 
-func (n *headQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex int) (iter.Seq2[*Row, error], error) {
-	return n.backing.find(ranges, cols, mainIndex)
+func (n *headQueryNode) Find(
+	mainIndex uint64,
+	indexRange *BytesRange,
+	equals map[int]*Value,
+	ranges map[int]*BytesRange,
+	exclusion map[int][]*Value,
+	cols map[int]bool,
+) (iter.Seq2[*Row, error], error) {
+	return n.backing.find(mainIndex, indexRange, equals, ranges, exclusion, cols)
 }
 
 func (n *headQueryNode) propagateToParents(row *Row, child queryNode) error {
@@ -67,11 +63,12 @@ func (n *headQueryNode) propagateToParents(row *Row, child queryNode) error {
 		}
 	*/
 	values := make(map[int]any)
-	for k, v := range row.Iter() {
-		if v.err != nil {
-			return v.err
+	for k, val := range row.Iter() {
+		v, err := val.GetValue()
+		if err != nil {
+			return err
 		}
-		values[k] = v.value
+		values[k] = v
 	}
 	if err := n.backing.Insert(values); err != nil {
 		if terr, ok := err.(*ThunderError); ok && terr.Code == ErrCodeUniqueConstraint {
@@ -97,38 +94,32 @@ type joinedQueryNode struct {
 	baseQueryNode
 }
 
-func initJoinedQueryNode(result *joinedQueryNode, left, right queryNode, conditions []JoinOn) {
+func initJoinedQueryNode(result *joinedQueryNode, left, right queryNode, conditions []JoinOn) error {
 	result.left = left
 	result.right = right
 	result.conditions = conditions
-	result.baseQueryNode.metadataObj = Metadata{
-		ColumnSpecs:         append(slices.Clone(left.ColumnSpecs()), right.ColumnSpecs()...),
-		ComputedColumnSpecs: append(slices.Clone(left.ComputedColumnSpecs()), right.ComputedColumnSpecs()...),
+	if err := initJoinedMetadata(&result.baseQueryNode.metadataObj, left.metadata(), right.metadata()); err != nil {
+		return err
 	}
 	left.AddParent(result)
 	right.AddParent(result)
+	return nil
 }
 
-func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex int) (iter.Seq2[*Row, error], error) {
-	leftRanges, rightRanges := n.splitRanges(ranges)
-	leftCols := make(map[int]bool)
-	rightCols := make(map[int]bool)
-	for k := range cols {
-		if k < len(n.left.ColumnSpecs()) {
-			leftCols[k] = true
-		} else if k >= len(n.left.ColumnSpecs()) && k < len(n.metadata().ColumnSpecs) {
-			rightCols[k-len(n.left.ColumnSpecs())] = true
-		} else {
-			return nil, ErrFieldNotFound(fmt.Sprintf("column %d", k))
-		}
-	}
-	if mainIndex < len(n.left.ColumnSpecs()) ||
-		(mainIndex >= len(n.metadata().ColumnSpecs) &&
-			mainIndex < len(n.metadata().ColumnSpecs)+len(n.left.ComputedColumnSpecs())) {
-		if mainIndex >= len(n.metadata().ColumnSpecs) {
-			mainIndex = mainIndex - len(n.metadata().ColumnSpecs) + len(n.left.ColumnSpecs())
-		}
-		leftSeq, err := n.left.Find(leftRanges, leftCols, mainIndex)
+func (n *joinedQueryNode) Find(
+	mainIndex uint64,
+	indexRange *BytesRange,
+	equals map[int]*Value,
+	ranges map[int]*BytesRange,
+	exclusion map[int][]*Value,
+	cols map[int]bool,
+) (iter.Seq2[*Row, error], error) {
+	leftRanges, rightRanges := splitRanges(n.left.metadata(), n.right.metadata(), ranges)
+	leftCols, rightCols := splitCols(n.left.metadata(), n.right.metadata(), cols)
+	leftEquals, rightEquals := splitEquals(n.left.metadata(), n.right.metadata(), equals)
+	leftExclusion, rightExclusion := splitExclusion(n.left.metadata(), n.right.metadata(), exclusion)
+	if indexRange != nil && mainIndex < (uint64(1)<<n.left.metadata().ColumnsCount) {
+		leftSeq, err := n.left.Find(mainIndex, indexRange, leftEquals, leftRanges, leftExclusion, leftCols)
 		if err != nil {
 			return nil, err
 		}
@@ -140,7 +131,7 @@ func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 					}
 					continue
 				}
-				rowRightRanges, err := n.ComputeRangeForRight(leftRow)
+				rowRightEquals, rowRightRanges, rowRightNotEquals, err := n.ComputeContraintsForRight(leftRow)
 				if err != nil {
 					if !yield(nil, err) {
 						return
@@ -148,8 +139,25 @@ func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 					continue
 				}
 				mergedRightRanges := MergeRangesMap(rightRanges, rowRightRanges)
-				rightMainIndex := n.right.metadata().bestIndex(mergedRightRanges)
-				rightSeq, err := n.right.Find(mergedRightRanges, rightCols, rightMainIndex)
+				mergedRightEquals, ok, err := mergeEquals(rightEquals, rowRightEquals)
+				if err != nil {
+					if !yield(nil, err) {
+						return
+					}
+					continue
+				}
+				if !ok {
+					continue
+				}
+				mergedRightExclusion := mergeNotEquals(leftExclusion, rowRightNotEquals)
+				rightMainIndex, rightMainRanges, err := n.right.metadata().bestIndex(mergedRightEquals, mergedRightRanges)
+				if err != nil {
+					if !yield(nil, err) {
+						return
+					}
+					continue
+				}
+				rightSeq, err := n.right.Find(rightMainIndex, rightMainRanges, mergedRightEquals, mergedRightRanges, mergedRightExclusion, rightCols)
 				if err != nil {
 					if !yield(nil, err) {
 						return
@@ -171,12 +179,10 @@ func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 			}
 		}, nil
 	}
-	if mainIndex >= len(n.metadata().ColumnSpecs) {
-		mainIndex = mainIndex - len(n.metadata().ColumnSpecs) + len(n.right.ColumnSpecs()) - len(n.left.ComputedColumnSpecs())
-	} else {
-		mainIndex = mainIndex - len(n.left.ColumnSpecs())
+	if indexRange != nil && mainIndex >= uint64(1)<<n.left.metadata().ColumnsCount {
+		mainIndex = mainIndex >> uint64(n.left.metadata().ColumnsCount)
 	}
-	rightSeq, err := n.right.Find(rightRanges, rightCols, mainIndex)
+	rightSeq, err := n.right.Find(mainIndex, indexRange, rightEquals, rightRanges, rightExclusion, rightCols)
 	if err != nil {
 		return nil, err
 	}
@@ -188,16 +194,33 @@ func (n *joinedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, ma
 				}
 				continue
 			}
-			rowLeftRanges, err := n.ComputeRangeForLeft(rightRow)
+			rowLeftEquals, rowLeftRanges, rowLeftExclusions, err := n.ComputeContraintsForLeft(rightRow)
 			if err != nil {
 				if !yield(nil, err) {
 					return
 				}
 				continue
 			}
+			mergedLeftEquals, ok, err := mergeEquals(leftEquals, rowLeftEquals)
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				continue
+			}
+			if !ok {
+				continue
+			}
+			mergedLeftExclusions := mergeNotEquals(leftExclusion, rowLeftExclusions)
 			mergedLeftRanges := MergeRangesMap(leftRanges, rowLeftRanges)
-			leftMainIndex := n.left.metadata().bestIndex(mergedLeftRanges)
-			leftSeq, err := n.left.Find(mergedLeftRanges, leftCols, leftMainIndex)
+			leftMainIndex, leftMainRanges, err := n.left.metadata().bestIndex(mergedLeftEquals, mergedLeftRanges)
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				continue
+			}
+			leftSeq, err := n.left.Find(leftMainIndex, leftMainRanges, mergedLeftEquals, mergedLeftRanges, mergedLeftExclusions, leftCols)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -227,131 +250,143 @@ func (n *joinedQueryNode) joinRows(leftRow, rightRow *Row) (*Row, error) {
 	}
 	maps.Copy(newRow.values, leftRow.values)
 	for k, v := range rightRow.values {
-		newRow.values[k+len(n.left.ColumnSpecs())] = v
+		newRow.values[k+n.left.metadata().ColumnsCount] = v
 	}
 	return newRow, nil
 }
 
-func (n *joinedQueryNode) ComputeRangeForRight(row *Row) (map[int]*BytesRange, error) {
-	result := make(map[int]*BytesRange)
+func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, map[int]*BytesRange, map[int][]*Value, error) {
+	resultRanges := make(map[int]*BytesRange)
+	resultEquals := make(map[int]*Value)
+	resultExclusion := make(map[int][]*Value)
 	vals := make(map[int]any)
-	for k, v := range row.Iter() {
-		if v.err != nil {
-			return nil, v.err
+	for k, val := range row.Iter() {
+		v, err := val.GetValue()
+		if err != nil {
+			return nil, nil, nil, err
 		}
-		vals[k] = v.value
+		vals[k] = v
 	}
 	for _, cond := range n.conditions {
 		leftVal, ok := vals[cond.leftField]
 		if !ok {
-			return nil, ErrFieldNotFound(fmt.Sprintf("column %d", cond.leftField))
+			return nil, nil, nil, ErrFieldNotFound(fmt.Sprintf("column %d", cond.leftField))
 		}
 		key, err := ToKey(leftVal)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		var curRange *BytesRange
+		var curValue *Value
 		switch cond.operator {
 		case EQ:
-			curRange = NewBytesRange(key, key, true, true, nil)
+			curValue = ValueOfRaw(key, &orderedMaUn)
 		case LT:
-			curRange = NewBytesRange(nil, key, false, false, nil)
+			curRange = NewBytesRange(nil, key, false, false)
 		case LTE:
-			curRange = NewBytesRange(nil, key, false, true, nil)
+			curRange = NewBytesRange(nil, key, false, true)
 		case GT:
-			curRange = NewBytesRange(key, nil, false, false, nil)
+			curRange = NewBytesRange(key, nil, false, false)
 		case GTE:
-			curRange = NewBytesRange(key, nil, true, false, nil)
+			curRange = NewBytesRange(key, nil, true, false)
 		case NEQ:
-			curRange = NewBytesRange(nil, nil, false, false, [][]byte{key})
+			curValue = ValueOfRaw(key, &orderedMaUn)
 		default:
-			return nil, ErrUnsupportedOperator(cond.operator)
+			return nil, nil, nil, ErrUnsupportedOperator(cond.operator)
 		}
-		if existingRange, ok := result[cond.rightField]; ok {
-			result[cond.rightField] = existingRange.Merge(curRange)
-		} else {
-			result[cond.rightField] = curRange
+		if curRange != nil {
+			if existingRange, ok := resultRanges[cond.rightField]; ok {
+				resultRanges[cond.rightField] = existingRange.Merge(curRange)
+			} else {
+				resultRanges[cond.rightField] = curRange
+			}
+		}
+		if curValue != nil {
+			if cond.operator == EQ {
+				resultEquals[cond.rightField] = curValue
+			} else if cond.operator == NEQ {
+				resultExclusion[cond.rightField] = append(resultExclusion[cond.rightField], curValue)
+			}
 		}
 	}
-	return result, nil
+	return resultEquals, resultRanges, resultExclusion, nil
 }
 
-func (n *joinedQueryNode) ComputeRangeForLeft(row *Row) (map[int]*BytesRange, error) {
-	result := make(map[int]*BytesRange)
+func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, map[int]*BytesRange, map[int][]*Value, error) {
+	resultRanges := make(map[int]*BytesRange)
+	resultEquals := make(map[int]*Value)
+	resultExclusion := make(map[int][]*Value)
 	vals := make(map[int]any)
-	for k, v := range row.Iter() {
-		if v.err != nil {
-			return nil, v.err
+	for k, val := range row.Iter() {
+		v, err := val.GetValue()
+		if err != nil {
+			return nil, nil, nil, err
 		}
-		vals[k] = v.value
+		vals[k] = v
 	}
 	for _, cond := range n.conditions {
-		rightVal, ok := vals[cond.rightField]
+		rightVal, ok := vals[cond.rightField+n.left.metadata().ColumnsCount]
 		if !ok {
-			return nil, ErrFieldNotFound(fmt.Sprintf("column %d", cond.rightField))
+			return nil, nil, nil, ErrFieldNotFound(fmt.Sprintf("column %d", cond.rightField))
 		}
 		key, err := ToKey(rightVal)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		var curRange *BytesRange
+		var curValue *Value
 		switch cond.operator {
 		case EQ:
-			curRange = NewBytesRange(key, key, true, true, nil)
+			curValue = ValueOfRaw(key, &orderedMaUn)
 		case LT:
-			curRange = NewBytesRange(nil, key, false, false, nil)
+			curRange = NewBytesRange(nil, key, false, false)
 		case LTE:
-			curRange = NewBytesRange(nil, key, false, true, nil)
+			curRange = NewBytesRange(nil, key, false, true)
 		case GT:
-			curRange = NewBytesRange(key, nil, false, false, nil)
+			curRange = NewBytesRange(key, nil, false, false)
 		case GTE:
-			curRange = NewBytesRange(key, nil, true, false, nil)
+			curRange = NewBytesRange(key, nil, true, false)
 		case NEQ:
-			curRange = NewBytesRange(nil, nil, false, false, [][]byte{key})
+			curValue = ValueOfRaw(key, &orderedMaUn)
 		default:
-			return nil, ErrUnsupportedOperator(cond.operator)
+			return nil, nil, nil, ErrUnsupportedOperator(cond.operator)
 		}
-		if existingRange, ok := result[cond.leftField]; ok {
-			result[cond.leftField] = existingRange.Merge(curRange)
-		} else {
-			result[cond.leftField] = curRange
+		if curRange != nil {
+			if existingRange, ok := resultRanges[cond.leftField]; ok {
+				resultRanges[cond.leftField] = existingRange.Merge(curRange)
+			} else {
+				resultRanges[cond.leftField] = curRange
+			}
 		}
-	}
-	return result, nil
-}
-
-func (n *joinedQueryNode) splitRanges(ranges map[int]*BytesRange) (map[int]*BytesRange, map[int]*BytesRange) {
-	leftRanges := make(map[int]*BytesRange)
-	rightRanges := make(map[int]*BytesRange)
-	for field, r := range ranges {
-		if field < len(n.left.ColumnSpecs()) {
-			leftRanges[field] = r
-		} else if field < len(n.left.ColumnSpecs())+len(n.right.ColumnSpecs()) {
-			rightRanges[field-len(n.left.ColumnSpecs())] = r
-		} else if field < len(n.left.ColumnSpecs())+len(n.right.ColumnSpecs())+len(n.left.ComputedColumnSpecs()) {
-			leftRanges[field-len(n.left.ColumnSpecs())-len(n.right.ColumnSpecs())] = r
-		} else {
-			rightRanges[field-len(n.left.ColumnSpecs())-len(n.right.ColumnSpecs())-len(n.left.ComputedColumnSpecs())] = r
+		if curValue != nil {
+			if cond.operator == EQ {
+				resultEquals[cond.leftField] = curValue
+			} else if cond.operator == NEQ {
+				resultExclusion[cond.leftField] = append(resultExclusion[cond.leftField], curValue)
+			}
 		}
 	}
-	return leftRanges, rightRanges
+	return resultEquals, resultRanges, resultExclusion, nil
 }
 
 func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 	// fmt.Printf("DEBUG: JoinedNode %p propagate. Child: %p (Left: %p, Right: %p)\n", n, child, n.left, n.right)
 	switch child {
 	case n.left:
-		rightRanges, err := n.ComputeRangeForRight(row)
+		rightEquals, rightRanges, rightExclusions, err := n.ComputeContraintsForRight(row)
 		if err != nil {
 			return err
 		}
 		// fmt.Printf("DEBUG: Join Left->Right. Row: %v. Ranges: %v\n", spew.Sdump(row.values), rightRanges)
-		bestIndexRight := n.right.metadata().bestIndex(rightRanges)
+		bestIndexRight, bestRangesRight, err := n.right.metadata().bestIndex(rightEquals, rightRanges)
+		if err != nil {
+			return err
+		}
 		cols := make(map[int]bool)
-		for k := range n.right.ColumnSpecs() {
+		for k := range n.right.metadata().ColumnsCount {
 			cols[k] = true
 		}
-		rightSeq, err := n.right.Find(rightRanges, cols, bestIndexRight)
+		rightSeq, err := n.right.Find(bestIndexRight, bestRangesRight, rightEquals, rightRanges, rightExclusions, cols)
 		if err != nil {
 			return err
 		}
@@ -371,17 +406,17 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 			}
 		}
 	case n.right:
-		leftRanges, err := n.ComputeRangeForLeft(row)
+		leftEquals, leftRanges, leftExclusions, err := n.ComputeContraintsForLeft(row)
 		if err != nil {
 			return err
 		}
 		// fmt.Printf("DEBUG: Join Right->Left. Row: %v. Ranges: %v\n", spew.Sdump(row.values), leftRanges)
-		bestIndexLeft := n.left.metadata().bestIndex(leftRanges)
+		bestIndexLeft, bestRangesLeft, err := n.left.metadata().bestIndex(leftEquals, leftRanges)
 		cols := make(map[int]bool)
-		for k := range n.left.ColumnSpecs() {
+		for k := range n.left.metadata().ColumnsCount {
 			cols[k] = true
 		}
-		leftSeq, err := n.left.Find(leftRanges, cols, bestIndexLeft)
+		leftSeq, err := n.left.Find(bestIndexLeft, bestRangesLeft, leftEquals, leftRanges, leftExclusions, cols)
 		if err != nil {
 			return err
 		}
@@ -411,24 +446,45 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 }
 
 type projectedQueryNode struct {
-	computedColumns []int
-	columns         []int
-	child           queryNode
+	columns []int
+	child   queryNode
 	baseQueryNode
 }
 
-func initProjectedQueryNode(result *projectedQueryNode, child queryNode, columns []int, computedColumns []int) {
+func initProjectedQueryNode(result *projectedQueryNode, child queryNode, columns []int) {
 	result.child = child
 	result.columns = columns
-	result.computedColumns = computedColumns
+	childToResultColumnMap := make(map[int][]int)
+	for i, col := range columns {
+		childToResultColumnMap[col] = append(childToResultColumnMap[col], i)
+	}
+	indexes := make(map[uint64]bool)
+	for idx, isUnique := range child.metadata().Indexes {
+		var projectedIdx uint64 = 0
+		refCols := ReferenceColumns(idx)
+		for _, col := range refCols {
+			childCols := childToResultColumnMap[col]
+			for _, childCol := range childCols {
+				projectedIdx |= 1 << uint64(childCol)
+			}
+		}
+		indexes[projectedIdx] = isUnique
+	}
 	result.baseQueryNode.metadataObj = Metadata{
-		ColumnSpecs:         make([]ColumnSpec, len(columns)),
-		ComputedColumnSpecs: make([]ComputedColumnSpec, len(computedColumns)),
+		ColumnsCount: len(columns),
+		Indexes:      indexes,
 	}
 	child.AddParent(result)
 }
 
-func (n *projectedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex int) (iter.Seq2[*Row, error], error) {
+func (n *projectedQueryNode) Find(
+	mainIndex uint64,
+	indexRange *BytesRange,
+	equals map[int]*Value,
+	ranges map[int]*BytesRange,
+	exclusion map[int][]*Value,
+	cols map[int]bool,
+) (iter.Seq2[*Row, error], error) {
 	childCols := make(map[int]bool)
 	for k := range cols {
 		if k >= len(n.columns) {
@@ -438,25 +494,39 @@ func (n *projectedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool,
 	}
 	childRanges := make(map[int]*BytesRange)
 	for field, r := range ranges {
-		if field < len(n.columns) {
+		if field < n.metadataObj.ColumnsCount {
 			childRanges[n.columns[field]] = r
-		} else if field < len(n.columns)+len(n.computedColumns) {
-			childRanges[n.computedColumns[field-len(n.columns)]+len(n.child.ColumnSpecs())] = r
 		} else {
 			return nil, ErrFieldNotFound(fmt.Sprintf("column %d", field))
 		}
 	}
-	var childIndex int = -1
-	if mainIndex == -1 {
-		// no index found, use full table scan
-	} else if mainIndex < len(n.columns) {
-		childIndex = n.columns[mainIndex]
-	} else if mainIndex < len(n.columns)+len(n.computedColumns) {
-		childIndex = n.computedColumns[mainIndex-len(n.columns)] + len(n.child.ColumnSpecs())
-	} else {
-		return nil, ErrFieldNotFound(fmt.Sprintf("column %d", mainIndex))
+	childIndex := uint64(0)
+	refCols := ReferenceColumns(mainIndex)
+	for _, col := range refCols {
+		if col >= len(n.columns) {
+			return nil, ErrFieldNotFound(fmt.Sprintf("computed column %d", col))
+		}
+		childIndex |= 1 << uint64(n.columns[col])
 	}
-	childSeq, err := n.child.Find(childRanges, childCols, childIndex)
+	childEquals := make(map[int]*Value)
+	for k, v := range equals {
+		if k >= len(n.columns) {
+			return nil, ErrFieldNotFound(fmt.Sprintf("computed column %d", k))
+		}
+		childEquals[n.columns[k]] = v
+	}
+	childExclusion := make(map[int][]*Value)
+	for k, vals := range exclusion {
+		if k >= len(n.columns) {
+			return nil, ErrFieldNotFound(fmt.Sprintf("computed column %d", k))
+		}
+		childVals := make([]*Value, len(vals))
+		for i, val := range vals {
+			childVals[i] = val
+		}
+		childExclusion[n.columns[k]] = childVals
+	}
+	childSeq, err := n.child.Find(childIndex, indexRange, childEquals, childRanges, childExclusion, childCols)
 	if err != nil {
 		return nil, err
 	}
@@ -509,25 +579,35 @@ func (n *projectedQueryNode) propagateToParents(row *Row, child queryNode) error
 }
 
 type backedQueryNode struct {
-	ranges  map[int]*BytesRange
-	backing *storage
+	ranges    map[int]*BytesRange
+	equals    map[int]*Value
+	exclusion map[int][]*Value
+	backing   *storage
 	baseQueryNode
 	explored bool
 }
 
-func initBackedQueryNode(result *backedQueryNode, backing *storage, ranges map[int]*BytesRange) {
+func initBackedQueryNode(result *backedQueryNode, backing *storage, equals map[int]*Value, ranges map[int]*BytesRange, exclusion map[int][]*Value) {
+	result.equals = equals
+	result.exclusion = exclusion
 	result.ranges = ranges
 	result.backing = backing
 	result.baseQueryNode.metadataObj = backing.metadata
 }
 
-func (n *backedQueryNode) Find(ranges map[int]*BytesRange, cols map[int]bool, mainIndex int) (iter.Seq2[*Row, error], error) {
+func (n *backedQueryNode) Find(
+	mainIndex uint64,
+	indexRange *BytesRange,
+	equals map[int]*Value,
+	ranges map[int]*BytesRange,
+	exclusion map[int][]*Value,
+	cols map[int]bool,
+) (iter.Seq2[*Row, error], error) {
 	if !n.explored {
 		return func(func(*Row, error) bool) {
 		}, nil
 	}
-	mergedRanges := MergeRangesMap(n.ranges, ranges)
-	return n.backing.find(mergedRanges, cols, mainIndex)
+	return n.backing.find(mainIndex, indexRange, equals, ranges, exclusion, cols)
 }
 
 func (n *backedQueryNode) propagateToParents(*Row, queryNode) error {
@@ -536,12 +616,15 @@ func (n *backedQueryNode) propagateToParents(*Row, queryNode) error {
 		return nil
 	}
 	n.explored = true
-	bestIndex := n.backing.metadata.bestIndex(n.ranges)
+	bestIndex, bestRanges, err := n.backing.metadata.bestIndex(n.equals, n.ranges)
+	if err != nil {
+		return err
+	}
 	cols := make(map[int]bool)
-	for k := range n.ColumnSpecs() {
+	for k := range n.metadata().ColumnsCount {
 		cols[k] = true
 	}
-	rows, err := n.backing.find(n.ranges, cols, bestIndex)
+	rows, err := n.backing.find(bestIndex, bestRanges, n.equals, n.ranges, n.exclusion, cols)
 	if err != nil {
 		return err
 	}

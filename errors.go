@@ -11,11 +11,14 @@ const (
 	ErrCodeIndexNotFound
 	ErrCodeUniqueConstraint
 	ErrCodeCannotMarshal
+	ErrCodeCannotUnmarshal
 	ErrCodeMetaDataNotFound
 	ErrCodeCorruptedIndexEntry
 	ErrCodeCorruptedMetaDataEntry
 	ErrCodeCannotEvaluateExpression
 	ErrCodeRecursionDepthExceeded
+	ErrCodeColumnCountExceeded64
+	ErrCodeInvalidColumnReference
 )
 
 type ThunderError struct {
@@ -76,6 +79,13 @@ func ErrCannotMarshal(v any) error {
 	}
 }
 
+func ErrCannotUnmarshal(v any) error {
+	return &ThunderError{
+		Code:    ErrCodeCannotUnmarshal,
+		Message: fmt.Sprintf("cannot unmarshal into object: %v", v),
+	}
+}
+
 func ErrMetaDataNotFound(relation string) error {
 	return &ThunderError{
 		Code:    ErrCodeMetaDataNotFound,
@@ -101,5 +111,19 @@ func ErrRecursionDepthExceeded(depth int) error {
 	return &ThunderError{
 		Code:    ErrCodeRecursionDepthExceeded,
 		Message: fmt.Sprintf("recursion depth exceeded: %d", depth),
+	}
+}
+
+func ErrColumnCountExceeded64(count int) error {
+	return &ThunderError{
+		Code:    ErrCodeColumnCountExceeded64,
+		Message: fmt.Sprintf("column count exceeded maximum of 64: %d", count),
+	}
+}
+
+func ErrInvalidColumnReference(relation string, col int) error {
+	return &ThunderError{
+		Code:    ErrCodeInvalidColumnReference,
+		Message: fmt.Sprintf("invalid column index %d for storage %s", col, relation),
 	}
 }

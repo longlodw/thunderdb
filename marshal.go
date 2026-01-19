@@ -25,7 +25,7 @@ var (
 	JsonMaUn    = jsonMarshalUnmarshaler{}
 	GobMaUn     = gobMarshalUnmarshaler{}
 	MsgpackMaUn = msgpackMarshalUnmarshaler{}
-	orderedMa   = orderedMarshaler{}
+	orderedMaUn = orderedMarshalerUnmarshaler{}
 )
 
 type jsonMarshalUnmarshaler struct{}
@@ -66,20 +66,28 @@ func (m *msgpackMarshalUnmarshaler) Unmarshal(data []byte, v any) error {
 	return msgpack.Unmarshal(data, v)
 }
 
-type orderedMarshaler struct{}
+type orderedMarshalerUnmarshaler struct{}
 
-func (o *orderedMarshaler) Marshal(v []any) ([]byte, error) {
-	if !ordered.CanEncode(v...) {
+func (o *orderedMarshalerUnmarshaler) Marshal(v any) ([]byte, error) {
+	vList, ok := v.([]any)
+	if !ok {
 		return nil, ErrCannotMarshal(v)
 	}
-	return ordered.Encode(v...), nil
+	if !ordered.CanEncode(vList...) {
+		return nil, ErrCannotMarshal(v)
+	}
+	return ordered.Encode(vList...), nil
 }
 
-func (o *orderedMarshaler) Unmarshal(data []byte, v *[]any) error {
+func (o *orderedMarshalerUnmarshaler) Unmarshal(data []byte, v any) error {
+	vList, ok := (v).(*[]any)
+	if !ok {
+		return ErrCannotUnmarshal(v)
+	}
 	decoded, err := ordered.DecodeAny(data)
 	if err != nil {
 		return err
 	}
-	*v = decoded
+	*vList = decoded
 	return nil
 }
