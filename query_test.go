@@ -15,7 +15,7 @@ func setupTestDBForQuery(t *testing.T) (*DB, func()) {
 	f.Close()
 
 	// Open DB
-	db, err := OpenDB(&MsgpackMaUn, name, 0600, nil)
+	db, err := OpenDB(MsgpackMaUn, name, 0600, nil)
 	if err != nil {
 		os.Remove(name)
 		t.Fatal(err)
@@ -40,21 +40,20 @@ func TestQuery_Basic(t *testing.T) {
 
 	// Create 'users' relation
 	usersRel := "users"
-	err = tx.CreateStorage(usersRel, []ColumnSpec{
-		{},                // id
-		{IsIndexed: true}, // username
-		{IsIndexed: true}, // department
-	}, nil)
+	err = tx.CreateStorage(usersRel, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true}, // id
+		{ReferencedCols: []int{1}, IsUnique: true}, // username
+		{ReferencedCols: []int{2}, IsUnique: true}, // department
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Create 'departments' relation
 	deptRel := "departments"
-	err = tx.CreateStorage(deptRel, []ColumnSpec{
-		{IsIndexed: true}, // department
-		{},                // location
-	}, nil)
+	err = tx.CreateStorage(deptRel, 2, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true}, // department
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,9 +88,12 @@ func TestQuery_Basic(t *testing.T) {
 	// Users: id(0), username(1), department(2)
 	// Depts: department(0), location(1)
 	// Join condition: users.department (2) == depts.department (0)
-	q := users.Join(depts, []JoinOn{
+	q, err := users.Join(depts, []JoinOn{
 		{leftField: 2, rightField: 0, operator: EQ},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Execute Select on the Query
 	// Filter by username 'alice'. Username is col 1 in users.
@@ -99,11 +101,14 @@ func TestQuery_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := map[int]*BytesRange{
-		1: NewBytesRange(key, key, true, true, nil), // username is at index 1
+	f := map[int]*Range{
+		1: func() *Range {
+			r, _ := NewRangeFromBytes(key, key, true, true)
+			return r
+		}(), // username is at index 1
 	}
 
-	seq, err := tx.Query(q, f)
+	seq, err := tx.Select(q, nil, f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
