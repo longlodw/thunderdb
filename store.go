@@ -57,7 +57,7 @@ func newStorage(
 	if err != nil {
 		return nil, err
 	}
-	for i, _ := range indexes {
+	for i := range indexes {
 		var idxName [8]byte
 		binary.BigEndian.PutUint64(idxName[:], i)
 		if _, err := idxBucket.CreateBucketIfNotExists(idxName[:]); err != nil {
@@ -135,7 +135,7 @@ func (s *storage) indexBucket() *boltdb.Bucket {
 }
 
 func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip *uint64) error {
-	for i, _ := range s.metadata.Indexes {
+	for i := range s.metadata.Indexes {
 		if skip != nil && uint64(i) == *skip {
 			continue
 		}
@@ -490,7 +490,7 @@ func (s *storage) Insert(values map[int]any) error {
 
 func ReferenceColumns(idx uint64) []int {
 	refs := []int{}
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		if (idx & (1 << uint64(i))) != 0 {
 			refs = append(refs, i)
 		}
