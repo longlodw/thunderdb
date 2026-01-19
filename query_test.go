@@ -483,3 +483,149 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	if !foundA { t.Error("Expected A to be reachable from A (A->B->A)") }
 	if !foundB { t.Error("Expected B to be reachable from A (A->B)") }
 }
+
+// TestQuery_Recursive validates the recursive query logic using the new APIs.
+// This test replaces the old TestQuery_Recursive from query_recursive_test.go.
+func TestQuery_Recursive(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// 1. Setup Schema: Employees (id, name, manager_id)
+	employeesRel := "employees"
+	// 0: id, 1: name, 2: manager_id
+	err = tx.CreateStorage(employeesRel, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true}, // id
+		{ReferencedCols: []int{2}, IsUnique: false}, // manager_id
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Insert Data (Hierarchy)
+	// Alice (1) -> Bob (2) -> Charlie (3) -> Dave (4)
+	tx.Insert(employeesRel, map[int]any{0: "1", 1: "Alice", 2: ""})
+	tx.Insert(employeesRel, map[int]any{0: "2", 1: "Bob", 2: "1"})
+	tx.Insert(employeesRel, map[int]any{0: "3", 1: "Charlie", 2: "2"})
+	tx.Insert(employeesRel, map[int]any{0: "4", 1: "Dave", 2: "3"})
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	employees, err := tx.LoadStoredBody(employeesRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Define Recursive Query: "Path(ancestor, descendant)"
+	// path(a, c) :- edge(a, b), path(b, c).
+	// OR simpler left-linear: path(a, b) :- edge(a, b).
+	//                         path(a, c) :- edge(a, b), path(b, c).
+
+	// Path schema: ancestor(0), descendant(1)
+	qPath, err := NewHeadQuery(2, []IndexInfo{
+		{ReferencedCols: []int{0, 1}, IsUnique: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Body 1: Base Case
+	// path(a, b) :- employees(id:b, manager_id:a)
+	// Project employees: manager_id(2) -> ancestor(0), id(0) -> descendant(1)
+	baseProj, err := employees.Project([]int{2, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Body 2: Recursive Case
+	// path(a, c) :- employees(id:b, manager_id:a), path(ancestor:b, descendant:c)
+	// Join on b: employees.id (0) == path.ancestor (0)
+	
+	// Join condition: employees.col0 == qPath.col0
+	recJoin, err := employees.Join(qPath, []JoinOn{
+		{leftField: 0, rightField: 0, operator: EQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	// Result of Join:
+	// 0: employees.id (b)
+	// 1: employees.name
+	// 2: employees.manager_id (a)
+	// 3: path.ancestor (b)
+	// 4: path.descendant (c)
+
+	// We want path(a, c) -> project cols 2 (a) and 4 (c)
+	recProj, err := recJoin.Project([]int{2, 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bind bodies
+	qPath.Bind([]Query{baseProj, recProj})
+
+	// 4. Execution
+	// Find all descendants of Alice (id=1).
+	// query: path(ancestor=1, descendant=X).
+	key, err := ToKey("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := map[int]*Range{
+		0: func() *Range {
+			r, _ := NewRangeFromBytes(key, key, true, true)
+			return r
+		}(),
+	}
+	
+	seq, err := tx.Select(qPath, nil, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(map[string]bool)
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		
+		var ancestor string
+		if err := row.Get(0, &ancestor); err != nil {
+			t.Fatalf("failed to get ancestor: %v", err)
+		}
+		if ancestor != "1" {
+			t.Errorf("Expected ancestor=1, got %v", ancestor)
+		}
+		
+		var descendant string
+		if err := row.Get(1, &descendant); err != nil {
+			t.Fatalf("failed to get descendant: %v", err)
+		}
+		results[descendant] = true
+	}
+
+	// Expected descendants: Bob (2), Charlie (3), Dave (4)
+	if len(results) != 3 {
+		t.Errorf("Expected 3 descendants, got %d. Found: %v", len(results), results)
+	}
+	expectedDescendants := []string{"2", "3", "4"}
+	for _, desc := range expectedDescendants {
+		if !results[desc] {
+			t.Errorf("Expected descendant %s not found in results", desc)
+		}
+	}
+}
