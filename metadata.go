@@ -2,6 +2,7 @@ package thunderdb
 
 import (
 	"bytes"
+	"fmt"
 )
 
 type Metadata struct {
@@ -67,13 +68,13 @@ func initProjectedMetadata(result, child *Metadata, cols []int) error {
 	return nil
 }
 
-func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*BytesRange) (uint64, *BytesRange, error) {
+func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*Range) (uint64, *Range, error) {
 	equBits := uint64(0)
 	for idx := range equals {
 		equBits |= (1 << uint64(idx))
 	}
 	for idx := range sm.Indexes {
-		if idx&equBits != idx {
+		if idx&equBits == idx {
 			selected := uint64(0)
 			values := make([]any, 0, sm.ColumnsCount)
 			for i := range sm.ColumnsCount {
@@ -85,20 +86,24 @@ func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*BytesRange)
 					values = append(values, val)
 					selected |= (1 << uint64(i))
 				}
-				if selected == idx {
-					break
-				}
 			}
+			// Double check we collected all parts
+			if selected != idx {
+				continue
+			}
+
 			keyBytes, err := ToKey(values...)
 			if err != nil {
 				continue
 			}
-			return idx, NewBytesRange(keyBytes, keyBytes, true, true), nil
+			r, err := NewRangeFromBytes(keyBytes, keyBytes, true, true)
+			return idx, r, err
 		}
 	}
 	shortestIndex := uint64(0)
-	var shortestRange *BytesRange
+	var shortestRange *Range
 	for col, r := range ranges {
+		// This assumes 1-column indexes mainly?
 		idxBitsMap := uint64(1) << col
 		if _, ok := sm.Indexes[idxBitsMap]; !ok {
 			continue
@@ -111,54 +116,62 @@ func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*BytesRange)
 	return shortestIndex, shortestRange, nil
 }
 
-func splitRanges(left, right *Metadata, ranges map[int]*BytesRange) (map[int]*BytesRange, map[int]*BytesRange) {
-	leftRanges := make(map[int]*BytesRange)
-	rightRanges := make(map[int]*BytesRange)
+func splitRanges(left, right *Metadata, ranges map[int]*Range) (map[int]*Range, map[int]*Range, error) {
+	leftRanges := make(map[int]*Range)
+	rightRanges := make(map[int]*Range)
 	for col, r := range ranges {
 		if col < left.ColumnsCount {
 			leftRanges[col] = r
-		} else {
+		} else if col-left.ColumnsCount < right.ColumnsCount {
 			rightRanges[col-left.ColumnsCount] = r
+		} else {
+			return nil, nil, ErrFieldNotFound(fmt.Sprintf("Column %d", col))
 		}
 	}
-	return leftRanges, rightRanges
+	return leftRanges, rightRanges, nil
 }
 
-func splitEquals(left, right *Metadata, equals map[int]*Value) (map[int]*Value, map[int]*Value) {
+func splitEquals(left, right *Metadata, equals map[int]*Value) (map[int]*Value, map[int]*Value, error) {
 	leftEquals := make(map[int]*Value)
 	rightEquals := make(map[int]*Value)
 	for col, v := range equals {
 		if col < left.ColumnsCount {
 			leftEquals[col] = v
-		} else {
+		} else if col-left.ColumnsCount < right.ColumnsCount {
 			rightEquals[col-left.ColumnsCount] = v
+		} else {
+			return nil, nil, ErrFieldNotFound(fmt.Sprintf("Column %d", col))
 		}
 	}
-	return leftEquals, rightEquals
+	return leftEquals, rightEquals, nil
 }
 
-func splitCols(left, right *Metadata, cols map[int]bool) (map[int]bool, map[int]bool) {
+func splitCols(left, right *Metadata, cols map[int]bool) (map[int]bool, map[int]bool, error) {
 	leftCols := make(map[int]bool)
 	rightCols := make(map[int]bool)
 	for col := range cols {
 		if col < left.ColumnsCount {
 			leftCols[col] = true
-		} else {
+		} else if col-left.ColumnsCount < right.ColumnsCount {
 			rightCols[col-left.ColumnsCount] = true
+		} else {
+			return nil, nil, ErrFieldNotFound(fmt.Sprintf("Column %d", col))
 		}
 	}
-	return leftCols, rightCols
+	return leftCols, rightCols, nil
 }
 
-func splitExclusion(left, right *Metadata, exclusion map[int][]*Value) (map[int][]*Value, map[int][]*Value) {
+func splitExclusion(left, right *Metadata, exclusion map[int][]*Value) (map[int][]*Value, map[int][]*Value, error) {
 	leftExclusion := make(map[int][]*Value)
 	rightExclusion := make(map[int][]*Value)
 	for col, vals := range exclusion {
 		if col < left.ColumnsCount {
 			leftExclusion[col] = vals
-		} else {
+		} else if col-left.ColumnsCount < right.ColumnsCount {
 			rightExclusion[col-left.ColumnsCount] = vals
+		} else {
+			return nil, nil, ErrFieldNotFound(fmt.Sprintf("Column %d", col))
 		}
 	}
-	return leftExclusion, rightExclusion
+	return leftExclusion, rightExclusion, nil
 }

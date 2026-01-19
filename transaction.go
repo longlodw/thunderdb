@@ -133,6 +133,19 @@ func (tx *Tx) loadStorage(relation string) (*storage, error) {
 	return s, nil
 }
 
+func (tx *Tx) Delete(
+	relation string,
+	equals map[int]*Value,
+	ranges map[int]*Range,
+	exclusion map[int][]*Value,
+) error {
+	s, err := tx.loadStorage(relation)
+	if err != nil {
+		return err
+	}
+	return s.Delete(equals, ranges, exclusion)
+}
+
 func (tx *Tx) DeleteStorage(relation string) error {
 	tnx := tx.tx
 	if err := deleteStorage(tnx, relation); err != nil {
@@ -142,18 +155,18 @@ func (tx *Tx) DeleteStorage(relation string) error {
 	return nil
 }
 
-func (tx *Tx) LoadStoredBody(name string) (*StoredBody, error) {
+func (tx *Tx) LoadStoredBody(name string) (*StoredQuery, error) {
 	var metadataObj Metadata
 	if err := loadMetadata(tx.tx, name, &metadataObj); err != nil {
 		return nil, err
 	}
-	return &StoredBody{
+	return &StoredQuery{
 		storageName: name,
 		metadata:    metadataObj,
 	}, nil
 }
 
-func (tx *Tx) LoadMetadata(relation string) (*Metadata, error) {
+func (tx *Tx) Metadata(relation string) (*Metadata, error) {
 	var metadataObj Metadata
 	if err := loadMetadata(tx.tx, relation, &metadataObj); err != nil {
 		return nil, err
@@ -161,10 +174,10 @@ func (tx *Tx) LoadMetadata(relation string) (*Metadata, error) {
 	return &metadataObj, nil
 }
 
-func (tx *Tx) Query(
-	body QueryPart,
+func (tx *Tx) Select(
+	body Query,
 	equals map[int]*Value,
-	ranges map[int]*BytesRange,
+	ranges map[int]*Range,
 	exclusion map[int][]*Value,
 ) (iter.Seq2[*Row, error], error) {
 	explored := make(map[bodyFilter]queryNode)
@@ -193,22 +206,35 @@ func (tx *Tx) Query(
 func (tx *Tx) constructQueryGraph(
 	explored map[bodyFilter]queryNode,
 	baseNodes *[]*backedQueryNode,
-	body QueryPart,
+	body Query,
 	equals map[int]*Value,
-	ranges map[int]*BytesRange,
+	ranges map[int]*Range,
 	exclusion map[int][]*Value,
 ) (queryNode, error) {
+	equalsStr := equalsToString(equals)
 	rangesStr := rangesToString(ranges)
-	// fmt.Printf("DEBUG: constructQueryGraph visiting %T (%p) Ranges: %s\n", body, body, rangesStr)
+	exclusionStr := exclusionToString(exclusion)
+
+	// Ensure maps are not nil for the filter key, to distinguish between nil and empty
+	if equals == nil {
+		equalsStr = "nil"
+	}
+	if ranges == nil {
+		rangesStr = "nil"
+	}
+	if exclusion == nil {
+		exclusionStr = "nil"
+	}
+
 	bf := bodyFilter{
 		body:   body,
-		filter: rangesStr,
+		filter: equalsStr + "|" + rangesStr + "|" + exclusionStr,
 	}
 	if node, ok := explored[bf]; ok {
 		return node, nil
 	}
 	switch b := body.(type) {
-	case *Head:
+	case *HeadQuery:
 		tempTx, err := tx.ensureTempTx()
 		if err != nil {
 			return nil, err
@@ -244,7 +270,7 @@ func (tx *Tx) constructQueryGraph(
 		}
 		initHeadQueryNode(result, backingStorage, children)
 		return result, nil
-	case *ProjectedBody:
+	case *ProjectedQuery:
 		result := &projectedQueryNode{}
 		explored[bf] = result
 
@@ -254,7 +280,7 @@ func (tx *Tx) constructQueryGraph(
 				childEquals[b.cols[field]] = v
 			}
 		}
-		childRanges := make(map[int]*BytesRange)
+		childRanges := make(map[int]*Range)
 		for field, r := range ranges {
 			if field < len(b.cols) {
 				childRanges[b.cols[field]] = r
@@ -272,12 +298,21 @@ func (tx *Tx) constructQueryGraph(
 		}
 		initProjectedQueryNode(result, childNode, b.cols)
 		return result, nil
-	case *JoinedBody:
+	case *JoinedQuery:
 		result := &joinedQueryNode{}
 		explored[bf] = result
-		equalsLeft, equalsRight := splitEquals(b.left.Metadata(), b.right.Metadata(), equals)
-		rangesLeft, rangesRight := splitRanges(b.left.Metadata(), b.right.Metadata(), ranges)
-		exclusionLeft, exclusionRight := splitExclusion(b.left.Metadata(), b.right.Metadata(), exclusion)
+		equalsLeft, equalsRight, err := splitEquals(b.left.Metadata(), b.right.Metadata(), equals)
+		if err != nil {
+			return nil, err
+		}
+		rangesLeft, rangesRight, err := splitRanges(b.left.Metadata(), b.right.Metadata(), ranges)
+		if err != nil {
+			return nil, err
+		}
+		exclusionLeft, exclusionRight, err := splitExclusion(b.left.Metadata(), b.right.Metadata(), exclusion)
+		if err != nil {
+			return nil, err
+		}
 		leftNode, err := tx.constructQueryGraph(explored, baseNodes, b.left, equalsLeft, rangesLeft, exclusionLeft)
 		if err != nil {
 			return nil, err
@@ -288,16 +323,25 @@ func (tx *Tx) constructQueryGraph(
 		}
 		initJoinedQueryNode(result, leftNode, rightNode, b.conditions)
 		return result, nil
-	case *StoredBody:
+	case *StoredQuery:
 		result := &backedQueryNode{
 			ranges: ranges,
 		}
-		explored[bf] = result
+		// explored[bf] = result // REMOVE THIS LINE
 		storage, err := loadStorage(tx.tx, b.storageName, tx.maUn)
 		if err != nil {
 			return nil, err
 		}
 		initBackedQueryNode(result, storage, equals, ranges, exclusion)
+
+		// Instead of just creating one node and caching it in explored immediately,
+		// we should consider if the same StoredQuery appears multiple times with DIFFERENT constraints.
+		// Wait, 'bf' includes the constraints string, so unique constraints = unique cache entry.
+		// However, for StoredQuery, if it's reused, it might be safer to NOT cache it or handle it carefully?
+		// But let's try just NOT returning early if it's already in explored for StoredQuery?
+		// No, the logic above `if node, ok := explored[bf]; ok` handles that.
+
+		explored[bf] = result // Add it back
 		*baseNodes = append(*baseNodes, result)
 		return result, nil
 	default:
@@ -306,16 +350,50 @@ func (tx *Tx) constructQueryGraph(
 }
 
 type bodyFilter struct {
-	body   QueryPart
+	body   Query
 	filter string
 }
 
-func rangesToString(ranges map[int]*BytesRange) string {
+func rangesToString(ranges map[int]*Range) string {
 	keys := slices.Collect(maps.Keys(ranges))
 	slices.Sort(keys)
 	parts := make([]string, len(keys))
 	for i, k := range keys {
 		parts[i] = fmt.Sprintf("%d:%s", k, ranges[k].ToString())
+	}
+	return strings.Join(parts, ";")
+}
+
+func equalsToString(equals map[int]*Value) string {
+	keys := slices.Collect(maps.Keys(equals))
+	slices.Sort(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		valBytes, err := equals[k].GetRaw()
+		if err != nil {
+			parts[i] = fmt.Sprintf("%d:ERR", k)
+		} else {
+			parts[i] = fmt.Sprintf("%d:%x", k, valBytes)
+		}
+	}
+	return strings.Join(parts, ";")
+}
+
+func exclusionToString(exclusion map[int][]*Value) string {
+	keys := slices.Collect(maps.Keys(exclusion))
+	slices.Sort(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		valParts := make([]string, len(exclusion[k]))
+		for j, v := range exclusion[k] {
+			valBytes, err := v.GetRaw()
+			if err != nil {
+				valParts[j] = "ERR"
+			} else {
+				valParts[j] = fmt.Sprintf("%x", valBytes)
+			}
+		}
+		parts[i] = fmt.Sprintf("%d:[%s]", k, strings.Join(valParts, ","))
 	}
 	return strings.Join(parts, ";")
 }

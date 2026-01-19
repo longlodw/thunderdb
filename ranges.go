@@ -8,11 +8,11 @@ import (
 	"slices"
 )
 
-type BytesRange struct {
+type Range struct {
 	includeStart bool
 	includeEnd   bool
-	start        []byte
-	end          []byte
+	start        *Value
+	end          *Value
 	distance     []byte
 }
 
@@ -20,42 +20,42 @@ func ToKey(values ...any) ([]byte, error) {
 	return orderedMaUn.Marshal(values)
 }
 
-func NewBytesRange(startKey, endKey []byte, includeStart, includeEnd bool) *BytesRange {
-	res := &BytesRange{
-		start:        startKey,
-		end:          endKey,
+func NewRangeFromBytes(startKey, endKey []byte, includeStart, includeEnd bool) (*Range, error) {
+	return NewRangeFromValue(ValueOfRaw(startKey, orderedMaUn), ValueOfRaw(endKey, orderedMaUn), includeStart, includeEnd)
+}
+
+func NewRangeFromLiteral(startVals, endVals any, includeStart, includeEnd bool) (*Range, error) {
+	return NewRangeFromValue(ValueOfLiteral(startVals, orderedMaUn), ValueOfLiteral(endVals, orderedMaUn), includeStart, includeEnd)
+}
+
+func NewRangeFromValue(start, end *Value, includeStart, includeEnd bool) (*Range, error) {
+	res := &Range{
+		start:        start,
+		end:          end,
 		includeStart: includeStart,
 		includeEnd:   includeEnd,
 	}
-	res.distance = res.computeDistance()
-	return res
+	distance, err := res.computeDistance()
+	if err != nil {
+		return nil, err
+	}
+	res.distance = distance
+	return res, nil
 }
 
-func NewBytesRangeFromVals(startVals, endVals any, includeStart, includeEnd bool) (*BytesRange, error) {
-	var startKey []byte = nil
-	if startVals != nil {
-		var err error
-		startKey, err = ToKey(startVals)
-		if err != nil {
-			return nil, err
-		}
-	}
-	var endKey []byte = nil
-	if endVals != nil {
-		var err error
-		endKey, err = ToKey(endVals)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return NewBytesRange(startKey, endKey, includeStart, includeEnd), nil
-}
-
-func (ir *BytesRange) Merge(other *BytesRange) *BytesRange {
+func (ir *Range) Merge(other *Range) (*Range, error) {
 	newStart := ir.start
 	newIncludeStart := ir.includeStart
 	if other.start != nil {
-		c := bytes.Compare(other.start, newStart)
+		otherStart, err := other.start.GetRaw()
+		if err != nil {
+			return nil, err
+		}
+		irStart, err := newStart.GetRaw()
+		if err != nil {
+			return nil, err
+		}
+		c := bytes.Compare(irStart, otherStart)
 		if newStart == nil || c > 0 {
 			newStart = other.start
 			newIncludeStart = other.includeStart
@@ -66,7 +66,15 @@ func (ir *BytesRange) Merge(other *BytesRange) *BytesRange {
 	newEnd := ir.end
 	newIncludeEnd := ir.includeEnd
 	if other.end != nil {
-		c := bytes.Compare(other.end, newEnd)
+		otherEnd, err := other.end.GetRaw()
+		if err != nil {
+			return nil, err
+		}
+		irEnd, err := newEnd.GetRaw()
+		if err != nil {
+			return nil, err
+		}
+		c := bytes.Compare(irEnd, otherEnd)
 		if newEnd == nil || c < 0 {
 			newEnd = other.end
 			newIncludeEnd = other.includeEnd
@@ -74,27 +82,39 @@ func (ir *BytesRange) Merge(other *BytesRange) *BytesRange {
 			newIncludeEnd = newIncludeEnd && other.includeEnd
 		}
 	}
-	return NewBytesRange(newStart, newEnd, newIncludeStart, newIncludeEnd)
+	return NewRangeFromValue(newStart, newEnd, newIncludeStart, newIncludeEnd)
 }
 
-func (ir *BytesRange) Contains(key []byte) bool {
+func (ir *Range) Contains(key *Value) (bool, error) {
+	keyRaw, err := key.GetRaw()
+	if err != nil {
+		return false, err
+	}
 	if ir.start != nil {
-		cmpStart := bytes.Compare(key, ir.start)
+		irStart, err := ir.start.GetRaw()
+		if err != nil {
+			return false, err
+		}
+		cmpStart := bytes.Compare(keyRaw, irStart)
 		if cmpStart < 0 || (cmpStart == 0 && !ir.includeStart) {
-			return false
+			return false, nil
 		}
 	}
 	if ir.end != nil {
-		cmpEnd := bytes.Compare(key, ir.end)
+		irEnd, err := ir.end.GetRaw()
+		if err != nil {
+			return false, err
+		}
+		cmpEnd := bytes.Compare(keyRaw, irEnd)
 		if cmpEnd > 0 || (cmpEnd == 0 && !ir.includeEnd) {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
-func (ir *BytesRange) ToString() string {
-	return fmt.Sprintf("%v|%v|%v|%v|[%s]",
+func (ir *Range) ToString() string {
+	return fmt.Sprintf("%v|%v|%v|%v",
 		ir.start,
 		ir.end,
 		ir.includeStart,
@@ -102,12 +122,28 @@ func (ir *BytesRange) ToString() string {
 	)
 }
 
-func (ir *BytesRange) computeDistance() []byte {
-	start := slices.Clone(ir.start)
+func (ir *Range) computeDistance() ([]byte, error) {
+	var irStart []byte
+	if ir.start != nil {
+		var err error
+		irStart, err = ir.start.GetRaw()
+		if err != nil {
+			return nil, err
+		}
+	}
+	start := slices.Clone(irStart)
 	if start == nil {
 		start = []byte{}
 	}
-	end := slices.Clone(ir.end)
+	var irEnd []byte
+	if ir.end != nil {
+		var err error
+		irEnd, err = ir.end.GetRaw()
+		if err != nil {
+			return nil, err
+		}
+	}
+	end := slices.Clone(irEnd)
 	if end == nil {
 		end = []byte{}
 	}
@@ -121,18 +157,22 @@ func (ir *BytesRange) computeDistance() []byte {
 	}
 	distance := make([]byte, len(start))
 	subtle.XORBytes(distance, end, start)
-	return distance
+	return distance, nil
 }
 
-func MergeRangesMap(a, b map[int]*BytesRange) map[int]*BytesRange {
-	result := make(map[int]*BytesRange)
+func MergeRangesMap(a, b map[int]*Range) (map[int]*Range, error) {
+	result := make(map[int]*Range)
 	maps.Copy(result, a)
 	for k, v := range b {
 		if existing, ok := result[k]; ok {
-			result[k] = existing.Merge(v)
+			cur, err := existing.Merge(v)
+			if err != nil {
+				return nil, err
+			}
+			result[k] = cur
 		} else {
 			result[k] = v
 		}
 	}
-	return result
+	return result, nil
 }

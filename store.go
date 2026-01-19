@@ -196,7 +196,7 @@ func (s *storage) toIndexKey(id []byte, value *map[int]any, idx uint64) ([]byte,
 	return ToKey(selectedValues...)
 }
 
-func (s *storage) Delete(equals map[int]*Value, ranges map[int]*BytesRange, excludes map[int][]*Value) error {
+func (s *storage) Delete(equals map[int]*Value, ranges map[int]*Range, excludes map[int][]*Value) error {
 	shortestIndex, shortestRanges, err := s.metadata.bestIndex(equals, ranges)
 	if err != nil {
 		return err
@@ -235,7 +235,11 @@ func (s *storage) Delete(equals map[int]*Value, ranges map[int]*BytesRange, excl
 	c := idxBucket.Cursor()
 	var k []byte
 	if shortestRanges.start != nil {
-		k, _ = c.Seek(shortestRanges.start)
+		start, err := shortestRanges.start.GetRaw()
+		if err != nil {
+			return err
+		}
+		k, _ = c.Seek(start)
 	} else {
 		k, _ = c.First()
 	}
@@ -243,7 +247,11 @@ func (s *storage) Delete(equals map[int]*Value, ranges map[int]*BytesRange, excl
 		if shortestRanges.end == nil {
 			return true
 		}
-		cmp := bytes.Compare(k[:len(k)-8], shortestRanges.end)
+		end, err := shortestRanges.end.GetRaw()
+		if err != nil {
+			return false
+		}
+		cmp := bytes.Compare(k[:len(k)-8], end)
 		return cmp < 0 || (cmp == 0 && shortestRanges.includeEnd)
 	}
 	for ; k != nil && lessThan(k); k, _ = c.Next() {
@@ -277,9 +285,9 @@ func (s *storage) Delete(equals map[int]*Value, ranges map[int]*BytesRange, excl
 
 func (s *storage) find(
 	mainIndex uint64,
-	indexRange *BytesRange,
+	indexRange *Range,
 	equals map[int]*Value,
-	ranges map[int]*BytesRange,
+	ranges map[int]*Range,
 	exclusion map[int][]*Value,
 	cols map[int]bool,
 ) (iter.Seq2[*Row, error], error) {
@@ -334,7 +342,12 @@ func (s *storage) find(
 		c := idxBucket.Cursor()
 		var k []byte
 		if indexRange.start != nil {
-			k, _ = c.Seek(indexRange.start)
+			start, err := indexRange.start.GetRaw()
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			k, _ = c.Seek(start)
 		} else {
 			k, _ = c.First()
 		}
@@ -342,7 +355,11 @@ func (s *storage) find(
 			if indexRange.end == nil {
 				return true
 			}
-			cmp := bytes.Compare(k[:len(k)-8], indexRange.end)
+			end, err := indexRange.end.GetRaw()
+			if err != nil {
+				return false
+			}
+			cmp := bytes.Compare(k[:len(k)-8], end)
 			return cmp < 0 || (cmp == 0 && indexRange.includeEnd)
 		}
 		for ; k != nil && lessThan(k); k, _ = c.Next() {
@@ -377,7 +394,7 @@ func (s *storage) find(
 	}, nil
 }
 
-func (s *storage) inRanges(id []byte, vals *map[int]any, equals map[int]*Value, ranges map[int]*BytesRange, exclusions map[int][]*Value) (bool, error) {
+func (s *storage) inRanges(id []byte, vals *map[int]any, equals map[int]*Value, ranges map[int]*Range, exclusions map[int][]*Value) (bool, error) {
 	for idx, val := range equals {
 		kBytes, err := s.toKeyFromColumn(id, vals, idx)
 		if err != nil {
@@ -396,7 +413,10 @@ func (s *storage) inRanges(id []byte, vals *map[int]any, equals map[int]*Value, 
 		if err != nil {
 			return false, err
 		}
-		if !kr.Contains(kBytes) {
+		kVals := ValueOfRaw(kBytes, orderedMaUn)
+		if con, err := kr.Contains(kVals); err != nil {
+			return false, err
+		} else if !con {
 			return false, nil
 		}
 	}
@@ -453,7 +473,7 @@ func (s *storage) Insert(values map[int]any) error {
 		}
 		if isUnique {
 			k, _ := curIdxBucket.Cursor().Seek(vKey)
-			if k != nil && bytes.Equal(k[:len(k)-8], vKey) {
+			if k != nil && bytes.Equal(k[:len(vKey)], vKey) {
 				return ErrUniqueConstraint(fmt.Sprintf("column %d", i), vKey)
 			}
 		}

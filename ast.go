@@ -1,51 +1,51 @@
 package thunderdb
 
-type QueryPart interface {
-	Project(cols []int) (QueryPart, error)
-	Join(other QueryPart, conditions []JoinOn) (QueryPart, error)
+type Query interface {
+	Project(cols []int) (Query, error)
+	Join(other Query, conditions []JoinOn) (Query, error)
 	Metadata() *Metadata
 }
 
-type Head struct {
-	bodies   []QueryPart
+type HeadQuery struct {
+	bodies   []Query
 	metadata Metadata
 }
 
-func NewHead(colsCount int, indexInfos []IndexInfo) (*Head, error) {
-	result := &Head{}
+func NewHeadQuery(colsCount int, indexInfos []IndexInfo) (*HeadQuery, error) {
+	result := &HeadQuery{}
 	if err := initStoredMetadata(&result.metadata, colsCount, indexInfos); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-func (h *Head) Project(cols []int) (QueryPart, error) {
-	return newProjectedBody(h, cols)
+func (h *HeadQuery) Project(cols []int) (Query, error) {
+	return newProjectedQuery(h, cols)
 }
 
-func (h *Head) Join(other QueryPart, conditions []JoinOn) (QueryPart, error) {
-	return newJoinedBody(h, other, conditions)
+func (h *HeadQuery) Join(other Query, conditions []JoinOn) (Query, error) {
+	return newJoinedQuery(h, other, conditions)
 }
 
-func (h *Head) Metadata() *Metadata {
+func (h *HeadQuery) Metadata() *Metadata {
 	return &h.metadata
 }
 
-func (h *Head) Bind(bodies []QueryPart) {
+func (h *HeadQuery) Bind(bodies []Query) {
 	h.bodies = bodies
 }
 
-type ProjectedBody struct {
-	child    QueryPart
+type ProjectedQuery struct {
+	child    Query
 	cols     []int
 	metadata Metadata
 }
 
-func newProjectedBody(
-	child QueryPart,
+func newProjectedQuery(
+	child Query,
 	cols []int,
-) (*ProjectedBody, error) {
-	result := &ProjectedBody{
+) (*ProjectedQuery, error) {
+	result := &ProjectedQuery{
 		child: child,
 		cols:  cols,
 	}
@@ -55,31 +55,31 @@ func newProjectedBody(
 	return result, nil
 }
 
-func (ph *ProjectedBody) Project(cols []int) (QueryPart, error) {
-	return newProjectedBody(ph, cols)
+func (ph *ProjectedQuery) Project(cols []int) (Query, error) {
+	return newProjectedQuery(ph, cols)
 }
 
-func (ph *ProjectedBody) Join(other QueryPart, conditions []JoinOn) (QueryPart, error) {
-	return newJoinedBody(ph, other, conditions)
+func (ph *ProjectedQuery) Join(other Query, conditions []JoinOn) (Query, error) {
+	return newJoinedQuery(ph, other, conditions)
 }
 
-func (ph *ProjectedBody) Metadata() *Metadata {
+func (ph *ProjectedQuery) Metadata() *Metadata {
 	return &ph.metadata
 }
 
-type JoinedBody struct {
-	left       QueryPart
-	right      QueryPart
+type JoinedQuery struct {
+	left       Query
+	right      Query
 	conditions []JoinOn
 	metadata   Metadata
 }
 
-func newJoinedBody(
-	left QueryPart,
-	right QueryPart,
+func newJoinedQuery(
+	left Query,
+	right Query,
 	conditions []JoinOn,
-) (*JoinedBody, error) {
-	result := &JoinedBody{
+) (*JoinedQuery, error) {
+	result := &JoinedQuery{
 		left:       left,
 		right:      right,
 		conditions: conditions,
@@ -90,15 +90,15 @@ func newJoinedBody(
 	return result, nil
 }
 
-func (jh *JoinedBody) Project(cols []int) (QueryPart, error) {
-	return newProjectedBody(jh, cols)
+func (jh *JoinedQuery) Project(cols []int) (Query, error) {
+	return newProjectedQuery(jh, cols)
 }
 
-func (jh *JoinedBody) Join(other QueryPart, conditions []JoinOn) (QueryPart, error) {
-	return newJoinedBody(jh, other, conditions)
+func (jh *JoinedQuery) Join(other Query, conditions []JoinOn) (Query, error) {
+	return newJoinedQuery(jh, other, conditions)
 }
 
-func (jh *JoinedBody) Metadata() *Metadata {
+func (jh *JoinedQuery) Metadata() *Metadata {
 	return &jh.metadata
 }
 
@@ -119,20 +119,20 @@ type JoinOn struct {
 	operator   Op
 }
 
-type StoredBody struct {
+type StoredQuery struct {
 	storageName string
 	metadata    Metadata
 }
 
-func (ph *StoredBody) Project(cols []int) (QueryPart, error) {
-	return newProjectedBody(ph, cols)
+func (ph *StoredQuery) Project(cols []int) (Query, error) {
+	return newProjectedQuery(ph, cols)
 }
 
-func (ph *StoredBody) Join(other QueryPart, conditions []JoinOn) (QueryPart, error) {
-	return newJoinedBody(ph, other, conditions)
+func (ph *StoredQuery) Join(other Query, conditions []JoinOn) (Query, error) {
+	return newJoinedQuery(ph, other, conditions)
 }
 
-func (ph *StoredBody) Metadata() *Metadata {
+func (ph *StoredQuery) Metadata() *Metadata {
 	return &ph.metadata
 }
 

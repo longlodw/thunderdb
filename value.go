@@ -78,6 +78,8 @@ func mergeEquals(equalsLeft, equalsRight map[int]*Value) (map[int]*Value, bool, 
 			if !bytes.Equal(leftBytes, rightBytes) {
 				return nil, false, nil
 			}
+		} else {
+			merged[k] = vRight
 		}
 	}
 	return merged, true, nil

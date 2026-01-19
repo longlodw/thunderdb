@@ -22,10 +22,10 @@ type MarshalUnmarshaler interface {
 }
 
 var (
-	JsonMaUn    = jsonMarshalUnmarshaler{}
-	GobMaUn     = gobMarshalUnmarshaler{}
-	MsgpackMaUn = msgpackMarshalUnmarshaler{}
-	orderedMaUn = orderedMarshalerUnmarshaler{}
+	JsonMaUn    = &jsonMarshalUnmarshaler{}
+	GobMaUn     = &gobMarshalUnmarshaler{}
+	MsgpackMaUn = &msgpackMarshalUnmarshaler{}
+	orderedMaUn = &orderedMarshalerUnmarshaler{}
 )
 
 type jsonMarshalUnmarshaler struct{}
@@ -82,6 +82,14 @@ func (o *orderedMarshalerUnmarshaler) Marshal(v any) ([]byte, error) {
 func (o *orderedMarshalerUnmarshaler) Unmarshal(data []byte, v any) error {
 	vList, ok := (v).(*[]any)
 	if !ok {
+		if vAny, ok := v.(*any); ok {
+			decoded, err := ordered.DecodeAny(data)
+			if err != nil {
+				return err
+			}
+			*vAny = decoded
+			return nil
+		}
 		return ErrCannotUnmarshal(v)
 	}
 	decoded, err := ordered.DecodeAny(data)
