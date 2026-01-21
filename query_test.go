@@ -365,7 +365,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// reach(X, Z) :- reach(X, Y), nodes(Y, Z).
 
 	// Reach schema: source(0), target(1)
-	qReach, err := NewHeadQuery(2, []IndexInfo{
+	qReach, err := NewDatalogQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {
@@ -510,7 +510,7 @@ func TestQuery_Recursive(t *testing.T) {
 	//                         path(a, c) :- edge(a, b), path(b, c).
 
 	// Path schema: ancestor(0), descendant(1)
-	qPath, err := NewHeadQuery(2, []IndexInfo{
+	qPath, err := NewDatalogQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {

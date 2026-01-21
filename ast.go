@@ -13,7 +13,7 @@ type HeadQuery struct {
 	metadata Metadata
 }
 
-func NewHeadQuery(colsCount int, indexInfos []IndexInfo) (*HeadQuery, error) {
+func NewDatalogQuery(colsCount int, indexInfos []IndexInfo) (*HeadQuery, error) {
 	result := &HeadQuery{}
 	if err := initStoredMetadata(&result.metadata, colsCount, indexInfos); err != nil {
 		return nil, err
