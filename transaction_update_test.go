@@ -89,11 +89,8 @@ func TestPersistent_Update(t *testing.T) {
 			t.Fatal("Expected unique constraint violation error, got nil")
 		}
 
-		var thunderErr *ThunderError
-		if !errors.As(err, &thunderErr) {
-			t.Errorf("Expected ThunderError, got %T: %v", err, err)
-		} else if thunderErr.Code != ErrCodeUniqueConstraint {
-			t.Errorf("Expected ErrCodeUniqueConstraint, got code %d: %v", thunderErr.Code, err)
+		if !errors.Is(err, ErrCodeUniqueConstraint) {
+			t.Errorf("Expected ErrCodeUniqueConstraint, got: %v", err)
 		}
 	})
 

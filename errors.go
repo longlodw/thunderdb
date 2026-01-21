@@ -1,9 +1,14 @@
 package thunderdb
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+type ErrorCode int
 
 const (
-	ErrCodeFieldCountMismatch = iota
+	ErrCodeFieldCountMismatch ErrorCode = iota
 	ErrCodeFieldNotFound
 	ErrCodeFieldNotFoundInColumns
 	ErrCodeUnsupportedOperator
@@ -21,14 +26,72 @@ const (
 	ErrCodeInvalidColumnReference
 )
 
+func (e ErrorCode) Error() string {
+	switch e {
+	case ErrCodeFieldCountMismatch:
+		return "field count mismatch"
+	case ErrCodeFieldNotFound:
+		return "field not found"
+	case ErrCodeFieldNotFoundInColumns:
+		return "field not found in columns"
+	case ErrCodeUnsupportedOperator:
+		return "unsupported operator"
+	case ErrCodeUnsupportedSelector:
+		return "unsupported selector"
+	case ErrCodeIndexNotFound:
+		return "index not found"
+	case ErrCodeUniqueConstraint:
+		return "unique constraint violation"
+	case ErrCodeCannotMarshal:
+		return "cannot marshal"
+	case ErrCodeCannotUnmarshal:
+		return "cannot unmarshal"
+	case ErrCodeMetaDataNotFound:
+		return "metadata not found"
+	case ErrCodeCorruptedIndexEntry:
+		return "corrupted index entry"
+	case ErrCodeCorruptedMetaDataEntry:
+		return "corrupted metadata entry"
+	case ErrCodeCannotEvaluateExpression:
+		return "cannot evaluate expression"
+	case ErrCodeRecursionDepthExceeded:
+		return "recursion depth exceeded"
+	case ErrCodeColumnCountExceeded64:
+		return "column count exceeded maximum of 64"
+	case ErrCodeInvalidColumnReference:
+		return "invalid column reference"
+	default:
+		return fmt.Sprintf("unknown error code: %d", int(e))
+	}
+}
+
 type ThunderError struct {
-	Code    int
+	Code    ErrorCode
 	Message string
+	Cause   error
 }
 
 func (e *ThunderError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %v", e.Message, e.Cause)
+	}
 	return e.Message
 }
+
+func (e *ThunderError) Unwrap() error {
+	return e.Cause
+}
+
+func (e *ThunderError) Is(target error) bool {
+	if t, ok := target.(ErrorCode); ok {
+		return e.Code == t
+	}
+	return false
+}
+
+// NewThunderError creates a new ThunderError.
+// This is a helper to standardize creation if we want to export it later,
+// but for now we keep the specific constructors.
 
 func ErrFieldCountMismatch(expected, got int) error {
 	return &ThunderError{
@@ -58,17 +121,17 @@ func ErrUnsupportedSelector() error {
 	}
 }
 
-func ErrIndexNotFound(indexName string) error {
+func ErrIndexNotFound(relation string, indexBitmap uint64) error {
 	return &ThunderError{
 		Code:    ErrCodeIndexNotFound,
-		Message: fmt.Sprintf("index not found: %s", indexName),
+		Message: fmt.Sprintf("index not found for relation %s with bitmap %b", relation, indexBitmap),
 	}
 }
 
-func ErrUniqueConstraint(indexName string, value any) error {
+func ErrUniqueConstraint(relation string, indexBitmap uint64, value any) error {
 	return &ThunderError{
 		Code:    ErrCodeUniqueConstraint,
-		Message: fmt.Sprintf("unique constraint violation on index %s for value %v", indexName, value),
+		Message: fmt.Sprintf("unique constraint violation on relation %s index %b for value %v", relation, indexBitmap, value),
 	}
 }
 
@@ -93,10 +156,10 @@ func ErrMetaDataNotFound(relation string) error {
 	}
 }
 
-func ErrCorruptedIndexEntry(indexName string) error {
+func ErrCorruptedIndexEntry(relation string, indexBitmap uint64) error {
 	return &ThunderError{
 		Code:    ErrCodeCorruptedIndexEntry,
-		Message: fmt.Sprintf("corrupted index entry in index %s", indexName),
+		Message: fmt.Sprintf("corrupted index entry in relation %s index %b", relation, indexBitmap),
 	}
 }
 
@@ -126,4 +189,18 @@ func ErrInvalidColumnReference(relation string, col int) error {
 		Code:    ErrCodeInvalidColumnReference,
 		Message: fmt.Sprintf("invalid column index %d for storage %s", col, relation),
 	}
+}
+
+// Wrap allows wrapping an existing error with a ThunderError code
+func Wrap(code ErrorCode, msg string, err error) error {
+	return &ThunderError{
+		Code:    code,
+		Message: msg,
+		Cause:   err,
+	}
+}
+
+// IsErrorCode checks if the error corresponds to a specific ThunderDB ErrorCode
+func IsErrorCode(err error, code ErrorCode) bool {
+	return errors.Is(err, code)
 }

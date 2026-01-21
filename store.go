@@ -13,6 +13,7 @@ import (
 
 type storage struct {
 	bucket   *boltdb.Bucket
+	name     string
 	metadata Metadata
 	maUn     MarshalUnmarshaler
 }
@@ -68,6 +69,7 @@ func newStorage(
 
 	s := &storage{
 		bucket: bucket,
+		name:   name,
 		metadata: Metadata{
 			ColumnsCount: columnsCount,
 			Indexes:      indexes,
@@ -115,6 +117,7 @@ func loadStorage(
 	}
 	s := &storage{
 		bucket: bucket,
+		name:   name,
 		maUn:   maUn,
 	}
 	if err := loadMetadata(tx, name, &s.metadata); err != nil {
@@ -454,7 +457,7 @@ func (s *storage) insertIndexes(id []byte, values *map[int]any, skip map[uint64]
 		binary.BigEndian.PutUint64(idxName[:], uint64(i))
 		curIdxBucket := s.indexBucket().Bucket(idxName[:])
 		if curIdxBucket == nil {
-			return ErrIndexNotFound(fmt.Sprintf("column %d", i))
+			return ErrIndexNotFound(s.name, i)
 		}
 		if isUnique {
 			k, _ := curIdxBucket.Cursor().Seek(vKey)
@@ -465,7 +468,7 @@ func (s *storage) insertIndexes(id []byte, values *map[int]any, skip map[uint64]
 					// same row, skip
 					continue
 				}
-				return ErrUniqueConstraint(fmt.Sprintf("column %d", i), vKey)
+				return ErrUniqueConstraint(s.name, i, vKey)
 			}
 		}
 		// insert index
@@ -627,12 +630,12 @@ func (s *storage) Insert(values map[int]any) error {
 		binary.BigEndian.PutUint64(idxName[:], i)
 		curIdxBucket := s.indexBucket().Bucket(idxName[:])
 		if curIdxBucket == nil {
-			return ErrIndexNotFound(fmt.Sprintf("column %d", i))
+			return ErrIndexNotFound(s.name, i)
 		}
 		if isUnique {
 			k, _ := curIdxBucket.Cursor().Seek(vKey)
 			if k != nil && bytes.Equal(k[:len(vKey)], vKey) {
-				return ErrUniqueConstraint(fmt.Sprintf("column %d", i), vKey)
+				return ErrUniqueConstraint(s.name, i, vKey)
 			}
 		}
 		// insert index

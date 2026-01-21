@@ -2,6 +2,7 @@ package thunderdb
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"iter"
 	"maps"
@@ -73,7 +74,7 @@ func (n *headQueryNode) propagateToParents(row *Row, child queryNode) error {
 		values[k] = v
 	}
 	if err := n.backing.Insert(values); err != nil {
-		if terr, ok := err.(*ThunderError); ok && terr.Code == ErrCodeUniqueConstraint {
+		if errors.Is(err, ErrCodeUniqueConstraint) {
 			return nil
 		}
 		return err
