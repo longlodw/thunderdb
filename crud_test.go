@@ -71,7 +71,7 @@ func TestBasicCRUD_SelectAlice(t *testing.T) {
 	defer cleanup()
 
 	// Pre-populate data
-	{
+	func() {
 		tx, err := db.Begin(true)
 		if err != nil {
 			t.Fatal(err)
@@ -91,7 +91,7 @@ func TestBasicCRUD_SelectAlice(t *testing.T) {
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
-	}
+	}()
 
 	tx, err := db.Begin(false)
 	if err != nil {
@@ -141,7 +141,7 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 	defer cleanup()
 
 	// Pre-populate data
-	{
+	func() {
 		tx, err := db.Begin(true)
 		if err != nil {
 			t.Fatal(err)
@@ -161,10 +161,10 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
-	}
+	}()
 
 	// Delete
-	{
+	func() {
 		tx, err := db.Begin(true)
 		if err != nil {
 			t.Fatal(err)
@@ -179,10 +179,10 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
-	}
+	}()
 
 	// Verify Delete
-	{
+	func() {
 		tx, err := db.Begin(false)
 		if err != nil {
 			t.Fatal(err)
@@ -209,35 +209,37 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 		if count != 0 {
 			t.Errorf("Expected 0 results for bob, got %d", count)
 		}
-	}
+	}()
 }
 
 func TestNonIndexedSelect(t *testing.T) {
 	db, cleanup := setupTestDBFromPersistent(t)
 	defer cleanup()
-
-	tx, err := db.Begin(true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-
 	relation := "items"
-	// items: id(0), price(1)
-	// No indexes provided -> scan
-	err = tx.CreateStorage(relation, 2, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	tx.Insert(relation, map[int]any{0: "A", 1: 10.0})
-	tx.Insert(relation, map[int]any{0: "B", 1: 20.0})
+	func() {
+		tx, err := db.Begin(true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
 
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
+		// items: id(0), price(1)
+		// No indexes provided -> scan
+		err = tx.CreateStorage(relation, 2, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	tx, err = db.Begin(false)
+		tx.Insert(relation, map[int]any{0: "A", 1: 10.0})
+		tx.Insert(relation, map[int]any{0: "B", 1: 20.0})
+
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	tx, err := db.Begin(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +280,7 @@ func TestProjection(t *testing.T) {
 	defer cleanup()
 
 	// Insert
-	{
+	func() {
 		tx, err := db.Begin(true)
 		if err != nil {
 			t.Fatal(err)
@@ -297,10 +299,10 @@ func TestProjection(t *testing.T) {
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
-	}
+	}()
 
 	// Select
-	{
+	func() {
 		tx, err := db.Begin(false)
 		if err != nil {
 			t.Fatal(err)
@@ -315,19 +317,12 @@ func TestProjection(t *testing.T) {
 		// Projection mapping:
 		// original: id(0), username(1), age(2)
 		// target: user_id(0) -> id(0), login_name(1) -> username(1), user_age(2) -> age(2)
-		// wait, api says Project([]int{...}) -> reorders/selects columns.
-		// So if we want [id, username, age], it's [0, 1, 2].
-		// The test wants to verify getting fields by *new* indices or checking structure.
-		// Let's project to swap username and age: [id(0), age(2), username(1)] -> indices [0, 2, 1]
 		proj, err := p.Project([]int{0, 2, 1})
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// Filter: username is now at index 2 in projected relation.
-		// Wait, filtering applies to the *result* of projection if we select from proj?
-		// No, Select(body, equals...) applies constraints to the columns of 'body'.
-		// So if 'body' is projection, cols are 0, 1, 2 (id, age, username).
 		// username is at index 2.
 		seq, err := tx.Select(proj, Condition{Field: 2, Operator: EQ, Value: "alice"})
 		if err != nil {
@@ -359,7 +354,7 @@ func TestProjection(t *testing.T) {
 		if count != 1 {
 			t.Errorf("Expected 1 result, got %d", count)
 		}
-	}
+	}()
 }
 
 func TestDifferentOperators(t *testing.T) {
@@ -367,7 +362,7 @@ func TestDifferentOperators(t *testing.T) {
 	defer cleanup()
 
 	// Insert
-	{
+	func() {
 		tx, err := db.Begin(true)
 		if err != nil {
 			t.Fatal(err)
@@ -389,7 +384,7 @@ func TestDifferentOperators(t *testing.T) {
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
-	}
+	}()
 
 	tx, err := db.Begin(false)
 	if err != nil {
@@ -477,7 +472,7 @@ func TestCompositeIndex(t *testing.T) {
 	defer cleanup()
 
 	// Insert
-	{
+	func() {
 		tx, err := db.Begin(true)
 		if err != nil {
 			t.Fatal(err)
@@ -518,7 +513,7 @@ func TestCompositeIndex(t *testing.T) {
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
-	}
+	}()
 
 	tx, err := db.Begin(false)
 	if err != nil {
@@ -557,11 +552,6 @@ func TestCompositeIndex(t *testing.T) {
 	if count != 1 {
 		t.Errorf("Expected 1 result for John Doe, got %d", count)
 	}
-
-	// Test 2: Partial match (prefix) is not directly supported by current equality logic?
-	// Actually bestIndex in metadata.go checks `if idx&equBits == idx`.
-	// So exact match on ALL columns of the index is required for now for equality lookup.
-	// Partial index range scan is more complex, let's stick to full key equality for this test as per legacy.
 
 	// Test 3: Composite + non-indexed filter
 	// John Doe (1, 2) AND Age=30(3) (Age is 30 in data)

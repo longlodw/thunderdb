@@ -1,6 +1,7 @@
 package thunderdb
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -249,9 +250,17 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	headQuery, err := NewDatalogQuery(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bind both branches to head query
+	headQuery.Bind([]Query{branch1, branch2})
+
 	// 3. Select Region="North"
 	// Should return Alice (user) and Charlie (admin)
-	seq, err := tx.Select(branch1, Condition{Field: 8, Operator: EQ, Value: "North"})
+	seq, err := tx.Select(headQuery, Condition{Field: 8, Operator: EQ, Value: "North"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,20 +271,11 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 			t.Fatal(err)
 		}
 		var name string
-		row.Get(1, &name) // u_name
-		results = append(results, name)
-	}
-
-	seq2, err := tx.Select(branch2, Condition{Field: 8, Operator: EQ, Value: "North"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for row, err := range seq2 {
+		err := row.Get(1, &name) // u_name
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("failed to get name: %v", err)
 		}
-		var name string
-		row.Get(1, &name) // u_name
+		fmt.Println("Found:", name)
 		results = append(results, name)
 	}
 
@@ -484,10 +484,22 @@ func TestQuery_Recursive(t *testing.T) {
 
 	// 2. Insert Data (Hierarchy)
 	// Alice (1) -> Bob (2) -> Charlie (3) -> Dave (4)
-	tx.Insert(employeesRel, map[int]any{0: "1", 1: "Alice", 2: ""})
-	tx.Insert(employeesRel, map[int]any{0: "2", 1: "Bob", 2: "1"})
-	tx.Insert(employeesRel, map[int]any{0: "3", 1: "Charlie", 2: "2"})
-	tx.Insert(employeesRel, map[int]any{0: "4", 1: "Dave", 2: "3"})
+	err = tx.Insert(employeesRel, map[int]any{0: "1", 1: "Alice", 2: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = tx.Insert(employeesRel, map[int]any{0: "2", 1: "Bob", 2: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = tx.Insert(employeesRel, map[int]any{0: "3", 1: "Charlie", 2: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = tx.Insert(employeesRel, map[int]any{0: "4", 1: "Dave", 2: "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
