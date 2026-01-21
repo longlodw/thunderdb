@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"iter"
+	"maps"
 
 	"github.com/openkvlab/boltdb"
 	boltdb_errors "github.com/openkvlab/boltdb/errors"
@@ -134,9 +135,9 @@ func (s *storage) indexBucket() *boltdb.Bucket {
 	return s.bucket.Bucket([]byte("index"))
 }
 
-func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip *uint64) error {
+func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip map[uint64]bool) error {
 	for i := range s.metadata.Indexes {
-		if skip != nil && uint64(i) == *skip {
+		if skip != nil && skip[i] {
 			continue
 		}
 		selectedValues := make([]any, 0, s.metadata.ColumnsCount)
@@ -194,6 +195,238 @@ func (s *storage) toIndexKey(id []byte, value *map[int]any, idx uint64) ([]byte,
 		selectedValues[k] = (*value)[colIdx]
 	}
 	return ToKey(selectedValues...)
+}
+
+func (s *storage) Update(
+	equals map[int]*Value,
+	ranges map[int]*Range,
+	excludes map[int][]*Value,
+	updates map[int]any,
+) error {
+	shortestIndex, shortestRanges, err := s.metadata.bestIndex(equals, ranges)
+	if err != nil {
+		return err
+	}
+	// compute indexes to update and columns to unmarshal
+	indexesToUpdate := make(map[uint64]bool)
+	colsToUnmarshal := make(map[int]bool)
+	for i := range s.metadata.Indexes {
+		for volIdx := range updates {
+			if i&(1<<uint64(volIdx)) != 0 {
+				indexesToUpdate[i] = true
+			}
+		}
+		refCols := ReferenceColumns(i)
+		for _, colIdx := range refCols {
+			colsToUnmarshal[colIdx] = true
+		}
+	}
+	indexesToSkip := make(map[uint64]bool)
+	for i := range s.metadata.Indexes {
+		if !indexesToUpdate[i] {
+			indexesToSkip[i] = true
+		}
+	}
+	if shortestRanges == nil {
+		var prev []byte
+		vals := make(map[int]any)
+		c := s.dataBucket().Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			id := k[0:8]
+			if prev != nil && !bytes.Equal(prev, id) {
+				// check ranges
+				if ok, err := s.inRanges(prev, &vals, equals, ranges, excludes); err != nil {
+					return err
+				} else if ok {
+					// delete old indexes
+					if err := s.deleteIndexes(prev, &vals, indexesToSkip); err != nil {
+						return err
+					}
+					// apply updates
+					maps.Copy(vals, updates)
+					// insert new indexes
+					if err := s.insertIndexes(prev, &vals, indexesToSkip); err != nil {
+						return err
+					}
+					// update data
+					for colIdx, newVal := range updates {
+						var columnKey [12]byte
+						copy(columnKey[0:8], prev)
+						binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
+						vBytes, err := s.maUn.Marshal(newVal)
+						if err != nil {
+							return err
+						}
+						if err := s.dataBucket().Put(columnKey[:], vBytes); err != nil {
+							return err
+						}
+					}
+				}
+				vals = make(map[int]any)
+			}
+			prev = id
+			col := int(binary.BigEndian.Uint32(k[8:12]))
+			if !colsToUnmarshal[col] {
+				continue
+			}
+			var vAny any
+			if err := s.maUn.Unmarshal(v, &vAny); err != nil {
+				return err
+			}
+			vals[col] = vAny
+		}
+		if prev != nil {
+			if ok, err := s.inRanges(prev, &vals, equals, ranges, excludes); err != nil {
+				return err
+			} else if ok {
+				// delete old indexes
+				if err := s.deleteIndexes(prev, &vals, indexesToSkip); err != nil {
+					return err
+				}
+				// apply updates
+				maps.Copy(vals, updates)
+				// insert new indexes
+				if err := s.insertIndexes(prev, &vals, indexesToSkip); err != nil {
+					return err
+				}
+				// update data
+				for colIdx, newVal := range updates {
+					var columnKey [12]byte
+					copy(columnKey[0:8], prev)
+					binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
+					vBytes, err := s.maUn.Marshal(newVal)
+					if err != nil {
+						return err
+					}
+					if err := s.dataBucket().Put(columnKey[:], vBytes); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	var idxBytes [8]byte
+	binary.BigEndian.PutUint64(idxBytes[:], shortestIndex)
+	idxBucket := s.indexBucket().Bucket(idxBytes[:])
+	c := idxBucket.Cursor()
+	var k []byte
+	if shortestRanges.start != nil {
+		start, err := shortestRanges.start.GetRaw()
+		if err != nil {
+			return err
+		}
+		k, _ = c.Seek(start)
+	} else {
+		k, _ = c.First()
+	}
+	lessThan := func(k []byte) bool {
+		if shortestRanges.end == nil {
+			return true
+		}
+		end, err := shortestRanges.end.GetRaw()
+		if err != nil {
+			return false
+		}
+		cmp := bytes.Compare(k[:len(k)-8], end)
+		return cmp < 0 || (cmp == 0 && shortestRanges.includeEnd)
+	}
+	updateMainIndex := false
+	if indexesToUpdate[shortestIndex] {
+		updateMainIndex = true
+		indexesToSkip[shortestIndex] = true
+	}
+	for ; k != nil && lessThan(k); k, _ = c.Next() {
+		vals := make(map[int]any)
+		// check other ranges
+		if ok, err := s.inRanges(k[len(k)-8:], &vals, equals, ranges, excludes); err != nil {
+			return err
+		} else if !ok {
+			continue
+		}
+		// delete old indexes
+		if err := s.deleteIndexes(k[len(k)-8:], &vals, indexesToSkip); err != nil {
+			return err
+		}
+		// apply updates
+		maps.Copy(vals, updates)
+		// insert new indexes
+		if err := s.insertIndexes(k[len(k)-8:], &vals, indexesToSkip); err != nil {
+			return err
+		}
+		// update data
+		for colIdx, newVal := range updates {
+			var columnKey [12]byte
+			copy(columnKey[0:8], k[len(k)-8:])
+			binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
+			vBytes, err := s.maUn.Marshal(newVal)
+			if err != nil {
+				return err
+			}
+			if err := s.dataBucket().Put(columnKey[:], vBytes); err != nil {
+				return err
+			}
+		}
+		if updateMainIndex {
+			// delete current index entry
+			if err := c.Delete(); err != nil {
+				return err
+			}
+			// insert new main index entry
+			newMainIndexKey, err := s.toIndexKey(k[len(k)-8:], &vals, shortestIndex)
+			if err != nil {
+				return err
+			}
+			newCompositeKey := make([]byte, len(newMainIndexKey)+8)
+			copy(newCompositeKey, newMainIndexKey)
+			copy(newCompositeKey[len(newMainIndexKey):], k[len(k)-8:])
+			if err := idxBucket.Put(newCompositeKey, nil); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *storage) insertIndexes(id []byte, values *map[int]any, skip map[uint64]bool) error {
+	for i, isUnique := range s.metadata.Indexes {
+		if skip != nil && skip[i] {
+			continue
+		}
+		selectedValues := make([]any, 0, s.metadata.ColumnsCount)
+		for j := range ReferenceColumns(uint64(i)) {
+			if v, ok := (*values)[j]; ok {
+				selectedValues = append(selectedValues, v)
+			} else {
+				return ErrFieldNotFound(fmt.Sprintf("column %d", j))
+			}
+		}
+		vKey, err := ToKey(selectedValues...)
+		if err != nil {
+			return err
+		}
+		compositeKey := make([]byte, len(vKey)+8)
+		copy(compositeKey, vKey)
+		var idxName [8]byte
+		binary.BigEndian.PutUint64(idxName[:], uint64(i))
+		curIdxBucket := s.indexBucket().Bucket(idxName[:])
+		if curIdxBucket == nil {
+			return ErrIndexNotFound(fmt.Sprintf("column %d", i))
+		}
+		if isUnique {
+			k, _ := curIdxBucket.Cursor().Seek(vKey)
+			if k != nil && bytes.Equal(k[:len(vKey)], vKey) {
+				return ErrUniqueConstraint(fmt.Sprintf("column %d", i), vKey)
+			}
+		}
+		// insert index
+		binary.BigEndian.PutUint64(compositeKey[len(vKey):], binary.BigEndian.Uint64(id))
+		err = curIdxBucket.Put(compositeKey, nil)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *storage) Delete(equals map[int]*Value, ranges map[int]*Range, excludes map[int][]*Value) error {
@@ -264,7 +497,9 @@ func (s *storage) Delete(equals map[int]*Value, ranges map[int]*Range, excludes 
 			continue
 		}
 		// delete indexes
-		if err := s.deleteIndexes(k[len(k)-8:], &vals, &shortestIndex); err != nil {
+		if err := s.deleteIndexes(k[len(k)-8:], &vals, map[uint64]bool{
+			shortestIndex: true,
+		}); err != nil {
 			return err
 		}
 		// delete data
