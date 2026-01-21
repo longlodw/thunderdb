@@ -19,7 +19,7 @@ func setupBatchTestDB(t testing.TB) (*DB, func()) {
 	}
 
 	dbPath := filepath.Join(dir, "test.db")
-	db, err := OpenDB(&JsonMaUn, dbPath, 0600, nil)
+	db, err := OpenDB(MsgpackMaUn, dbPath, 0600, nil)
 	if err != nil {
 		os.RemoveAll(dir)
 		t.Fatalf("failed to open db: %v", err)
@@ -38,10 +38,9 @@ func TestDB_View(t *testing.T) {
 	// Prepare data
 	err := db.Update(func(tx *Tx) error {
 		// id=0, name=1
-		err := tx.CreateStorage("users", []ColumnSpec{
-			{IsUnique: true}, // id (0)
-			{},               // name (1)
-		}, nil)
+		err := tx.CreateStorage("users", 2, []IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: true}, // id
+		})
 		if err != nil {
 			return err
 		}
@@ -53,11 +52,11 @@ func TestDB_View(t *testing.T) {
 
 	// Test View
 	err = db.View(func(tx *Tx) error {
-		p, err := tx.LoadStoredBody("users")
+		p, err := tx.StoredQuery("users")
 		if err != nil {
 			return err
 		}
-		iter, err := tx.Query(p, nil)
+		iter, err := tx.Select(p)
 		if err != nil {
 			return err
 		}
@@ -91,9 +90,9 @@ func TestDB_Update(t *testing.T) {
 
 	err := db.Update(func(tx *Tx) error {
 		// id=0
-		err := tx.CreateStorage("items", []ColumnSpec{
-			{IsUnique: true}, // id (0)
-		}, nil)
+		err := tx.CreateStorage("items", 1, []IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: true}, // id
+		})
 		if err != nil {
 			return err
 		}
@@ -105,11 +104,11 @@ func TestDB_Update(t *testing.T) {
 
 	// Verify update
 	db.View(func(tx *Tx) error {
-		p, err := tx.LoadStoredBody("items")
+		p, err := tx.StoredQuery("items")
 		if err != nil {
 			return err
 		}
-		iter, err := tx.Query(p, nil)
+		iter, err := tx.Select(p)
 		if err != nil {
 			return err
 		}
@@ -135,10 +134,9 @@ func TestDB_Batch(t *testing.T) {
 	// Initialize schema first
 	err := db.Update(func(tx *Tx) error {
 		// ts=0, msg=1
-		return tx.CreateStorage("logs", []ColumnSpec{
-			{IsUnique: true}, // ts (0)
-			{},               // msg (1)
-		}, nil)
+		return tx.CreateStorage("logs", 2, []IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: true}, // ts
+		})
 	})
 	if err != nil {
 		t.Fatalf("failed to init schema: %v", err)
@@ -156,7 +154,7 @@ func TestDB_Batch(t *testing.T) {
 				// We don't need to load anything to insert anymore, just insert directly by name
 				// Use a unique timestamp based on ID to avoid collisions in this simple test
 				return tx.Insert("logs", map[int]any{
-					0: id,                        // ts
+					0: id,                           // ts
 					1: fmt.Sprintf("worker %d", id), // msg
 				})
 			})
@@ -175,11 +173,11 @@ func TestDB_Batch(t *testing.T) {
 
 	// Verify all writes succeeded
 	db.View(func(tx *Tx) error {
-		p, err := tx.LoadStoredBody("logs")
+		p, err := tx.StoredQuery("logs")
 		if err != nil {
 			return err
 		}
-		iter, err := tx.Query(p, nil)
+		iter, err := tx.Select(p)
 		if err != nil {
 			return err
 		}
@@ -208,9 +206,7 @@ func TestDB_Batch_PanicProtection(t *testing.T) {
 	// 1. Setup Schema
 	db.Update(func(tx *Tx) error {
 		// val=0
-		return tx.CreateStorage("data", []ColumnSpec{
-			{}, // val
-		}, nil)
+		return tx.CreateStorage("data", 1, nil)
 	})
 
 	var wg sync.WaitGroup
@@ -239,8 +235,8 @@ func TestDB_Batch_PanicProtection(t *testing.T) {
 
 	// Check if Worker 2's data made it
 	db.View(func(tx *Tx) error {
-		p, _ := tx.LoadStoredBody("data")
-		iter, _ := tx.Query(p, nil)
+		p, _ := tx.StoredQuery("data")
+		iter, _ := tx.Select(p)
 		count := 0
 		for _, err := range iter {
 			if err == nil {
