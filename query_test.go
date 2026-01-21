@@ -98,18 +98,7 @@ func TestQuery_Basic(t *testing.T) {
 
 	// Execute Select on the Query
 	// Filter by username 'alice'. Username is col 1 in users.
-	key, err := ToKey("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := map[int]*Range{
-		1: func() *Range {
-			r, _ := NewRangeFromBytes(key, key, true, true)
-			return r
-		}(), // username is at index 1
-	}
-
-	seq, err := tx.Select(q, nil, f, nil)
+	seq, err := tx.Select(q, Condition{Field: 1, Operator: EQ, Value: "alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,18 +251,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 
 	// 3. Select Region="North"
 	// Should return Alice (user) and Charlie (admin)
-	key, err := ToKey("North")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := map[int]*Range{
-		8: func() *Range {
-			r, _ := NewRangeFromBytes(key, key, true, true)
-			return r
-		}(), // Region is at index 8
-	}
-
-	seq, err := tx.Select(branch1, nil, f, nil)
+	seq, err := tx.Select(branch1, Condition{Field: 8, Operator: EQ, Value: "North"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +266,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		results = append(results, name)
 	}
 
-	seq2, err := tx.Select(branch2, nil, f, nil)
+	seq2, err := tx.Select(branch2, Condition{Field: 8, Operator: EQ, Value: "North"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +329,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// 0: source, 1: target
 	err = tx.CreateStorage(nodesRel, 2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true}, // (source, target) unique
-		{ReferencedCols: []int{0}, IsUnique: false},    // index on source
+		{ReferencedCols: []int{0}, IsUnique: false},   // index on source
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -405,7 +383,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Body 2: Recursive Case (Left Recursion)
 	// reach(X, Z) :- reach(X, Y), nodes(Y, Z).
 	// Join on Y: reach.target (1) == nodes.source (0)
-	
+
 	// Join condition: qReach.col1 == nodes.col0
 	recJoin, err := qReach.Join(nodes, []JoinOn{
 		{leftField: 1, rightField: 0, operator: EQ},
@@ -419,7 +397,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// 1: reach.target (Y)
 	// 2: nodes.source (Y)
 	// 3: nodes.target (Z)
-	
+
 	// We want Reach(X, Z) -> project cols 0 and 3
 	recProj, err := recJoin.Project([]int{0, 3})
 	if err != nil {
@@ -433,18 +411,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Find all reachable nodes from A.
 	// Expected: A -> B, B -> A, so reachable: B, A.
 	// If cycle is not handled, this will loop A->B->A->B...
-	key, err := ToKey("A")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := map[int]*Range{
-		0: func() *Range {
-			r, _ := NewRangeFromBytes(key, key, true, true)
-			return r
-		}(), // source is at index 0
-	}
-	
-	seq, err := tx.Select(qReach, nil, f, nil)
+	seq, err := tx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: "A"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +423,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 			t.Fatal(err)
 		}
 		count++
-		
+
 		var target string
 		if err := row.Get(1, &target); err != nil {
 			t.Fatalf("failed to get target: %v", err)
@@ -467,21 +434,29 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// We expect at least 2 results (A->B, A->A).
 	// Standard Datalog usually implies Set semantics, so 2 results if uniqueness is handled.
 	// If Bag semantics (or just naive loop), it could be infinite, but we have a timeout.
-	// Since we defined a Unique Index on qReach (source, target), duplicates should be suppressed 
+	// Since we defined a Unique Index on qReach (source, target), duplicates should be suppressed
 	// by the backing storage of the HeadQuery node if implemented correctly.
-	
+
 	if count < 2 {
 		t.Errorf("Expected at least 2 reachable paths, got %d. Results: %v", count, results)
 	}
-	
+
 	foundA := false
 	foundB := false
 	for _, res := range results {
-		if res == "A" { foundA = true }
-		if res == "B" { foundB = true }
+		if res == "A" {
+			foundA = true
+		}
+		if res == "B" {
+			foundB = true
+		}
 	}
-	if !foundA { t.Error("Expected A to be reachable from A (A->B->A)") }
-	if !foundB { t.Error("Expected B to be reachable from A (A->B)") }
+	if !foundA {
+		t.Error("Expected A to be reachable from A (A->B->A)")
+	}
+	if !foundB {
+		t.Error("Expected B to be reachable from A (A->B)")
+	}
 }
 
 // TestQuery_Recursive validates the recursive query logic using the new APIs.
@@ -500,7 +475,7 @@ func TestQuery_Recursive(t *testing.T) {
 	employeesRel := "employees"
 	// 0: id, 1: name, 2: manager_id
 	err = tx.CreateStorage(employeesRel, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true}, // id
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
 		{ReferencedCols: []int{2}, IsUnique: false}, // manager_id
 	})
 	if err != nil {
@@ -553,7 +528,7 @@ func TestQuery_Recursive(t *testing.T) {
 	// Body 2: Recursive Case
 	// path(a, c) :- employees(id:b, manager_id:a), path(ancestor:b, descendant:c)
 	// Join on b: employees.id (0) == path.ancestor (0)
-	
+
 	// Join condition: employees.col0 == qPath.col0
 	recJoin, err := employees.Join(qPath, []JoinOn{
 		{leftField: 0, rightField: 0, operator: EQ},
@@ -561,7 +536,7 @@ func TestQuery_Recursive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Result of Join:
 	// 0: employees.id (b)
 	// 1: employees.name
@@ -581,18 +556,7 @@ func TestQuery_Recursive(t *testing.T) {
 	// 4. Execution
 	// Find all descendants of Alice (id=1).
 	// query: path(ancestor=1, descendant=X).
-	key, err := ToKey("1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := map[int]*Range{
-		0: func() *Range {
-			r, _ := NewRangeFromBytes(key, key, true, true)
-			return r
-		}(),
-	}
-	
-	seq, err := tx.Select(qPath, nil, f, nil)
+	seq, err := tx.Select(qPath, Condition{Field: 0, Operator: EQ, Value: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,7 +566,7 @@ func TestQuery_Recursive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		
+
 		var ancestor string
 		if err := row.Get(0, &ancestor); err != nil {
 			t.Fatalf("failed to get ancestor: %v", err)
@@ -610,7 +574,7 @@ func TestQuery_Recursive(t *testing.T) {
 		if ancestor != "1" {
 			t.Errorf("Expected ancestor=1, got %v", ancestor)
 		}
-		
+
 		var descendant string
 		if err := row.Get(1, &descendant); err != nil {
 			t.Fatalf("failed to get descendant: %v", err)

@@ -69,14 +69,17 @@ func (m *msgpackMarshalUnmarshaler) Unmarshal(data []byte, v any) error {
 type orderedMarshalerUnmarshaler struct{}
 
 func (o *orderedMarshalerUnmarshaler) Marshal(v any) ([]byte, error) {
-	vList, ok := v.([]any)
-	if !ok {
-		return nil, ErrCannotMarshal(v)
+	if vList, ok := v.([]any); ok {
+		if !ordered.CanEncode(vList...) {
+			return nil, ErrCannotMarshal(v)
+		}
+		return ordered.Encode(vList...), nil
 	}
-	if !ordered.CanEncode(vList...) {
-		return nil, ErrCannotMarshal(v)
+	// Fallback for non-list types: try wrapping in a list
+	if ordered.CanEncode(v) {
+		return ordered.Encode(v), nil
 	}
-	return ordered.Encode(vList...), nil
+	return nil, ErrCannotMarshal(v)
 }
 
 func (o *orderedMarshalerUnmarshaler) Unmarshal(data []byte, v any) error {

@@ -135,10 +135,15 @@ func (tx *Tx) loadStorage(relation string) (*storage, error) {
 
 func (tx *Tx) Delete(
 	relation string,
-	equals map[int]*Value,
-	ranges map[int]*Range,
-	exclusion map[int][]*Value,
+	conditions ...Condition,
 ) error {
+	equals, ranges, exclusion, possible, err := parseConditions(conditions)
+	if err != nil {
+		return err
+	}
+	if !possible {
+		return nil
+	}
 	s, err := tx.loadStorage(relation)
 	if err != nil {
 		return err
@@ -148,11 +153,16 @@ func (tx *Tx) Delete(
 
 func (tx *Tx) Update(
 	relation string,
-	equals map[int]*Value,
-	ranges map[int]*Range,
-	exclusion map[int][]*Value,
 	updates map[int]any,
+	conditions ...Condition,
 ) error {
+	equals, ranges, exclusion, possible, err := parseConditions(conditions)
+	if err != nil {
+		return err
+	}
+	if !possible {
+		return nil
+	}
 	s, err := tx.loadStorage(relation)
 	if err != nil {
 		return err
@@ -190,10 +200,15 @@ func (tx *Tx) Metadata(relation string) (*Metadata, error) {
 
 func (tx *Tx) Select(
 	body Query,
-	equals map[int]*Value,
-	ranges map[int]*Range,
-	exclusion map[int][]*Value,
+	conditions ...Condition,
 ) (iter.Seq2[*Row, error], error) {
+	equals, ranges, exclusion, possible, err := parseConditions(conditions)
+	if err != nil {
+		return nil, err
+	}
+	if !possible {
+		return func(yield func(*Row, error) bool) {}, nil
+	}
 	explored := make(map[bodyFilter]queryNode)
 	baseNodes := make([]*backedQueryNode, 0)
 	rootNode, err := tx.constructQueryGraph(explored, &baseNodes, body, equals, ranges, exclusion)

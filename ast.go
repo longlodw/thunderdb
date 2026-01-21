@@ -1,5 +1,7 @@
 package thunderdb
 
+import "bytes"
+
 type Query interface {
 	Project(cols []int) (Query, error)
 	Join(other Query, conditions []JoinOn) (Query, error)
@@ -139,4 +141,98 @@ func (ph *StoredQuery) Metadata() *Metadata {
 type IndexInfo struct {
 	ReferencedCols []int
 	IsUnique       bool
+}
+
+type Condition struct {
+	Field    int
+	Operator Op
+	Value    any
+}
+
+func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[int]*Range, exclusion map[int][]*Value, possible bool, err error) {
+	equals = make(map[int]*Value)
+	ranges = make(map[int]*Range)
+	exclusion = make(map[int][]*Value)
+	possible = true
+
+	for _, cond := range conditions {
+		val := ValueOfLiteral(cond.Value, orderedMaUn)
+		switch cond.Operator {
+		case EQ:
+			if existing, exists := equals[cond.Field]; exists {
+				existingBytes, err := existing.GetRaw()
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				valBytes, err := val.GetRaw()
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				if !bytes.Equal(existingBytes, valBytes) {
+					possible = false
+					return nil, nil, nil, false, nil
+				}
+			}
+			equals[cond.Field] = val
+		case NEQ:
+			exclusion[cond.Field] = append(exclusion[cond.Field], val)
+		case LT:
+			curRange, err := NewRangeFromValue(nil, val, false, false)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			rng, exists := ranges[cond.Field]
+			if !exists {
+				ranges[cond.Field] = curRange
+			} else {
+				ranges[cond.Field], err = rng.Merge(curRange)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+			}
+		case LTE:
+			curRange, err := NewRangeFromValue(nil, val, false, true)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			rng, exists := ranges[cond.Field]
+			if !exists {
+				ranges[cond.Field] = curRange
+			} else {
+				ranges[cond.Field], err = rng.Merge(curRange)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+			}
+		case GT:
+			curRange, err := NewRangeFromValue(val, nil, false, false)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			rng, exists := ranges[cond.Field]
+			if !exists {
+				ranges[cond.Field] = curRange
+			} else {
+				ranges[cond.Field], err = rng.Merge(curRange)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+			}
+		case GTE:
+			curRange, err := NewRangeFromValue(val, nil, true, false)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			rng, exists := ranges[cond.Field]
+			if !exists {
+				ranges[cond.Field] = curRange
+			} else {
+				ranges[cond.Field], err = rng.Merge(curRange)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+			}
+		}
+	}
+	return
 }

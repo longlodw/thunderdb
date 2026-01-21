@@ -105,16 +105,7 @@ func TestBasicCRUD_SelectAlice(t *testing.T) {
 	}
 
 	// Select where username(1) == "alice"
-	key, err := ToKey("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Use map[int]*Value for equality
-	eq := map[int]*Value{
-		1: ValueOfRaw(key, orderedMaUn),
-	}
-
-	seq, err := tx.Select(p, eq, nil, nil)
+	seq, err := tx.Select(p, Condition{Field: 1, Operator: EQ, Value: "alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,16 +171,8 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 		}
 		defer tx.Rollback()
 
-		key, err := ToKey("bob")
-		if err != nil {
-			t.Fatal(err)
-		}
-		eq := map[int]*Value{
-			1: ValueOfRaw(key, orderedMaUn),
-		}
-
 		// Delete where username(1) == "bob"
-		if err := tx.Delete("users", eq, nil, nil); err != nil {
+		if err := tx.Delete("users", Condition{Field: 1, Operator: EQ, Value: "bob"}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -211,15 +194,7 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		key, err := ToKey("bob")
-		if err != nil {
-			t.Fatal(err)
-		}
-		eq := map[int]*Value{
-			1: ValueOfRaw(key, orderedMaUn),
-		}
-
-		seq, err := tx.Select(p, eq, nil, nil)
+		seq, err := tx.Select(p, Condition{Field: 1, Operator: EQ, Value: "bob"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -273,16 +248,8 @@ func TestNonIndexedSelect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	key, err := ToKey(20.0)
-	if err != nil {
-		t.Fatal(err)
-	}
 	// price is column 1
-	eq := map[int]*Value{
-		1: ValueOfRaw(key, orderedMaUn),
-	}
-
-	seq, err := tx.Select(p, eq, nil, nil)
+	seq, err := tx.Select(p, Condition{Field: 1, Operator: EQ, Value: 20.0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,15 +329,7 @@ func TestProjection(t *testing.T) {
 		// No, Select(body, equals...) applies constraints to the columns of 'body'.
 		// So if 'body' is projection, cols are 0, 1, 2 (id, age, username).
 		// username is at index 2.
-		key, err := ToKey("alice")
-		if err != nil {
-			t.Fatal(err)
-		}
-		eq := map[int]*Value{
-			2: ValueOfRaw(key, orderedMaUn),
-		}
-
-		seq, err := tx.Select(proj, eq, nil, nil)
+		seq, err := tx.Select(proj, Condition{Field: 2, Operator: EQ, Value: "alice"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -444,15 +403,7 @@ func TestDifferentOperators(t *testing.T) {
 	}
 
 	// Test Greater Than: price(1) > 15.0
-	key, err := ToKey(15.0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rangesGt := map[int]*Range{
-		1: func() *Range { r, _ := NewRangeFromBytes(key, nil, false, true); return r }(),
-	}
-
-	seqGt, err := tx.Select(p, nil, rangesGt, nil)
+	seqGt, err := tx.Select(p, Condition{Field: 1, Operator: GT, Value: 15.0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,15 +424,7 @@ func TestDifferentOperators(t *testing.T) {
 	}
 
 	// Test Less Than or Equal: stock(2) <= 20.0
-	key20, err := ToKey(20.0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rangesLe := map[int]*Range{
-		2: func() *Range { r, _ := NewRangeFromBytes(nil, key20, true, true); return r }(),
-	}
-
-	seqLe, err := tx.Select(p, nil, rangesLe, nil)
+	seqLe, err := tx.Select(p, Condition{Field: 2, Operator: LTE, Value: 20.0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,20 +446,10 @@ func TestDifferentOperators(t *testing.T) {
 	}
 
 	// Test Multiple Operators (AND): price(1) > 10 AND stock(2) > 0
-	key10, err := ToKey(10.0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key0, err := ToKey(0.0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rangesMulti := map[int]*Range{
-		1: func() *Range { r, _ := NewRangeFromBytes(key10, nil, false, true); return r }(),
-		2: func() *Range { r, _ := NewRangeFromBytes(key0, nil, false, true); return r }(),
-	}
-
-	seqMulti, err := tx.Select(p, nil, rangesMulti, nil)
+	seqMulti, err := tx.Select(p,
+		Condition{Field: 1, Operator: GT, Value: 10.0},
+		Condition{Field: 2, Operator: GT, Value: 0.0},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,21 +533,10 @@ func TestCompositeIndex(t *testing.T) {
 
 	// Test 1: Exact match on composite index
 	// We check if providing values for first(1) and last(2) hits the index
-	keyFirst, err := ToKey("John")
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyLast, err := ToKey("Doe")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	eq := map[int]*Value{
-		1: ValueOfRaw(keyFirst, orderedMaUn),
-		2: ValueOfRaw(keyLast, orderedMaUn),
-	}
-
-	seq, err := tx.Select(p, eq, nil, nil)
+	seq, err := tx.Select(p,
+		Condition{Field: 1, Operator: EQ, Value: "John"},
+		Condition{Field: 2, Operator: EQ, Value: "Doe"},
+	)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)
 	}
@@ -643,16 +565,11 @@ func TestCompositeIndex(t *testing.T) {
 
 	// Test 3: Composite + non-indexed filter
 	// John Doe (1, 2) AND Age=30(3) (Age is 30 in data)
-	keyAge, err := ToKey(30.0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	eqMixed := map[int]*Value{
-		1: ValueOfRaw(keyFirst, orderedMaUn),
-		2: ValueOfRaw(keyLast, orderedMaUn),
-		3: ValueOfRaw(keyAge, orderedMaUn),
-	}
-	seq2, err := tx.Select(p, eqMixed, nil, nil)
+	seq2, err := tx.Select(p,
+		Condition{Field: 1, Operator: EQ, Value: "John"},
+		Condition{Field: 2, Operator: EQ, Value: "Doe"},
+		Condition{Field: 3, Operator: EQ, Value: 30.0},
+	)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)
 	}

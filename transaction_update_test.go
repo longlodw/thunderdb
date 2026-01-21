@@ -49,20 +49,14 @@ func TestPersistent_Update(t *testing.T) {
 		defer tx.Rollback()
 
 		// Update Bob's age to 26
-		key, _ := ToKey("2")
-		// Filter by id="2" (column 0)
-		filter := map[int]*Value{
-			0: ValueOfRaw(key, orderedMaUn),
-		}
-
 		updates := map[int]any{3: int64(26)}
-		if err := tx.Update(relation, filter, nil, nil, updates); err != nil {
+		if err := tx.Update(relation, updates, Condition{Field: 0, Operator: EQ, Value: "2"}); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify update
 		p, _ := tx.LoadStoredBody(relation)
-		seq, _ := tx.Select(p, filter, nil, nil)
+		seq, _ := tx.Select(p, Condition{Field: 0, Operator: EQ, Value: "2"})
 		count := 0
 		for row, err := range seq {
 			if err != nil {
@@ -88,14 +82,9 @@ func TestPersistent_Update(t *testing.T) {
 		defer tx.Rollback()
 
 		// Try to update Alice's email to Bob's email
-		key, _ := ToKey("1")
-		filter := map[int]*Value{
-			0: ValueOfRaw(key, orderedMaUn),
-		}
-
 		updates := map[int]any{2: "bob@example.com"}
 
-		err := tx.Update(relation, filter, nil, nil, updates)
+		err := tx.Update(relation, updates, Condition{Field: 0, Operator: EQ, Value: "1"})
 		if err == nil {
 			t.Fatal("Expected unique constraint violation error, got nil")
 		}
@@ -114,24 +103,14 @@ func TestPersistent_Update(t *testing.T) {
 		defer tx.Rollback()
 
 		// Update Charlie's age (indexed)
-		key, _ := ToKey("3")
-		filter := map[int]*Value{
-			0: ValueOfRaw(key, orderedMaUn),
-		}
 		updates := map[int]any{3: int64(36)}
-		if err := tx.Update(relation, filter, nil, nil, updates); err != nil {
+		if err := tx.Update(relation, updates, Condition{Field: 0, Operator: EQ, Value: "3"}); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify using the index
-		keyNew, _ := ToKey(int64(36))
-		// Filter by new age 36 (column 3)
-		filterNew := map[int]*Value{
-			3: ValueOfRaw(keyNew, orderedMaUn),
-		}
-
 		p, _ := tx.LoadStoredBody(relation)
-		seq, _ := tx.Select(p, filterNew, nil, nil)
+		seq, _ := tx.Select(p, Condition{Field: 3, Operator: EQ, Value: int64(36)})
 		count := 0
 		for _, err := range seq {
 			if err != nil {
@@ -144,11 +123,7 @@ func TestPersistent_Update(t *testing.T) {
 		}
 
 		// Verify old index value is gone
-		keyOld, _ := ToKey(int64(35))
-		filterOld := map[int]*Value{
-			3: ValueOfRaw(keyOld, orderedMaUn),
-		}
-		seqOld, _ := tx.Select(p, filterOld, nil, nil)
+		seqOld, _ := tx.Select(p, Condition{Field: 3, Operator: EQ, Value: int64(35)})
 		countOld := 0
 		for range seqOld {
 			countOld++
@@ -164,22 +139,16 @@ func TestPersistent_Update(t *testing.T) {
 		defer tx.Rollback()
 
 		// Update all users with age > 20 to have "Updated" name
-		// Range: age(3) > 20
-		key20, _ := ToKey(int64(20))
-		ranges := map[int]*Range{
-			3: func() *Range { r, _ := NewRangeFromBytes(key20, nil, false, true); return r }(),
-		}
-
 		updates := map[int]any{1: "Updated"} // set name (col 1)
 
-		if err := tx.Update(relation, nil, ranges, nil, updates); err != nil {
+		if err := tx.Update(relation, updates, Condition{Field: 3, Operator: GT, Value: int64(20)}); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify
 		p, _ := tx.LoadStoredBody(relation)
 		// Select using same range to check results
-		seq, _ := tx.Select(p, nil, ranges, nil)
+		seq, _ := tx.Select(p, Condition{Field: 3, Operator: GT, Value: int64(20)})
 		for row, err := range seq {
 			if err != nil {
 				t.Fatal(err)
@@ -199,14 +168,11 @@ func TestPersistent_Update(t *testing.T) {
 		tx, _ := db.Begin(true)
 		defer tx.Rollback()
 
-		key, _ := ToKey("1")
-		filter := map[int]*Value{
-			0: ValueOfRaw(key, orderedMaUn),
-		}
 		updates := map[int]any{2: "alice@example.com"} // Same email
 
-		if err := tx.Update(relation, filter, nil, nil, updates); err != nil {
+		if err := tx.Update(relation, updates, Condition{Field: 0, Operator: EQ, Value: "1"}); err != nil {
 			t.Fatalf("Update with same unique value failed: %v", err)
 		}
 	})
+
 }
