@@ -55,7 +55,7 @@ func TestPersistent_Update(t *testing.T) {
 		}
 
 		// Verify update
-		p, _ := tx.LoadStoredBody(relation)
+		p, _ := tx.StoredQuery(relation)
 		seq, _ := tx.Select(p, Condition{Field: 0, Operator: EQ, Value: "2"})
 		count := 0
 		for row, err := range seq {
@@ -106,7 +106,7 @@ func TestPersistent_Update(t *testing.T) {
 		}
 
 		// Verify using the index
-		p, _ := tx.LoadStoredBody(relation)
+		p, _ := tx.StoredQuery(relation)
 		seq, _ := tx.Select(p, Condition{Field: 3, Operator: EQ, Value: int64(36)})
 		count := 0
 		for _, err := range seq {
@@ -143,7 +143,7 @@ func TestPersistent_Update(t *testing.T) {
 		}
 
 		// Verify
-		p, _ := tx.LoadStoredBody(relation)
+		p, _ := tx.StoredQuery(relation)
 		// Select using same range to check results
 		seq, _ := tx.Select(p, Condition{Field: 3, Operator: GT, Value: int64(20)})
 		for row, err := range seq {

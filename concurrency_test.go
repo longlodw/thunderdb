@@ -86,7 +86,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 			}
 			defer tx.Rollback()
 			for j := range readIterations {
-				p, err := tx.LoadStoredBody("data")
+				p, err := tx.StoredQuery("data")
 				if err != nil {
 					t.Errorf("Reader %d load failed: %v", readerID, err)
 					return
@@ -148,7 +148,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 	}
 	defer verifyTx.Rollback()
 
-	p, err := verifyTx.LoadStoredBody("data")
+	p, err := verifyTx.StoredQuery("data")
 	if err != nil {
 		t.Fatal(err)
 	}

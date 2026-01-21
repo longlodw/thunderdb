@@ -75,11 +75,11 @@ func TestQuery_Basic(t *testing.T) {
 
 	// 2. Test Query Join
 
-	users, err := tx.LoadStoredBody(usersRel)
+	users, err := tx.StoredQuery(usersRel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	depts, err := tx.LoadStoredBody(deptRel)
+	depts, err := tx.StoredQuery(deptRel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,10 +203,10 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	}
 	defer tx.Rollback()
 
-	users, _ := tx.LoadStoredBody("users")
-	admins, _ := tx.LoadStoredBody("admins")
-	groups, _ := tx.LoadStoredBody("groups")
-	orgs, _ := tx.LoadStoredBody("orgs")
+	users, _ := tx.StoredQuery("users")
+	admins, _ := tx.StoredQuery("admins")
+	groups, _ := tx.StoredQuery("groups")
+	orgs, _ := tx.StoredQuery("orgs")
 
 	// Nested Query: qGroupsOrgs (Groups + Orgs)
 	// Groups: 0:group_id, 1:g_name, 2:org_id
@@ -355,7 +355,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	}
 	defer tx.Rollback()
 
-	nodes, err := tx.LoadStoredBody(nodesRel)
+	nodes, err := tx.StoredQuery(nodesRel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func TestQuery_Recursive(t *testing.T) {
 	}
 	defer tx.Rollback()
 
-	employees, err := tx.LoadStoredBody(employeesRel)
+	employees, err := tx.StoredQuery(employeesRel)
 	if err != nil {
 		t.Fatal(err)
 	}

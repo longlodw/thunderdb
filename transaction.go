@@ -179,7 +179,7 @@ func (tx *Tx) DeleteStorage(relation string) error {
 	return nil
 }
 
-func (tx *Tx) LoadStoredBody(name string) (*StoredQuery, error) {
+func (tx *Tx) StoredQuery(name string) (*StoredQuery, error) {
 	var metadataObj Metadata
 	if err := loadMetadata(tx.tx, name, &metadataObj); err != nil {
 		return nil, err

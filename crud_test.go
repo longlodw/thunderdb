@@ -99,7 +99,7 @@ func TestBasicCRUD_SelectAlice(t *testing.T) {
 	}
 	defer tx.Rollback()
 
-	p, err := tx.LoadStoredBody("users")
+	p, err := tx.StoredQuery("users")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 		}
 		defer tx.Rollback()
 
-		p, err := tx.LoadStoredBody("users")
+		p, err := tx.StoredQuery("users")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +243,7 @@ func TestNonIndexedSelect(t *testing.T) {
 	}
 	defer tx.Rollback()
 
-	p, err := tx.LoadStoredBody("items")
+	p, err := tx.StoredQuery("items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestProjection(t *testing.T) {
 		}
 		defer tx.Rollback()
 
-		p, err := tx.LoadStoredBody("users")
+		p, err := tx.StoredQuery("users")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -397,7 +397,7 @@ func TestDifferentOperators(t *testing.T) {
 	}
 	defer tx.Rollback()
 
-	p, err := tx.LoadStoredBody("products")
+	p, err := tx.StoredQuery("products")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ func TestCompositeIndex(t *testing.T) {
 	}
 	defer tx.Rollback()
 
-	p, err := tx.LoadStoredBody("users")
+	p, err := tx.StoredQuery("users")
 	if err != nil {
 		t.Fatal(err)
 	}
