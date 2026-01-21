@@ -117,6 +117,7 @@ func (n *joinedQueryNode) Find(
 	exclusion map[int][]*Value,
 	cols map[int]bool,
 ) (iter.Seq2[*Row, error], error) {
+	// println("DEBUG: Join Find. MainIndex:", mainIndex, "IndexRange:", indexRange, "Equals:", equals, "Ranges:", ranges, "Exclusion:", exclusion, "Cols:", cols)
 	leftRanges, rightRanges, err := splitRanges(n.left.metadata(), n.right.metadata(), ranges)
 	if err != nil {
 		return nil, err
@@ -188,6 +189,7 @@ func (n *joinedQueryNode) Find(
 					}
 					continue
 				}
+				// println("DEBUG: Join Find Right. MainIndex:", rightMainIndex, "MainRanges:", rightMainRanges)
 				rightSeq, err := n.right.Find(rightMainIndex, rightMainRanges, mergedRightEquals, mergedRightRanges, mergedRightExclusion, rightCols)
 				if err != nil {
 					if !yield(nil, err) {
@@ -261,6 +263,7 @@ func (n *joinedQueryNode) Find(
 				}
 				continue
 			}
+			// println("DEBUG: Join Find Left. MainIndex:", leftMainIndex, "MainRanges:", leftMainRanges)
 			leftSeq, err := n.left.Find(leftMainIndex, leftMainRanges, mergedLeftEquals, mergedLeftRanges, mergedLeftExclusions, leftCols)
 			if err != nil {
 				if !yield(nil, err) {
@@ -300,39 +303,62 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 	resultRanges := make(map[int]*Range)
 	resultEquals := make(map[int]*Value)
 	resultExclusion := make(map[int][]*Value)
-	vals := make(map[int]any)
-	for k, val := range row.Iter() {
-		v, err := val.GetValue()
-		if err != nil {
-			return nil, nil, nil, false, err
-		}
-		vals[k] = v
-	}
+	equalsBytes := make(map[int][]byte)
+	exclusionBytes := make(map[int]map[string]bool)
+	rowBytes := make(map[int][]byte)
 	for _, cond := range n.conditions {
 		// When computing constraints for the right side, we use values from the left side (row).
 		// The row comes from the left child, so its indices are 0 to left.ColumnsCount-1.
 		// cond.LeftField refers to a column in the left table, so we use it directly.
-		leftVal, ok := vals[cond.LeftField]
-		if !ok {
-			// If not found directly, it might be offset if the row came from a previous join?
-			// But here 'row' is strictly from n.left.Find(), so its keys should match n.left's columns.
-			return nil, nil, nil, false, ErrFieldNotFound(fmt.Sprintf("column %d (available: %v)", cond.LeftField, maps.Keys(vals)))
-		}
-		key, err := ToKey(leftVal)
-		if err != nil {
-			return nil, nil, nil, false, err
+		var key []byte
+		if rowByte, ok := rowBytes[cond.LeftField]; ok {
+			key = rowByte
+		} else {
+			var leftVal any
+			err := row.Get(cond.LeftField, &leftVal)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			key, err = ToKey(leftVal)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			rowBytes[cond.LeftField] = key
 		}
 		var curRange *Range
-		var curValue *Value
 		switch cond.Operator {
 		case EQ:
-			curValue = ValueOfRaw(key, orderedMaUn)
+			if excs, err := exclusionBytes[cond.RightField]; err {
+				if excs[string(key)] {
+					return nil, nil, nil, false, nil
+				}
+			}
+			if rng, ok := resultRanges[cond.RightField]; ok {
+				contains, err := rng.Contains(ValueOfRaw(key, orderedMaUn))
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				if !contains {
+					return nil, nil, nil, false, nil
+				}
+				delete(resultRanges, cond.RightField)
+			}
+			if existing, exists := equalsBytes[cond.RightField]; exists {
+				if !bytes.Equal(existing, key) {
+					return nil, nil, nil, false, nil
+				}
+			} else {
+				equalsBytes[cond.RightField] = key
+				equalsValue := ValueOfRaw(key, orderedMaUn)
+				resultEquals[cond.RightField] = equalsValue
+			}
 		case LT:
 			var err error
 			curRange, err = NewRangeFromBytes(nil, key, false, false)
 			if err != nil {
 				return nil, nil, nil, false, err
 			}
+
 		case LTE:
 			var err error
 			curRange, err = NewRangeFromBytes(nil, key, false, true)
@@ -352,11 +378,34 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 				return nil, nil, nil, false, err
 			}
 		case NEQ:
-			curValue = ValueOfRaw(key, orderedMaUn)
+			curValue := ValueOfRaw(key, orderedMaUn)
+			if eqb, ok := equalsBytes[cond.RightField]; ok {
+				if bytes.Equal(eqb, key) {
+					return nil, nil, nil, false, nil
+				}
+			}
+			if excs, exists := exclusionBytes[cond.RightField]; !exists {
+				exclusionBytes[cond.RightField] = make(map[string]bool)
+				resultExclusion[cond.RightField] = append(resultExclusion[cond.RightField], curValue)
+				exclusionBytes[cond.RightField][string(key)] = true
+			} else if !excs[string(key)] {
+				resultExclusion[cond.RightField] = append(resultExclusion[cond.RightField], curValue)
+				excs[string(key)] = true
+			}
 		default:
 			return nil, nil, nil, false, ErrUnsupportedOperator(cond.Operator)
 		}
 		if curRange != nil {
+			if existingEquals, exists := resultEquals[cond.RightField]; exists {
+				contains, err := curRange.Contains(existingEquals)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				if !contains {
+					return nil, nil, nil, false, nil
+				}
+				continue
+			}
 			if existingRange, ok := resultRanges[cond.RightField]; ok {
 				var err error
 				resultRanges[cond.RightField], err = existingRange.Merge(curRange)
@@ -367,27 +416,6 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 				resultRanges[cond.RightField] = curRange
 			}
 		}
-		if curValue != nil {
-			switch cond.Operator {
-			case EQ:
-				if existingValue, ok := resultEquals[cond.RightField]; ok {
-					existingBytes, err := existingValue.GetRaw()
-					if err != nil {
-						return nil, nil, nil, false, err
-					}
-					curBytes, err := curValue.GetRaw()
-					if err != nil {
-						return nil, nil, nil, false, err
-					}
-					if !bytes.Equal(existingBytes, curBytes) {
-						return nil, nil, nil, false, nil
-					}
-				}
-				resultEquals[cond.RightField] = curValue
-			case NEQ:
-				resultExclusion[cond.RightField] = append(resultExclusion[cond.RightField], curValue)
-			}
-		}
 	}
 	return resultEquals, resultRanges, resultExclusion, true, nil
 }
@@ -396,28 +424,55 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, ma
 	resultRanges := make(map[int]*Range)
 	resultEquals := make(map[int]*Value)
 	resultExclusion := make(map[int][]*Value)
-	vals := make(map[int]any)
-	for k, val := range row.Iter() {
-		v, err := val.GetValue()
-		if err != nil {
-			return nil, nil, nil, false, err
-		}
-		vals[k] = v
-	}
+	equalsBytes := make(map[int][]byte)
+	exclusionBytes := make(map[int]map[string]bool)
+	rowBytes := make(map[int][]byte)
 	for _, cond := range n.conditions {
-		rightVal, ok := vals[cond.RightField]
-		if !ok {
-			return nil, nil, nil, false, ErrFieldNotFound(fmt.Sprintf("column %d", cond.RightField))
-		}
-		key, err := ToKey(rightVal)
-		if err != nil {
-			return nil, nil, nil, false, err
+		// When computing constraints for the left side, we use values from the right side (row).
+		// The row comes from the right child, so its indices are left.ColumnsCount to left.ColumnsCount+right.ColumnsCount-1.
+		// cond.RightField refers to a column in the right table, so we need to adjust it.
+		var key []byte
+		if rowByte, ok := rowBytes[cond.RightField]; ok {
+			key = rowByte
+		} else {
+			var rightVal any
+			err := row.Get(cond.RightField, &rightVal)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			key, err = ToKey(rightVal)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			rowBytes[cond.RightField] = key
 		}
 		var curRange *Range
-		var curValue *Value
 		switch cond.Operator {
 		case EQ:
-			curValue = ValueOfRaw(key, orderedMaUn)
+			if excs, err := exclusionBytes[cond.LeftField]; err {
+				if excs[string(key)] {
+					return nil, nil, nil, false, nil
+				}
+			}
+			if rng, ok := resultRanges[cond.LeftField]; ok {
+				contains, err := rng.Contains(ValueOfRaw(key, orderedMaUn))
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				if !contains {
+					return nil, nil, nil, false, nil
+				}
+				delete(resultRanges, cond.LeftField)
+			}
+			if existing, exists := equalsBytes[cond.LeftField]; exists {
+				if !bytes.Equal(existing, key) {
+					return nil, nil, nil, false, nil
+				}
+			} else {
+				equalsBytes[cond.LeftField] = key
+				equalsValue := ValueOfRaw(key, orderedMaUn)
+				resultEquals[cond.LeftField] = equalsValue
+			}
 		case LT:
 			var err error
 			curRange, err = NewRangeFromBytes(nil, key, false, false)
@@ -443,11 +498,34 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, ma
 				return nil, nil, nil, false, err
 			}
 		case NEQ:
-			curValue = ValueOfRaw(key, orderedMaUn)
+			curValue := ValueOfRaw(key, orderedMaUn)
+			if eqb, ok := equalsBytes[cond.LeftField]; ok {
+				if bytes.Equal(eqb, key) {
+					return nil, nil, nil, false, nil
+				}
+			}
+			if excs, exists := exclusionBytes[cond.LeftField]; !exists {
+				exclusionBytes[cond.LeftField] = make(map[string]bool)
+				resultExclusion[cond.LeftField] = append(resultExclusion[cond.LeftField], curValue)
+				exclusionBytes[cond.LeftField][string(key)] = true
+			} else if !excs[string(key)] {
+				resultExclusion[cond.LeftField] = append(resultExclusion[cond.LeftField], curValue)
+				excs[string(key)] = true
+			}
 		default:
 			return nil, nil, nil, false, ErrUnsupportedOperator(cond.Operator)
 		}
 		if curRange != nil {
+			if existingEquals, exists := resultEquals[cond.LeftField]; exists {
+				contains, err := curRange.Contains(existingEquals)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				if !contains {
+					return nil, nil, nil, false, nil
+				}
+				continue
+			}
 			if existingRange, ok := resultRanges[cond.LeftField]; ok {
 				var err error
 				resultRanges[cond.LeftField], err = existingRange.Merge(curRange)
@@ -456,14 +534,6 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, ma
 				}
 			} else {
 				resultRanges[cond.LeftField] = curRange
-			}
-		}
-		if curValue != nil {
-			switch cond.Operator {
-			case EQ:
-				resultEquals[cond.LeftField] = curValue
-			case NEQ:
-				resultExclusion[cond.LeftField] = append(resultExclusion[cond.LeftField], curValue)
 			}
 		}
 	}
@@ -713,7 +783,29 @@ func (n *backedQueryNode) Find(
 		return func(func(*Row, error) bool) {
 		}, nil
 	}
-	return n.backing.find(mainIndex, indexRange, equals, ranges, exclusion, cols)
+	mergedEquals, possible, err := mergeEquals(n.equals, equals)
+	if err != nil {
+		return nil, err
+	}
+	if !possible {
+		return func(func(*Row, error) bool) {
+		}, nil
+	}
+	mergedRanges, err := MergeRangesMap(n.ranges, ranges)
+	if err != nil {
+		return nil, err
+	}
+	mergedExclusion := mergeNotEquals(n.exclusion, exclusion)
+	if mainIndex == 0 {
+		bestIndex, bestRanges, err := n.backing.metadata.bestIndex(mergedEquals, mergedRanges)
+		if err != nil {
+			return nil, err
+		}
+		// println("DEBUG: BackedNode Find. BestIndex:", bestIndex, "BestRanges:", bestRanges)
+		return n.backing.find(bestIndex, bestRanges, mergedEquals, mergedRanges, mergedExclusion, cols)
+	}
+	// println("DEBUG: BackedNode Find. Given Index:", mainIndex, "IndexRange:", indexRange)
+	return n.backing.find(mainIndex, indexRange, mergedEquals, mergedRanges, mergedExclusion, cols)
 }
 
 func (n *backedQueryNode) propagateToParents(*Row, queryNode) error {
@@ -726,6 +818,7 @@ func (n *backedQueryNode) propagateToParents(*Row, queryNode) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("DEBUG: BackedNode %s propagating. BestIndex: %d, BestRanges: %v\n", n.backing.name, bestIndex, bestRanges)
 	cols := make(map[int]bool)
 	for k := range n.metadata().ColumnsCount {
 		cols[k] = true

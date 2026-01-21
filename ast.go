@@ -154,32 +154,69 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 	ranges = make(map[int]*Range)
 	exclusion = make(map[int][]*Value)
 	possible = true
+	equalsBytes := make(map[int][]byte)
+	exclusionBytes := make(map[int]map[string]bool)
 
 	for _, cond := range conditions {
 		val := ValueOfLiteral(cond.Value, orderedMaUn)
+		valBytes, err := val.GetRaw()
+		if err != nil {
+			return nil, nil, nil, false, err
+		}
 		switch cond.Operator {
 		case EQ:
-			if existing, exists := equals[cond.Field]; exists {
-				existingBytes, err := existing.GetRaw()
+			if existing, exists := equalsBytes[cond.Field]; exists {
+				if !bytes.Equal(existing, valBytes) {
+					possible = false
+					return nil, nil, nil, false, nil
+				}
+			} else {
+				equalsBytes[cond.Field] = valBytes
+			}
+			if rng, exists := ranges[cond.Field]; exists {
+				inRange, err := rng.Contains(val)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
-				valBytes, err := val.GetRaw()
-				if err != nil {
-					return nil, nil, nil, false, err
+				if !inRange {
+					possible = false
+					return nil, nil, nil, false, nil
 				}
-				if !bytes.Equal(existingBytes, valBytes) {
+				delete(ranges, cond.Field)
+			}
+			if exclusions, exists := exclusionBytes[cond.Field]; exists {
+				if exclusions[string(valBytes)] {
 					possible = false
 					return nil, nil, nil, false, nil
 				}
 			}
 			equals[cond.Field] = val
 		case NEQ:
-			exclusion[cond.Field] = append(exclusion[cond.Field], val)
+			if existing, exists := equalsBytes[cond.Field]; exists {
+				if bytes.Equal(existing, valBytes) {
+					possible = false
+					return nil, nil, nil, false, nil
+				}
+			}
+			if _, exists := exclusionBytes[cond.Field]; !exists {
+				exclusionBytes[cond.Field] = make(map[string]bool)
+				exclusion[cond.Field] = append(exclusion[cond.Field], val)
+			}
 		case LT:
 			curRange, err := NewRangeFromValue(nil, val, false, false)
 			if err != nil {
 				return nil, nil, nil, false, err
+			}
+			if eqVal, exists := equals[cond.Field]; exists {
+				inRange, err := curRange.Contains(eqVal)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				if !inRange {
+					possible = false
+					return nil, nil, nil, false, nil
+				}
+				continue
 			}
 			rng, exists := ranges[cond.Field]
 			if !exists {
@@ -195,6 +232,17 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 			if err != nil {
 				return nil, nil, nil, false, err
 			}
+			if eqVal, exists := equals[cond.Field]; exists {
+				inRange, err := curRange.Contains(eqVal)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				if !inRange {
+					possible = false
+					return nil, nil, nil, false, nil
+				}
+				continue
+			}
 			rng, exists := ranges[cond.Field]
 			if !exists {
 				ranges[cond.Field] = curRange
@@ -209,6 +257,17 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 			if err != nil {
 				return nil, nil, nil, false, err
 			}
+			if eqVal, exists := equals[cond.Field]; exists {
+				inRange, err := curRange.Contains(eqVal)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				if !inRange {
+					possible = false
+					return nil, nil, nil, false, nil
+				}
+				continue
+			}
 			rng, exists := ranges[cond.Field]
 			if !exists {
 				ranges[cond.Field] = curRange
@@ -222,6 +281,17 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 			curRange, err := NewRangeFromValue(val, nil, true, false)
 			if err != nil {
 				return nil, nil, nil, false, err
+			}
+			if eqVal, exists := equals[cond.Field]; exists {
+				inRange, err := curRange.Contains(eqVal)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				if !inRange {
+					possible = false
+					return nil, nil, nil, false, nil
+				}
+				continue
 			}
 			rng, exists := ranges[cond.Field]
 			if !exists {
