@@ -90,7 +90,7 @@ func TestQuery_Basic(t *testing.T) {
 	// Depts: department(0), location(1)
 	// Join condition: users.department (2) == depts.department (0)
 	q, err := users.Join(depts, []JoinOn{
-		{leftField: 2, rightField: 0, operator: EQ},
+		{LeftField: 2, RightField: 0, Operator: EQ},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +213,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// Orgs: 0:org_id, 1:o_name, 2:region
 	// Join condition: groups.org_id (2) == orgs.org_id (0)
 	qGroupsOrgs, err := groups.Join(orgs, []JoinOn{
-		{leftField: 2, rightField: 0, operator: EQ},
+		{LeftField: 2, RightField: 0, Operator: EQ},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// qGroupsOrgs: 0-2 (groups), 3-5 (orgs) -> will become 3-8 in final
 	// Join condition: users.group_id (2) == groups.group_id (0 from right side)
 	branch1, err := users.Join(qGroupsOrgs, []JoinOn{
-		{leftField: 2, rightField: 0, operator: EQ},
+		{LeftField: 2, RightField: 0, Operator: EQ},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// Admins: 0:u_id, 1:u_name, 2:group_id
 	// Same structure.
 	branch2, err := admins.Join(qGroupsOrgs, []JoinOn{
-		{leftField: 2, rightField: 0, operator: EQ},
+		{LeftField: 2, RightField: 0, Operator: EQ},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -386,7 +386,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 
 	// Join condition: qReach.col1 == nodes.col0
 	recJoin, err := qReach.Join(nodes, []JoinOn{
-		{leftField: 1, rightField: 0, operator: EQ},
+		{LeftField: 1, RightField: 0, Operator: EQ},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -531,7 +531,7 @@ func TestQuery_Recursive(t *testing.T) {
 
 	// Join condition: employees.col0 == qPath.col0
 	recJoin, err := employees.Join(qPath, []JoinOn{
-		{leftField: 0, rightField: 0, operator: EQ},
+		{LeftField: 0, RightField: 0, Operator: EQ},
 	})
 	if err != nil {
 		t.Fatal(err)

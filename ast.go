@@ -116,9 +116,9 @@ const (
 type Op int
 
 type JoinOn struct {
-	leftField  int
-	rightField int
-	operator   Op
+	LeftField  int
+	RightField int
+	Operator   Op
 }
 
 type StoredQuery struct {

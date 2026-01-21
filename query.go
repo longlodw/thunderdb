@@ -311,12 +311,12 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 	for _, cond := range n.conditions {
 		// When computing constraints for the right side, we use values from the left side (row).
 		// The row comes from the left child, so its indices are 0 to left.ColumnsCount-1.
-		// cond.leftField refers to a column in the left table, so we use it directly.
-		leftVal, ok := vals[cond.leftField]
+		// cond.LeftField refers to a column in the left table, so we use it directly.
+		leftVal, ok := vals[cond.LeftField]
 		if !ok {
 			// If not found directly, it might be offset if the row came from a previous join?
 			// But here 'row' is strictly from n.left.Find(), so its keys should match n.left's columns.
-			return nil, nil, nil, false, ErrFieldNotFound(fmt.Sprintf("column %d (available: %v)", cond.leftField, maps.Keys(vals)))
+			return nil, nil, nil, false, ErrFieldNotFound(fmt.Sprintf("column %d (available: %v)", cond.LeftField, maps.Keys(vals)))
 		}
 		key, err := ToKey(leftVal)
 		if err != nil {
@@ -324,7 +324,7 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 		}
 		var curRange *Range
 		var curValue *Value
-		switch cond.operator {
+		switch cond.Operator {
 		case EQ:
 			curValue = ValueOfRaw(key, orderedMaUn)
 		case LT:
@@ -354,23 +354,23 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 		case NEQ:
 			curValue = ValueOfRaw(key, orderedMaUn)
 		default:
-			return nil, nil, nil, false, ErrUnsupportedOperator(cond.operator)
+			return nil, nil, nil, false, ErrUnsupportedOperator(cond.Operator)
 		}
 		if curRange != nil {
-			if existingRange, ok := resultRanges[cond.rightField]; ok {
+			if existingRange, ok := resultRanges[cond.RightField]; ok {
 				var err error
-				resultRanges[cond.rightField], err = existingRange.Merge(curRange)
+				resultRanges[cond.RightField], err = existingRange.Merge(curRange)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
 			} else {
-				resultRanges[cond.rightField] = curRange
+				resultRanges[cond.RightField] = curRange
 			}
 		}
 		if curValue != nil {
-			switch cond.operator {
+			switch cond.Operator {
 			case EQ:
-				if existingValue, ok := resultEquals[cond.rightField]; ok {
+				if existingValue, ok := resultEquals[cond.RightField]; ok {
 					existingBytes, err := existingValue.GetRaw()
 					if err != nil {
 						return nil, nil, nil, false, err
@@ -383,9 +383,9 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 						return nil, nil, nil, false, nil
 					}
 				}
-				resultEquals[cond.rightField] = curValue
+				resultEquals[cond.RightField] = curValue
 			case NEQ:
-				resultExclusion[cond.rightField] = append(resultExclusion[cond.rightField], curValue)
+				resultExclusion[cond.RightField] = append(resultExclusion[cond.RightField], curValue)
 			}
 		}
 	}
@@ -405,9 +405,9 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, ma
 		vals[k] = v
 	}
 	for _, cond := range n.conditions {
-		rightVal, ok := vals[cond.rightField]
+		rightVal, ok := vals[cond.RightField]
 		if !ok {
-			return nil, nil, nil, false, ErrFieldNotFound(fmt.Sprintf("column %d", cond.rightField))
+			return nil, nil, nil, false, ErrFieldNotFound(fmt.Sprintf("column %d", cond.RightField))
 		}
 		key, err := ToKey(rightVal)
 		if err != nil {
@@ -415,7 +415,7 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, ma
 		}
 		var curRange *Range
 		var curValue *Value
-		switch cond.operator {
+		switch cond.Operator {
 		case EQ:
 			curValue = ValueOfRaw(key, orderedMaUn)
 		case LT:
@@ -445,25 +445,25 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, ma
 		case NEQ:
 			curValue = ValueOfRaw(key, orderedMaUn)
 		default:
-			return nil, nil, nil, false, ErrUnsupportedOperator(cond.operator)
+			return nil, nil, nil, false, ErrUnsupportedOperator(cond.Operator)
 		}
 		if curRange != nil {
-			if existingRange, ok := resultRanges[cond.leftField]; ok {
+			if existingRange, ok := resultRanges[cond.LeftField]; ok {
 				var err error
-				resultRanges[cond.leftField], err = existingRange.Merge(curRange)
+				resultRanges[cond.LeftField], err = existingRange.Merge(curRange)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
 			} else {
-				resultRanges[cond.leftField] = curRange
+				resultRanges[cond.LeftField] = curRange
 			}
 		}
 		if curValue != nil {
-			switch cond.operator {
+			switch cond.Operator {
 			case EQ:
-				resultEquals[cond.leftField] = curValue
+				resultEquals[cond.LeftField] = curValue
 			case NEQ:
-				resultExclusion[cond.leftField] = append(resultExclusion[cond.leftField], curValue)
+				resultExclusion[cond.LeftField] = append(resultExclusion[cond.LeftField], curValue)
 			}
 		}
 	}

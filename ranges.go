@@ -59,12 +59,18 @@ func (ir *Range) Merge(other *Range) (*Range, error) {
 		if err != nil {
 			return nil, err
 		}
-		irStart, err := newStart.GetRaw()
-		if err != nil {
-			return nil, err
+		var irStart []byte
+		if newStart != nil {
+			irStart, err = newStart.GetRaw()
+			if err != nil {
+				return nil, err
+			}
 		}
-		c := bytes.Compare(irStart, otherStart)
-		if newStart == nil || c > 0 {
+		c := 0
+		if newStart != nil {
+			c = bytes.Compare(irStart, otherStart)
+		}
+		if newStart == nil || c < 0 {
 			newStart = other.start
 			newIncludeStart = other.includeStart
 		} else if c == 0 {
@@ -78,12 +84,18 @@ func (ir *Range) Merge(other *Range) (*Range, error) {
 		if err != nil {
 			return nil, err
 		}
-		irEnd, err := newEnd.GetRaw()
-		if err != nil {
-			return nil, err
+		var irEnd []byte
+		if newEnd != nil {
+			irEnd, err = newEnd.GetRaw()
+			if err != nil {
+				return nil, err
+			}
 		}
-		c := bytes.Compare(irEnd, otherEnd)
-		if newEnd == nil || c < 0 {
+		c := 0
+		if newEnd != nil {
+			c = bytes.Compare(irEnd, otherEnd)
+		}
+		if newEnd == nil || c > 0 {
 			newEnd = other.end
 			newIncludeEnd = other.includeEnd
 		} else if c == 0 {
