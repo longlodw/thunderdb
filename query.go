@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"slices"
 	// "github.com/davecgh/go-spew/spew"
 )
 
@@ -144,15 +145,18 @@ func (n *joinedQueryNode) Find(
 					}
 					continue
 				}
-				rowRightEquals, rowRightRanges, rowRightNotEquals, err := n.ComputeContraintsForRight(leftRow)
+				rowRightEquals, rowRightRanges, rowRightNotEquals, possible, err := n.ComputeContraintsForRight(leftRow)
 				if err != nil {
 					if !yield(nil, err) {
 						return
 					}
 					continue
 				}
+				if !possible {
+					// Constraints conflicted, skip this left row
+					continue
+				}
 
-				// MERGE FIX: Check for conflicts properly
 				mergedRightEquals, ok, err := mergeEquals(rightEquals, rowRightEquals)
 				if err != nil {
 					if !yield(nil, err) {
@@ -220,11 +224,15 @@ func (n *joinedQueryNode) Find(
 				}
 				continue
 			}
-			rowLeftEquals, rowLeftRanges, rowLeftExclusions, err := n.ComputeContraintsForLeft(rightRow)
+			rowLeftEquals, rowLeftRanges, rowLeftExclusions, possible, err := n.ComputeContraintsForLeft(rightRow)
 			if err != nil {
 				if !yield(nil, err) {
 					return
 				}
+				continue
+			}
+			if !possible {
+				// Constraints conflicted, skip this right row
 				continue
 			}
 			mergedLeftEquals, ok, err := mergeEquals(leftEquals, rowLeftEquals)
@@ -287,7 +295,7 @@ func (n *joinedQueryNode) joinRows(leftRow, rightRow *Row) (*Row, error) {
 	return newRow, nil
 }
 
-func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, map[int]*Range, map[int][]*Value, error) {
+func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, map[int]*Range, map[int][]*Value, bool, error) {
 	resultRanges := make(map[int]*Range)
 	resultEquals := make(map[int]*Value)
 	resultExclusion := make(map[int][]*Value)
@@ -295,7 +303,7 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 	for k, val := range row.Iter() {
 		v, err := val.GetValue()
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, false, err
 		}
 		vals[k] = v
 	}
@@ -307,11 +315,11 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 		if !ok {
 			// If not found directly, it might be offset if the row came from a previous join?
 			// But here 'row' is strictly from n.left.Find(), so its keys should match n.left's columns.
-			return nil, nil, nil, ErrFieldNotFound(fmt.Sprintf("column %d (available: %v)", cond.leftField, maps.Keys(vals)))
+			return nil, nil, nil, false, ErrFieldNotFound(fmt.Sprintf("column %d (available: %v)", cond.leftField, maps.Keys(vals)))
 		}
 		key, err := ToKey(leftVal)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, false, err
 		}
 		var curRange *Range
 		var curValue *Value
@@ -322,90 +330,68 @@ func (n *joinedQueryNode) ComputeContraintsForRight(row *Row) (map[int]*Value, m
 			var err error
 			curRange, err = NewRangeFromBytes(nil, key, false, false)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 		case LTE:
 			var err error
 			curRange, err = NewRangeFromBytes(nil, key, false, true)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 		case GT:
 			var err error
 			curRange, err = NewRangeFromBytes(key, nil, false, false)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 		case GTE:
 			var err error
 			curRange, err = NewRangeFromBytes(key, nil, true, false)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 		case NEQ:
 			curValue = ValueOfRaw(key, orderedMaUn)
 		default:
-			return nil, nil, nil, ErrUnsupportedOperator(cond.operator)
+			return nil, nil, nil, false, ErrUnsupportedOperator(cond.operator)
 		}
 		if curRange != nil {
 			if existingRange, ok := resultRanges[cond.rightField]; ok {
 				var err error
 				resultRanges[cond.rightField], err = existingRange.Merge(curRange)
 				if err != nil {
-					return nil, nil, nil, err
+					return nil, nil, nil, false, err
 				}
 			} else {
 				resultRanges[cond.rightField] = curRange
 			}
 		}
 		if curValue != nil {
-			if cond.operator == EQ {
+			switch cond.operator {
+			case EQ:
 				if existingValue, ok := resultEquals[cond.rightField]; ok {
 					existingBytes, err := existingValue.GetRaw()
 					if err != nil {
-						return nil, nil, nil, err
+						return nil, nil, nil, false, err
 					}
 					curBytes, err := curValue.GetRaw()
 					if err != nil {
-						return nil, nil, nil, err
+						return nil, nil, nil, false, err
 					}
 					if !bytes.Equal(existingBytes, curBytes) {
-						// Conflict in equality constraints, impossible to match
-						// We can return a specific error or just empty/impossible ranges
-						// But for now, returning nil, nil, nil, nil might be interpreted as error?
-						// Wait, the signature is (map, map, map, error)
-						// If we return nil error, the caller might try to use nil maps.
-						// Let's return a "impossible" error or similar if we want to stop processing?
-						// Or just return maps that will yield no results?
-						// Actually, if we have conflicting EQ constraints, it means 0 matches.
-						// Let's create a "always false" constraint or similar.
-						// Or simpler: return an error that says "constraint conflict" and handle it by yielding nothing.
-						// But for now, let's just let it overwrite? No, that's wrong.
-						// If left.A = 1 AND left.A = 2, then result is empty.
-						// In this context, we are computing constraints for the right table based on ONE row from left.
-						// So we are saying: Right.B MUST equal Left.A (which is 1).
-						// If there is another condition saying Right.B MUST equal Left.C (which is 2),
-						// then Right.B must be 1 AND 2. Impossible.
-						// So we should fail this row.
-						// To "fail" this row, we can return an error that the caller ignores/treats as "no match"?
-						// Looking at usage:
-						// rowRightEquals, ..., err := n.ComputeContraintsForRight(leftRow)
-						// if err != nil { if !yield(nil, err) ... }
-						// So if we return error, the WHOLE query fails. We don't want that.
-						// We want to skip this row.
-						// We need a specific error "ErrConstraintConflict" that the caller can catch and continue.
+						return nil, nil, nil, false, nil
 					}
 				}
 				resultEquals[cond.rightField] = curValue
-			} else if cond.operator == NEQ {
+			case NEQ:
 				resultExclusion[cond.rightField] = append(resultExclusion[cond.rightField], curValue)
 			}
 		}
 	}
-	return resultEquals, resultRanges, resultExclusion, nil
+	return resultEquals, resultRanges, resultExclusion, true, nil
 }
 
-func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, map[int]*Range, map[int][]*Value, error) {
+func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, map[int]*Range, map[int][]*Value, bool, error) {
 	resultRanges := make(map[int]*Range)
 	resultEquals := make(map[int]*Value)
 	resultExclusion := make(map[int][]*Value)
@@ -413,18 +399,18 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, ma
 	for k, val := range row.Iter() {
 		v, err := val.GetValue()
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, false, err
 		}
 		vals[k] = v
 	}
 	for _, cond := range n.conditions {
 		rightVal, ok := vals[cond.rightField]
 		if !ok {
-			return nil, nil, nil, ErrFieldNotFound(fmt.Sprintf("column %d", cond.rightField))
+			return nil, nil, nil, false, ErrFieldNotFound(fmt.Sprintf("column %d", cond.rightField))
 		}
 		key, err := ToKey(rightVal)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, false, err
 		}
 		var curRange *Range
 		var curValue *Value
@@ -435,60 +421,65 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(row *Row) (map[int]*Value, ma
 			var err error
 			curRange, err = NewRangeFromBytes(nil, key, false, false)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 		case LTE:
 			var err error
 			curRange, err = NewRangeFromBytes(nil, key, false, true)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 		case GT:
 			var err error
 			curRange, err = NewRangeFromBytes(key, nil, false, false)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 		case GTE:
 			var err error
 			curRange, err = NewRangeFromBytes(key, nil, true, false)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 		case NEQ:
 			curValue = ValueOfRaw(key, orderedMaUn)
 		default:
-			return nil, nil, nil, ErrUnsupportedOperator(cond.operator)
+			return nil, nil, nil, false, ErrUnsupportedOperator(cond.operator)
 		}
 		if curRange != nil {
 			if existingRange, ok := resultRanges[cond.leftField]; ok {
 				var err error
 				resultRanges[cond.leftField], err = existingRange.Merge(curRange)
 				if err != nil {
-					return nil, nil, nil, err
+					return nil, nil, nil, false, err
 				}
 			} else {
 				resultRanges[cond.leftField] = curRange
 			}
 		}
 		if curValue != nil {
-			if cond.operator == EQ {
+			switch cond.operator {
+			case EQ:
 				resultEquals[cond.leftField] = curValue
-			} else if cond.operator == NEQ {
+			case NEQ:
 				resultExclusion[cond.leftField] = append(resultExclusion[cond.leftField], curValue)
 			}
 		}
 	}
-	return resultEquals, resultRanges, resultExclusion, nil
+	return resultEquals, resultRanges, resultExclusion, true, nil
 }
 
 func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 	// fmt.Printf("DEBUG: JoinedNode %p propagate. Child: %p (Left: %p, Right: %p)\n", n, child, n.left, n.right)
 	switch child {
 	case n.left:
-		rightEquals, rightRanges, rightExclusions, err := n.ComputeContraintsForRight(row)
+		rightEquals, rightRanges, rightExclusions, possible, err := n.ComputeContraintsForRight(row)
 		if err != nil {
 			return err
+		}
+		if !possible {
+			// Constraints conflicted, no matches possible
+			return nil
 		}
 		// fmt.Printf("DEBUG: Join Left->Right. Row: %v. Ranges: %v\n", spew.Sdump(row.values), rightRanges)
 		bestIndexRight, bestRangesRight, err := n.right.metadata().bestIndex(rightEquals, rightRanges)
@@ -519,9 +510,13 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 			}
 		}
 	case n.right:
-		leftEquals, leftRanges, leftExclusions, err := n.ComputeContraintsForLeft(row)
+		leftEquals, leftRanges, leftExclusions, possible, err := n.ComputeContraintsForLeft(row)
 		if err != nil {
 			return err
+		}
+		if !possible {
+			// Constraints conflicted, no matches possible
+			return nil
 		}
 		// fmt.Printf("DEBUG: Join Right->Left. Row: %v. Ranges: %v\n", spew.Sdump(row.values), leftRanges)
 		bestIndexLeft, bestRangesLeft, err := n.left.metadata().bestIndex(leftEquals, leftRanges)
@@ -633,10 +628,7 @@ func (n *projectedQueryNode) Find(
 		if k >= len(n.columns) {
 			return nil, ErrFieldNotFound(fmt.Sprintf("computed column %d", k))
 		}
-		childVals := make([]*Value, len(vals))
-		for i, val := range vals {
-			childVals[i] = val
-		}
+		childVals := slices.Clone(vals)
 		childExclusion[n.columns[k]] = childVals
 	}
 	childSeq, err := n.child.Find(childIndex, indexRange, childEquals, childRanges, childExclusion, childCols)

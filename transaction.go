@@ -341,21 +341,12 @@ func (tx *Tx) constructQueryGraph(
 		result := &backedQueryNode{
 			ranges: ranges,
 		}
-		// explored[bf] = result // REMOVE THIS LINE
+		explored[bf] = result
 		storage, err := loadStorage(tx.tx, b.storageName, tx.maUn)
 		if err != nil {
 			return nil, err
 		}
 		initBackedQueryNode(result, storage, equals, ranges, exclusion)
-
-		// Instead of just creating one node and caching it in explored immediately,
-		// we should consider if the same StoredQuery appears multiple times with DIFFERENT constraints.
-		// Wait, 'bf' includes the constraints string, so unique constraints = unique cache entry.
-		// However, for StoredQuery, if it's reused, it might be safer to NOT cache it or handle it carefully?
-		// But let's try just NOT returning early if it's already in explored for StoredQuery?
-		// No, the logic above `if node, ok := explored[bf]; ok` handles that.
-
-		explored[bf] = result // Add it back
 		*baseNodes = append(*baseNodes, result)
 		return result, nil
 	default:

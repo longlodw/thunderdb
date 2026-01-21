@@ -205,7 +205,7 @@ type scanResult struct {
 }
 
 func (s *storage) scan(
-	forcedIndex *uint64,
+	forcedIndex uint64,
 	forcedRange *Range,
 	equals map[int]*Value,
 	ranges map[int]*Range,
@@ -213,22 +213,8 @@ func (s *storage) scan(
 	unmarshalCols map[int]bool,
 	rawCols map[int]bool,
 ) iter.Seq2[*scanResult, error] {
-	var shortestIndex uint64
-	var shortestRanges *Range
-	var err error
-
-	if forcedIndex != nil {
-		shortestIndex = *forcedIndex
-		shortestRanges = forcedRange
-	} else {
-		shortestIndex, shortestRanges, err = s.metadata.bestIndex(equals, ranges)
-		if err != nil {
-			return func(yield func(*scanResult, error) bool) { yield(nil, err) }
-		}
-	}
-
 	return func(yield func(*scanResult, error) bool) {
-		if shortestRanges == nil {
+		if forcedIndex == 0 {
 			// Full Scan
 			c := s.dataBucket().Cursor()
 			var prev []byte
@@ -292,12 +278,12 @@ func (s *storage) scan(
 		} else {
 			// Index Scan
 			var idxBytes [8]byte
-			binary.BigEndian.PutUint64(idxBytes[:], shortestIndex)
+			binary.BigEndian.PutUint64(idxBytes[:], forcedIndex)
 			idxBucket := s.indexBucket().Bucket(idxBytes[:])
 			c := idxBucket.Cursor()
 			var k []byte
-			if shortestRanges.start != nil {
-				start, err := shortestRanges.start.GetRaw()
+			if forcedRange.start != nil {
+				start, err := forcedRange.start.GetRaw()
 				if err != nil {
 					yield(nil, err)
 					return
@@ -307,15 +293,15 @@ func (s *storage) scan(
 				k, _ = c.First()
 			}
 			lessThan := func(k []byte) bool {
-				if shortestRanges.end == nil {
+				if forcedRange.end == nil {
 					return true
 				}
-				end, err := shortestRanges.end.GetRaw()
+				end, err := forcedRange.end.GetRaw()
 				if err != nil {
 					return false
 				}
 				cmp := bytes.Compare(k[:len(k)-8], end)
-				return cmp < 0 || (cmp == 0 && shortestRanges.includeEnd)
+				return cmp < 0 || (cmp == 0 && forcedRange.includeEnd)
 			}
 			for ; k != nil && lessThan(k); k, _ = c.Next() {
 				vals := make(map[int]any)
@@ -399,13 +385,13 @@ func (s *storage) Update(
 			indexesToSkip[i] = true
 		}
 	}
-	shortestIndex, _, err := s.metadata.bestIndex(equals, ranges)
+	shortestIndex, shortestRange, err := s.metadata.bestIndex(equals, ranges)
 	if err != nil {
 		return err
 	}
 	updateMainIndex := indexesToUpdate[shortestIndex]
 
-	for res, err := range s.scan(nil, nil, equals, ranges, excludes, colsToUnmarshal, nil) {
+	for res, err := range s.scan(shortestIndex, shortestRange, equals, ranges, excludes, colsToUnmarshal, nil) {
 		if err != nil {
 			return err
 		}
@@ -493,12 +479,12 @@ func (s *storage) insertIndexes(id []byte, values *map[int]any, skip map[uint64]
 }
 
 func (s *storage) Delete(equals map[int]*Value, ranges map[int]*Range, excludes map[int][]*Value) error {
-	shortestIndex, _, err := s.metadata.bestIndex(equals, ranges)
+	shortestIndex, shortestRange, err := s.metadata.bestIndex(equals, ranges)
 	if err != nil {
 		return err
 	}
 
-	for res, err := range s.scan(nil, nil, equals, ranges, excludes, nil, nil) {
+	for res, err := range s.scan(shortestIndex, shortestRange, equals, ranges, excludes, nil, nil) {
 		if err != nil {
 			return err
 		}
@@ -529,12 +515,8 @@ func (s *storage) find(
 	exclusion map[int][]*Value,
 	cols map[int]bool,
 ) (iter.Seq2[*Row, error], error) {
-	var forcedIdx *uint64
-	if indexRange != nil {
-		forcedIdx = &mainIndex
-	}
 	return func(yield func(*Row, error) bool) {
-		for res, err := range s.scan(forcedIdx, indexRange, equals, ranges, exclusion, nil, cols) {
+		for res, err := range s.scan(mainIndex, indexRange, equals, ranges, exclusion, nil, cols) {
 			if err != nil {
 				if !yield(nil, err) {
 					return
