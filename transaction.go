@@ -146,6 +146,20 @@ func (tx *Tx) Delete(
 	return s.Delete(equals, ranges, exclusion)
 }
 
+func (tx *Tx) Update(
+	relation string,
+	equals map[int]*Value,
+	ranges map[int]*Range,
+	exclusion map[int][]*Value,
+	updates map[int]any,
+) error {
+	s, err := tx.loadStorage(relation)
+	if err != nil {
+		return err
+	}
+	return s.Update(equals, ranges, exclusion, updates)
+}
+
 func (tx *Tx) DeleteStorage(relation string) error {
 	tnx := tx.tx
 	if err := deleteStorage(tnx, relation); err != nil {

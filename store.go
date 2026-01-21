@@ -227,6 +227,7 @@ func (s *storage) Update(
 			indexesToSkip[i] = true
 		}
 	}
+
 	if shortestRanges == nil {
 		var prev []byte
 		vals := make(map[int]any)
@@ -238,6 +239,15 @@ func (s *storage) Update(
 				if ok, err := s.inRanges(prev, &vals, equals, ranges, excludes); err != nil {
 					return err
 				} else if ok {
+					// Ensure we have all columns needed for index updates
+					for colIdx := range colsToUnmarshal {
+						if _, ok := vals[colIdx]; !ok {
+							_, err := s.toKeyFromColumn(prev, &vals, colIdx)
+							if err != nil {
+								return err
+							}
+						}
+					}
 					// delete old indexes
 					if err := s.deleteIndexes(prev, &vals, indexesToSkip); err != nil {
 						return err
@@ -279,6 +289,15 @@ func (s *storage) Update(
 			if ok, err := s.inRanges(prev, &vals, equals, ranges, excludes); err != nil {
 				return err
 			} else if ok {
+				// Ensure we have all columns needed for index updates
+				for colIdx := range colsToUnmarshal {
+					if _, ok := vals[colIdx]; !ok {
+						_, err := s.toKeyFromColumn(prev, &vals, colIdx)
+						if err != nil {
+							return err
+						}
+					}
+				}
 				// delete old indexes
 				if err := s.deleteIndexes(prev, &vals, indexesToSkip); err != nil {
 					return err
@@ -344,6 +363,17 @@ func (s *storage) Update(
 		} else if !ok {
 			continue
 		}
+
+		// Ensure we have all columns needed for index updates
+		for colIdx := range colsToUnmarshal {
+			if _, ok := vals[colIdx]; !ok {
+				_, err := s.toKeyFromColumn(k[len(k)-8:], &vals, colIdx)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
 		// delete old indexes
 		if err := s.deleteIndexes(k[len(k)-8:], &vals, indexesToSkip); err != nil {
 			return err
@@ -394,7 +424,7 @@ func (s *storage) insertIndexes(id []byte, values *map[int]any, skip map[uint64]
 			continue
 		}
 		selectedValues := make([]any, 0, s.metadata.ColumnsCount)
-		for j := range ReferenceColumns(uint64(i)) {
+		for _, j := range ReferenceColumns(i) {
 			if v, ok := (*values)[j]; ok {
 				selectedValues = append(selectedValues, v)
 			} else {
@@ -416,6 +446,12 @@ func (s *storage) insertIndexes(id []byte, values *map[int]any, skip map[uint64]
 		if isUnique {
 			k, _ := curIdxBucket.Cursor().Seek(vKey)
 			if k != nil && bytes.Equal(k[:len(vKey)], vKey) {
+				// check if it's the same row
+				existingID := binary.BigEndian.Uint64(k[len(vKey):])
+				if existingID == binary.BigEndian.Uint64(id) {
+					// same row, skip
+					continue
+				}
 				return ErrUniqueConstraint(fmt.Sprintf("column %d", i), vKey)
 			}
 		}
