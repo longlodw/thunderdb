@@ -13,7 +13,7 @@ import (
 // 2. Reads return valid data (consistent with snapshot isolation).
 // 3. All writes are successfully persisted.
 func TestConcurrentReadWrite(t *testing.T) {
-	db, cleanup := setupTestDB(t)
+	db, cleanup := setupTestDBFromPersistent(t)
 	defer cleanup()
 
 	// Initialize the schema
@@ -22,9 +22,9 @@ func TestConcurrentReadWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Create a persistent table "data"
-	_, err = initTx.CreatePersistent("data", map[string]ColumnSpec{
-		"key": {Indexed: true, Unique: true},
-		"val": {},
+	// data: key(0), val(1)
+	err = initTx.CreateStorage("data", 2, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,17 +53,12 @@ func TestConcurrentReadWrite(t *testing.T) {
 			}
 			defer tx.Rollback()
 			for j := range writeIterations {
-				p, err := tx.LoadPersistent("data")
-				if err != nil {
-					t.Errorf("Writer %d load failed: %v", writerID, err)
-					return
-				}
-
 				key := fmt.Sprintf("key-%d-%d", writerID, j)
 				// Insert new value
-				err = p.Insert(map[string]any{
-					"key": key,
-					"val": float64(j),
+				// Column 0: key, Column 1: val
+				err = tx.Insert("data", map[int]any{
+					0: key,
+					1: float64(j),
 				})
 				if err != nil {
 					t.Errorf("Writer %d insert failed: %v", writerID, err)
@@ -91,7 +86,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 			}
 			defer tx.Rollback()
 			for j := range readIterations {
-				p, err := tx.LoadPersistent("data")
+				p, err := tx.LoadStoredBody("data")
 				if err != nil {
 					t.Errorf("Reader %d load failed: %v", readerID, err)
 					return
@@ -100,17 +95,11 @@ func TestConcurrentReadWrite(t *testing.T) {
 				targetID := rng.Intn(numWriters)
 				targetKey := fmt.Sprintf("key-%d-%d", targetID, j)
 
-				key, err := ToKey(targetKey)
-				if err != nil {
-					t.Errorf("Reader %d key error: %v", readerID, err)
-					tx.Rollback()
-					return
-				}
-				f := map[string]*BytesRange{
-					"key": NewBytesRange(key, key, true, true, nil),
-				}
-
-				seq, err := p.Select(f)
+				seq, err := tx.Select(p, Condition{
+					Field:    0,
+					Operator: EQ,
+					Value:    targetKey,
+				})
 				if err != nil {
 					t.Errorf("Reader %d select failed: %v", readerID, err)
 					tx.Rollback()
@@ -125,8 +114,8 @@ func TestConcurrentReadWrite(t *testing.T) {
 					count++
 
 					// Validate value
-					val, _ := row.Get("val")
-					if val == nil {
+					var val any
+					if err := row.Get(1, &val); err != nil {
 						t.Errorf("Reader %d found nil value for %s", readerID, targetKey)
 					}
 					// Value should be between 0 and writeIterations-1
@@ -159,7 +148,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 	}
 	defer verifyTx.Rollback()
 
-	p, err := verifyTx.LoadPersistent("data")
+	p, err := verifyTx.LoadStoredBody("data")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,14 +156,12 @@ func TestConcurrentReadWrite(t *testing.T) {
 	for i := range numWriters {
 		for j := range writeIterations {
 			targetKey := fmt.Sprintf("key-%d-%d", i, j)
-			keyBytes, err := ToKey(targetKey)
-			if err != nil {
-				t.Fatalf("ToKey failed: %v", err)
-			}
-			f := map[string]*BytesRange{
-				"key": NewBytesRange(keyBytes, keyBytes, true, true, nil),
-			}
-			seq, err := p.Select(f)
+
+			seq, err := verifyTx.Select(p, Condition{
+				Field:    0,
+				Operator: EQ,
+				Value:    targetKey,
+			})
 			if err != nil {
 				t.Fatalf("Select failed: %v", err)
 			}
@@ -187,8 +174,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 					continue
 				}
 				count++
-				finalVal, err = row.Get("val")
-				if err != nil {
+				if err := row.Get(1, &finalVal); err != nil {
 					t.Errorf("Verification row get error for %s: %v", targetKey, err)
 				}
 			}
