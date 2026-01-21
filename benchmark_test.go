@@ -305,21 +305,216 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 	})
 
 	b.Run("RecursiveLargeRows", func(b *testing.B) {
-		// Skipping recursion benchmarks as the new API recursion logic might differ significantly
-		// and the provided snippet doesn't show recursion in transaction.go yet,
-		// or rather, the StoredQuery/Join structure is there but CreateRecursion is missing in new Tx API?
-		// transaction.go shows StoredQuery, Select, but not CreateRecursion.
-		// Assuming recursion is not yet fully ported or exposed in the same way in the new API subset shown.
-		b.Skip("Recursion not implemented in new benchmark update yet")
+		db, cleanup := setupBenchmarkDB(b)
+		defer cleanup()
+
+		// Setup: Chain of 10 nodes with large payload
+		// chain: src(0), dst(1), payload(2)
+		chainLen := 10
+		tx, err := db.Begin(true)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer tx.Rollback()
+
+		err = tx.CreateStorage("large_chain", 3, []IndexInfo{
+			{ReferencedCols: []int{0}}, // src
+			{ReferencedCols: []int{1}}, // dst
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		for i := 0; i < chainLen; i++ {
+			tx.Insert("large_chain", map[int]any{
+				0: i,
+				1: i + 1,
+				2: largeStr,
+			})
+		}
+		if err := tx.Commit(); err != nil {
+			b.Fatal(err)
+		}
+
+		// Read Tx
+		readTx, err := db.Begin(false)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer readTx.Rollback()
+
+		chain, _ := readTx.StoredQuery("large_chain")
+
+		// Query: reach(src, dst)
+		qReach, _ := NewDatalogQuery(2, []IndexInfo{
+			{ReferencedCols: []int{0, 1}, IsUnique: true},
+		})
+
+		// Base: chain(src, dst, payload) -> reach(src, dst)
+		base, _ := chain.Project([]int{0, 1})
+
+		// Recursive: reach(x, y) JOIN chain(y, z, p) -> reach(x, z)
+		// Join: reach.dst(1) == chain.src(0)
+		join, _ := qReach.Join(chain, []JoinOn{
+			{LeftField: 1, RightField: 0, Operator: EQ},
+		})
+
+		// Join Cols:
+		// 0: reach.src
+		// 1: reach.dst
+		// 2: chain.src
+		// 3: chain.dst
+		// 4: chain.payload
+		// Project: reach.src(0), chain.dst(3)
+		rec, _ := join.Project([]int{0, 3})
+
+		qReach.Bind([]Query{base, rec})
+
+		b.ResetTimer()
+		for b.Loop() {
+			// Find all reachable from 0
+			seq, _ := readTx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: 0})
+			count := 0
+			for range seq {
+				count++
+			}
+			if count == 0 {
+				b.Fatal("Expected results, got 0")
+			}
+		}
 	})
 }
 
 func BenchmarkRecursion(b *testing.B) {
-	b.Skip("Recursion not implemented in new benchmark update yet")
+	db, cleanup := setupBenchmarkDB(b)
+	defer cleanup()
+
+	// Setup: Chain of 10 nodes
+	chainLen := 10
+	tx, err := db.Begin(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	err = tx.CreateStorage("chain", 2, []IndexInfo{
+		{ReferencedCols: []int{0}}, // src
+		{ReferencedCols: []int{1}}, // dst
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for i := 0; i < chainLen; i++ {
+		tx.Insert("chain", map[int]any{0: i, 1: i + 1})
+	}
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+
+	readTx, err := db.Begin(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer readTx.Rollback()
+
+	chain, _ := readTx.StoredQuery("chain")
+
+	// reach(x, y)
+	qReach, _ := NewDatalogQuery(2, []IndexInfo{
+		{ReferencedCols: []int{0, 1}, IsUnique: true},
+	})
+
+	// Base: chain(x, y) -> reach(x, y)
+	base, _ := chain.Project([]int{0, 1})
+
+	// Rec: reach(x, y) JOIN chain(y, z) -> reach(x, z)
+	join, _ := qReach.Join(chain, []JoinOn{
+		{LeftField: 1, RightField: 0, Operator: EQ},
+	})
+	// Join result: r.src(0), r.dst(1), c.src(2), c.dst(3)
+	// Project: 0, 3
+	rec, _ := join.Project([]int{0, 3})
+
+	qReach.Bind([]Query{base, rec})
+
+	b.ResetTimer()
+	for b.Loop() {
+		seq, _ := readTx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: 0})
+		count := 0
+		for range seq {
+			count++
+		}
+		if count < chainLen {
+			// It should find 0->1, 0->2, ... 0->1000. Total 1000 paths (or 1001 if including 0->1000?)
+			// The loop inserts 0->1 ... 999->1000.
+			// Reachable from 0: 1, 2, ... 1000. Count = 1000.
+		}
+	}
 }
 
 func BenchmarkRecursionWithNoise(b *testing.B) {
-	b.Skip("Recursion not implemented in new benchmark update yet")
+	db, cleanup := setupBenchmarkDB(b)
+	defer cleanup()
+
+	// Setup: Chain of 10 nodes + 10 noise nodes
+	chainLen := 10
+	noiseLen := 10
+	tx, err := db.Begin(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	err = tx.CreateStorage("chain", 2, []IndexInfo{
+		{ReferencedCols: []int{0}}, // src
+		{ReferencedCols: []int{1}}, // dst
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// Chain
+	for i := 0; i < chainLen; i++ {
+		tx.Insert("chain", map[int]any{0: i, 1: i + 1})
+	}
+	// Noise: Disconnected pairs
+	for i := 0; i < noiseLen; i++ {
+		base := chainLen + 100 + (i * 2)
+		tx.Insert("chain", map[int]any{0: base, 1: base + 1})
+	}
+
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+
+	readTx, err := db.Begin(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer readTx.Rollback()
+
+	chain, _ := readTx.StoredQuery("chain")
+
+	// reach(x, y)
+	qReach, _ := NewDatalogQuery(2, []IndexInfo{
+		{ReferencedCols: []int{0, 1}, IsUnique: true},
+	})
+
+	base, _ := chain.Project([]int{0, 1})
+	join, _ := qReach.Join(chain, []JoinOn{
+		{LeftField: 1, RightField: 0, Operator: EQ},
+	})
+	rec, _ := join.Project([]int{0, 3})
+
+	qReach.Bind([]Query{base, rec})
+
+	b.ResetTimer()
+	for b.Loop() {
+		seq, _ := readTx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: 0})
+		for range seq {
+		}
+	}
 }
 
 // BenchmarkConcurrency tests performance under different contention scenarios:
