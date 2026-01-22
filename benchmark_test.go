@@ -250,35 +250,47 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		db, cleanup := setupBenchmarkDB(b)
 		defer cleanup()
 
-		tx, _ := db.Begin(true)
+		tx, err := db.Begin(true)
+		if err != nil {
+			b.Fatal(err)
+		}
 		defer tx.Rollback()
 		tx.CreateStorage("large_rows", 2, []IndexInfo{{ReferencedCols: []int{0}}})
-		tx.Commit()
 
 		b.ResetTimer()
 		for i := 0; b.Loop(); i++ {
-			tx, _ := db.Begin(true)
 			tx.Insert("large_rows", map[int]any{
 				0: strconv.Itoa(i),
 				1: largeStr,
 			})
-			tx.Commit()
 		}
+		tx.Commit()
 	})
 
 	b.Run("QueryDeeplyNested", func(b *testing.B) {
 		readTx, _ := db.Begin(false)
 		defer readTx.Rollback()
 
-		users, _ := readTx.StoredQuery("users")
-		groups, _ := readTx.StoredQuery("groups")
-		orgs, _ := readTx.StoredQuery("orgs")
-
+		users, err := readTx.StoredQuery("users")
+		if err != nil {
+			b.Fatal(err)
+		}
+		groups, err := readTx.StoredQuery("groups")
+		if err != nil {
+			b.Fatal(err)
+		}
+		orgs, err := readTx.StoredQuery("orgs")
+		if err != nil {
+			b.Fatal(err)
+		}
 		// Nested Query: qGroupsOrgs (Groups + Orgs)
 		// groups(0,1,2,3) join orgs(0,1,2,3) on groups.org_id(2) == orgs.org_id(0)
-		qGroupsOrgs, _ := groups.Join(orgs, []JoinOn{
+		qGroupsOrgs, err := groups.Join(orgs, []JoinOn{
 			{LeftField: 2, RightField: 0, Operator: EQ},
 		})
+		if err != nil {
+			b.Fatal(err)
+		}
 
 		// Top Query: qAll (Users + qGroupsOrgs)
 		// users(0,1,2,3) join qGroupsOrgs on users.group_id(2) == groups.group_id(0)
@@ -286,9 +298,12 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		// JoinedQuery columns: left cols... then right cols...
 		// groups has 4 cols. orgs has 4 cols.
 		// So in qGroupsOrgs, groups.group_id is at index 0.
-		qAll, _ := users.Join(qGroupsOrgs, []JoinOn{
+		qAll, err := users.Join(qGroupsOrgs, []JoinOn{
 			{LeftField: 2, RightField: 0, Operator: EQ},
 		})
+		if err != nil {
+			b.Fatal(err)
+		}
 
 		b.ResetTimer()
 		for b.Loop() {
@@ -297,8 +312,14 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			// orgs.region is col 2 in orgs, so 4+2 = 6 in qGroupsOrgs.
 			// In qAll, users is on left (cols 0-3). qGroupsOrgs is on right.
 			// So orgs.region is 4 + 6 = 10 in qAll.
-			seq, _ := readTx.Select(qAll, Condition{Field: 10, Operator: EQ, Value: "North"})
-			for range seq {
+			seq, err := readTx.Select(qAll, Condition{Field: 10, Operator: EQ, Value: "North"})
+			if err != nil {
+				b.Fatal(err)
+			}
+			for _, err := range seq {
+				if err != nil {
+					b.Fatal(err)
+				}
 				// drain
 			}
 		}
@@ -325,7 +346,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		for i := 0; i < chainLen; i++ {
+		for i := range chainLen {
 			tx.Insert("large_chain", map[int]any{
 				0: i,
 				1: i + 1,
@@ -405,7 +426,7 @@ func BenchmarkRecursion(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	for i := 0; i < chainLen; i++ {
+	for i := range chainLen {
 		tx.Insert("chain", map[int]any{0: i, 1: i + 1})
 	}
 	if err := tx.Commit(); err != nil {
@@ -475,11 +496,11 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 	}
 
 	// Chain
-	for i := 0; i < chainLen; i++ {
+	for i := range chainLen {
 		tx.Insert("chain", map[int]any{0: i, 1: i + 1})
 	}
 	// Noise: Disconnected pairs
-	for i := 0; i < noiseLen; i++ {
+	for i := range noiseLen {
 		base := chainLen + 100 + (i * 2)
 		tx.Insert("chain", map[int]any{0: base, 1: base + 1})
 	}

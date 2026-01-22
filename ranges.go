@@ -180,19 +180,19 @@ func (ir *Range) computeDistance() ([]byte, error) {
 	return distance, nil
 }
 
-func MergeRangesMap(a, b map[int]*Range) (map[int]*Range, error) {
-	result := make(map[int]*Range)
-	maps.Copy(result, a)
+func MergeRangesMap(result *map[int]*Range, a, b map[int]*Range) error {
+	clear(*result)
+	maps.Copy(*result, a)
 	for k, v := range b {
-		if existing, ok := result[k]; ok {
+		if existing, ok := (*result)[k]; ok {
 			cur, err := existing.Merge(v)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			result[k] = cur
+			(*result)[k] = cur
 		} else {
-			result[k] = v
+			(*result)[k] = v
 		}
 	}
-	return result, nil
+	return nil
 }

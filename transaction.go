@@ -211,7 +211,7 @@ func (tx *Tx) Select(
 	}
 	explored := make(map[bodyFilter]queryNode)
 	baseNodes := make([]*backedQueryNode, 0)
-	rootNode, err := tx.constructQueryGraph(explored, &baseNodes, body, equals, ranges, exclusion)
+	rootNode, err := tx.constructQueryGraph(explored, &baseNodes, body, equals, ranges, exclusion, true)
 	if err != nil {
 		return nil, err
 	}
@@ -239,21 +239,11 @@ func (tx *Tx) constructQueryGraph(
 	equals map[int]*Value,
 	ranges map[int]*Range,
 	exclusion map[int][]*Value,
+	skipBase bool,
 ) (queryNode, error) {
 	equalsStr := equalsToString(equals)
 	rangesStr := rangesToString(ranges)
 	exclusionStr := exclusionToString(exclusion)
-
-	// Ensure maps are not nil for the filter key, to distinguish between nil and empty
-	if equals == nil {
-		equalsStr = "nil"
-	}
-	if ranges == nil {
-		rangesStr = "nil"
-	}
-	if exclusion == nil {
-		exclusionStr = "nil"
-	}
 
 	bf := bodyFilter{
 		body:   body,
@@ -291,7 +281,7 @@ func (tx *Tx) constructQueryGraph(
 		explored[bf] = result
 		children := make([]queryNode, 0, len(b.bodies))
 		for _, bbody := range b.bodies {
-			childNode, err := tx.constructQueryGraph(explored, baseNodes, bbody, equals, ranges, exclusion)
+			childNode, err := tx.constructQueryGraph(explored, baseNodes, bbody, equals, ranges, exclusion, false)
 			if err != nil {
 				return nil, err
 			}
@@ -321,7 +311,7 @@ func (tx *Tx) constructQueryGraph(
 				childExclusion[b.cols[field]] = vals
 			}
 		}
-		childNode, err := tx.constructQueryGraph(explored, baseNodes, b.child, childEquals, childRanges, childExclusion)
+		childNode, err := tx.constructQueryGraph(explored, baseNodes, b.child, childEquals, childRanges, childExclusion, skipBase)
 		if err != nil {
 			return nil, err
 		}
@@ -342,27 +332,45 @@ func (tx *Tx) constructQueryGraph(
 		if err != nil {
 			return nil, err
 		}
-		leftNode, err := tx.constructQueryGraph(explored, baseNodes, b.left, equalsLeft, rangesLeft, exclusionLeft)
+		bestIndexRight, _, err := b.right.Metadata().bestIndex(equalsRight, rangesRight)
 		if err != nil {
 			return nil, err
 		}
-		rightNode, err := tx.constructQueryGraph(explored, baseNodes, b.right, equalsRight, rangesRight, exclusionRight)
-		if err != nil {
-			return nil, err
+		var leftNode, rightNode queryNode
+		if bestIndexRight == 0 {
+			leftNode, err = tx.constructQueryGraph(explored, baseNodes, b.left, equalsLeft, rangesLeft, exclusionLeft, skipBase)
+			if err != nil {
+				return nil, err
+			}
+			rightNode, err = tx.constructQueryGraph(explored, baseNodes, b.right, equalsRight, rangesRight, exclusionRight, true)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			rightNode, err = tx.constructQueryGraph(explored, baseNodes, b.right, equalsRight, rangesRight, exclusionRight, skipBase)
+			if err != nil {
+				return nil, err
+			}
+			leftNode, err = tx.constructQueryGraph(explored, baseNodes, b.left, equalsLeft, rangesLeft, exclusionLeft, true)
+			if err != nil {
+				return nil, err
+			}
 		}
 		initJoinedQueryNode(result, leftNode, rightNode, b.conditions)
 		return result, nil
 	case *StoredQuery:
-		result := &backedQueryNode{
-			ranges: ranges,
-		}
+		result := &backedQueryNode{}
 		explored[bf] = result
 		storage, err := loadStorage(tx.tx, b.storageName, tx.maUn)
 		if err != nil {
 			return nil, err
 		}
 		initBackedQueryNode(result, storage, equals, ranges, exclusion)
-		*baseNodes = append(*baseNodes, result)
+		if !skipBase {
+			*baseNodes = append(*baseNodes, result)
+		} else {
+			result.explored = true
+		}
 		return result, nil
 	default:
 		panic(fmt.Sprintf("unsupported body type: %T", body))

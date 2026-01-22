@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"iter"
-	"maps"
 
 	"github.com/openkvlab/boltdb"
 	boltdb_errors "github.com/openkvlab/boltdb/errors"
@@ -138,7 +137,7 @@ func (s *storage) indexBucket() *boltdb.Bucket {
 	return s.bucket.Bucket([]byte("index"))
 }
 
-func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip map[uint64]bool) error {
+func (s *storage) deleteIndexes(id []byte, values *map[int]*Value, skip map[uint64]bool) error {
 	for i := range s.metadata.Indexes {
 		if skip != nil && skip[i] {
 			continue
@@ -146,7 +145,13 @@ func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip map[uint64]
 		selectedValues := make([]any, 0, s.metadata.ColumnsCount)
 		for j := range ReferenceColumns(uint64(i)) {
 			if v, ok := (*values)[j]; ok {
-				selectedValues = append(selectedValues, v)
+				var unwrapped any
+				var err error
+				unwrapped, err = v.GetValue()
+				if err != nil {
+					return err
+				}
+				selectedValues = append(selectedValues, unwrapped)
 			} else {
 				return ErrFieldNotFound(fmt.Sprintf("column %d", j))
 			}
@@ -167,42 +172,30 @@ func (s *storage) deleteIndexes(id []byte, values *map[int]any, skip map[uint64]
 	return nil
 }
 
-func (s *storage) toKeyFromColumn(id []byte, value *map[int]any, idx int) ([]byte, error) {
-	if _, ok := (*value)[idx]; !ok {
-		compositeKey := [12]byte{}
-		copy(compositeKey[0:8], id)
-		binary.BigEndian.PutUint32(compositeKey[8:12], uint32(idx))
-		var vAny any
-		if err := s.maUn.Unmarshal(s.dataBucket().Get(compositeKey[:]), &vAny); err != nil {
-			return nil, err
-		}
-		(*value)[idx] = vAny
+func (s *storage) toKeyFromColumn(value *map[int]*Value, idx int) ([]byte, error) {
+	v, err := (*value)[idx].GetValue()
+	if err != nil {
+		return nil, err
 	}
-	return ToKey((*value)[idx])
+	return ToKey(v)
 }
 
-func (s *storage) toIndexKey(id []byte, value *map[int]any, idx uint64) ([]byte, error) {
+func (s *storage) toIndexKey(value *map[int]*Value, idx uint64) ([]byte, error) {
 	refColumns := ReferenceColumns(idx)
 	selectedValues := make([]any, len(refColumns))
 	for k, colIdx := range refColumns {
-		if _, ok := (*value)[colIdx]; !ok {
-			compositeKey := [12]byte{}
-			copy(compositeKey[0:8], id)
-			binary.BigEndian.PutUint32(compositeKey[8:12], uint32(colIdx))
-			var vAny any
-			if err := s.maUn.Unmarshal(s.dataBucket().Get(compositeKey[:]), &vAny); err != nil {
-				return nil, err
-			}
-			(*value)[colIdx] = vAny
+		var err error
+		selectedValues[k], err = (*value)[colIdx].GetValue()
+		if err != nil {
+			return nil, err
 		}
-		selectedValues[k] = (*value)[colIdx]
 	}
 	return ToKey(selectedValues...)
 }
 
 type scanResult struct {
 	id               []byte
-	values           map[int]any
+	values           map[int]*Value
 	rawValues        map[int][]byte
 	deleteIndexEntry func() error
 }
@@ -216,19 +209,29 @@ func (s *storage) scan(
 	unmarshalCols map[int]bool,
 	rawCols map[int]bool,
 ) iter.Seq2[*scanResult, error] {
+	colsForConditionCheck := make(map[int]bool)
+	for idx := range equals {
+		colsForConditionCheck[idx] = true
+	}
+	for idx := range ranges {
+		colsForConditionCheck[idx] = true
+	}
+	for idx := range excludes {
+		colsForConditionCheck[idx] = true
+	}
 	return func(yield func(*scanResult, error) bool) {
 		if forcedIndex == 0 {
 			// Full Scan
 			c := s.dataBucket().Cursor()
 			var prev []byte
-			vals := make(map[int]any)
+			vals := make(map[int]*Value)
 			rawVals := make(map[int][]byte)
 
-			checkAndYield := func() bool {
+			checkAndYield := func(k []byte) bool {
 				if prev == nil {
 					return true
 				}
-				ok, err := s.inRanges(prev, &vals, equals, ranges, excludes)
+				ok, err := s.inRanges(&vals, equals, ranges, excludes)
 				if err != nil {
 					return yield(nil, err)
 				}
@@ -241,43 +244,44 @@ func (s *storage) scan(
 					if !yield(res, nil) {
 						return false
 					}
+					c.Seek(k)
 				}
 				return true
 			}
-
-			for k, v := c.First(); k != nil; k, v = c.Next() {
+			k, v := c.First()
+			for ; k != nil; k, v = c.Next() {
 				id := k[0:8]
 				col := int(binary.BigEndian.Uint32(k[8:12]))
 
 				if prev != nil && !bytes.Equal(prev, id) {
-					if !checkAndYield() {
+					if !checkAndYield(k) {
 						return
 					}
-					vals = make(map[int]any)
+					vals = make(map[int]*Value)
 					rawVals = make(map[int][]byte)
 				}
 				prev = id
 
 				// Logic for what to unmarshal/keep raw
-				shouldUnmarshal := unmarshalCols == nil || unmarshalCols[col]
+				shouldUnmarshal := unmarshalCols != nil && unmarshalCols[col]
 				shouldKeepRaw := rawCols != nil && rawCols[col]
 
 				if shouldKeepRaw {
-					vCopy := make([]byte, len(v))
-					copy(vCopy, v)
-					rawVals[col] = vCopy
+					// println("Keeping raw column", col, "relation", s.name)
+					rawVals[col] = v
 				}
 
-				if shouldUnmarshal {
+				if shouldUnmarshal || colsForConditionCheck[col] {
+					// println("Unmarshaling column", col, "relation", s.name)
 					var vAny any
 					if err := s.maUn.Unmarshal(v, &vAny); err != nil {
 						yield(nil, err)
 						return
 					}
-					vals[col] = vAny
+					vals[col] = ValueOfLiteral(vAny, orderedMaUn)
 				}
 			}
-			checkAndYield()
+			checkAndYield(k)
 		} else {
 			// Index Scan
 			var idxBytes [8]byte
@@ -307,9 +311,57 @@ func (s *storage) scan(
 				return cmp < 0 || (cmp == 0 && forcedRange.includeEnd)
 			}
 			for ; k != nil && lessThan(k); k, _ = c.Next() {
-				vals := make(map[int]any)
+				vals := make(map[int]*Value)
+				rawVals := make(map[int][]byte)
 				rowID := k[len(k)-8:]
-				ok, err := s.inRanges(rowID, &vals, equals, ranges, excludes)
+				// Logic for what to unmarshal/keep raw
+				for colIdx := range unmarshalCols {
+					var columnKey [12]byte
+					copy(columnKey[0:8], rowID)
+					binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
+					v := s.dataBucket().Get(columnKey[:])
+					if v != nil {
+						var vAny any
+						if err := s.maUn.Unmarshal(v, &vAny); err != nil {
+							if !yield(nil, err) {
+								return
+							}
+							continue
+						}
+						vals[colIdx] = ValueOfLiteral(vAny, orderedMaUn)
+					}
+				}
+				for colIdx := range rawCols {
+					var columnKey [12]byte
+					copy(columnKey[0:8], rowID)
+					binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
+					v := s.dataBucket().Get(columnKey[:])
+					if v != nil {
+						if vals == nil {
+							vals = make(map[int]*Value)
+						}
+						rawVals[colIdx] = v
+					}
+				}
+				for colIdx := range colsForConditionCheck {
+					if _, ok := vals[colIdx]; !ok {
+						var columnKey [12]byte
+						copy(columnKey[0:8], rowID)
+						binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
+						v := s.dataBucket().Get(columnKey[:])
+						if v != nil {
+							var vAny any
+							if err := s.maUn.Unmarshal(v, &vAny); err != nil {
+								if !yield(nil, err) {
+									return
+								}
+								continue
+							}
+							vals[colIdx] = ValueOfLiteral(vAny, orderedMaUn)
+						}
+					}
+				}
+				ok, err := s.inRanges(&vals, equals, ranges, excludes)
 				if err != nil {
 					if !yield(nil, err) {
 						return
@@ -329,6 +381,7 @@ func (s *storage) scan(
 				if !yield(res, nil) {
 					return
 				}
+				c.Seek(k)
 			}
 		}
 	}
@@ -398,17 +451,6 @@ func (s *storage) Update(
 		if err != nil {
 			return err
 		}
-
-		// Ensure we have all columns needed for index updates
-		for colIdx := range colsToUnmarshal {
-			if _, ok := res.values[colIdx]; !ok {
-				_, err := s.toKeyFromColumn(res.id, &res.values, colIdx)
-				if err != nil {
-					return err
-				}
-			}
-		}
-
 		// delete old indexes
 		if err := s.deleteIndexes(res.id, &res.values, indexesToSkip); err != nil {
 			return err
@@ -421,7 +463,9 @@ func (s *storage) Update(
 			indexesToSkip[shortestIndex] = true
 		}
 		// apply updates
-		maps.Copy(res.values, updates)
+		for colIdx, newVal := range updates {
+			res.values[colIdx] = ValueOfLiteral(newVal, orderedMaUn)
+		}
 		// insert new indexes
 		if err := s.insertIndexes(res.id, &res.values, indexesToSkip); err != nil {
 			return err
@@ -434,7 +478,7 @@ func (s *storage) Update(
 	return nil
 }
 
-func (s *storage) insertIndexes(id []byte, values *map[int]any, skip map[uint64]bool) error {
+func (s *storage) insertIndexes(id []byte, values *map[int]*Value, skip map[uint64]bool) error {
 	for i, isUnique := range s.metadata.Indexes {
 		if skip != nil && skip[i] {
 			continue
@@ -442,7 +486,13 @@ func (s *storage) insertIndexes(id []byte, values *map[int]any, skip map[uint64]
 		selectedValues := make([]any, 0, s.metadata.ColumnsCount)
 		for _, j := range ReferenceColumns(i) {
 			if v, ok := (*values)[j]; ok {
-				selectedValues = append(selectedValues, v)
+				var unwrapped any
+				var err error
+				unwrapped, err = v.GetValue()
+				if err != nil {
+					return err
+				}
+				selectedValues = append(selectedValues, unwrapped)
 			} else {
 				return ErrFieldNotFound(fmt.Sprintf("column %d", j))
 			}
@@ -537,10 +587,7 @@ func (s *storage) find(
 					binary.BigEndian.PutUint32(columnKey[8:12], uint32(col))
 					v := s.dataBucket().Get(columnKey[:])
 					if v != nil {
-						// BoltDB returns valid slice until next call. Copy it.
-						vCopy := make([]byte, len(v))
-						copy(vCopy, v)
-						res.rawValues[col] = vCopy
+						res.rawValues[col] = v
 					}
 				}
 			}
@@ -555,9 +602,9 @@ func (s *storage) find(
 	}, nil
 }
 
-func (s *storage) inRanges(id []byte, vals *map[int]any, equals map[int]*Value, ranges map[int]*Range, exclusions map[int][]*Value) (bool, error) {
+func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges map[int]*Range, exclusions map[int][]*Value) (bool, error) {
 	for idx, val := range equals {
-		kBytes, err := s.toKeyFromColumn(id, vals, idx)
+		kBytes, err := s.toKeyFromColumn(vals, idx)
 		if err != nil {
 			return false, err
 		}
@@ -570,7 +617,7 @@ func (s *storage) inRanges(id []byte, vals *map[int]any, equals map[int]*Value, 
 		}
 	}
 	for idx, kr := range ranges {
-		kBytes, err := s.toKeyFromColumn(id, vals, idx)
+		kBytes, err := s.toKeyFromColumn(vals, idx)
 		if err != nil {
 			return false, err
 		}
@@ -582,7 +629,7 @@ func (s *storage) inRanges(id []byte, vals *map[int]any, equals map[int]*Value, 
 		}
 	}
 	for idx, exList := range exclusions {
-		kBytes, err := s.toKeyFromColumn(id, vals, idx)
+		kBytes, err := s.toKeyFromColumn(vals, idx)
 		if err != nil {
 			return false, err
 		}
@@ -618,9 +665,13 @@ func (s *storage) Insert(values map[int]any) error {
 			return err
 		}
 	}
+	boxedValues := make(map[int]*Value)
+	for i, v := range values {
+		boxedValues[i] = ValueOfLiteral(v, orderedMaUn)
+	}
 	// check unique and insert indexes
 	for i, isUnique := range s.metadata.Indexes {
-		vKey, err := s.toIndexKey(nil, &values, uint64(i))
+		vKey, err := s.toIndexKey(&boxedValues, i)
 		if err != nil {
 			return err
 		}

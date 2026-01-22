@@ -1,6 +1,9 @@
 package thunderdb
 
-import "bytes"
+import (
+	"bytes"
+	"maps"
+)
 
 type Value struct {
 	value     any
@@ -51,47 +54,45 @@ func (v *Value) GetRaw() ([]byte, error) {
 	return nil, nil
 }
 
-func mergeEquals(equalsLeft, equalsRight map[int]*Value) (map[int]*Value, bool, error) {
+func mergeEquals(result *map[int]*Value, equalsLeft, equalsRight map[int]*Value) (bool, error) {
+	clear(*result)
+	maps.Copy(*result, equalsLeft)
 	if equalsLeft == nil && equalsRight == nil {
-		return nil, true, nil
+		return true, nil
 	}
 	if equalsLeft == nil {
-		return equalsRight, true, nil
+		*result = equalsRight
+		return true, nil
 	}
 	if equalsRight == nil {
-		return equalsLeft, true, nil
-	}
-	merged := make(map[int]*Value)
-	for k, v := range equalsLeft {
-		merged[k] = v
+		return true, nil
 	}
 	for k, vRight := range equalsRight {
-		if vLeft, ok := merged[k]; ok {
+		if vLeft, ok := (*result)[k]; ok {
 			leftBytes, err := vLeft.GetRaw()
 			if err != nil {
-				return nil, false, err
+				return false, err
 			}
 			rightBytes, err := vRight.GetRaw()
 			if err != nil {
-				return nil, false, err
+				return false, err
 			}
 			if !bytes.Equal(leftBytes, rightBytes) {
-				return nil, false, nil
+				return false, nil
 			}
 		} else {
-			merged[k] = vRight
+			(*result)[k] = vRight
 		}
 	}
-	return merged, true, nil
+	return true, nil
 }
 
-func mergeNotEquals(neqLeft, neqRight map[int][]*Value) map[int][]*Value {
-	result := make(map[int][]*Value)
+func mergeNotEquals(result *map[int][]*Value, neqLeft, neqRight map[int][]*Value) {
+	clear(*result)
 	for k, v := range neqLeft {
-		result[k] = append(result[k], v...)
+		(*result)[k] = append((*result)[k], v...)
 	}
 	for k, v := range neqRight {
-		result[k] = append(result[k], v...)
+		(*result)[k] = append((*result)[k], v...)
 	}
-	return result
 }

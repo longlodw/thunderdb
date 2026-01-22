@@ -1,7 +1,6 @@
 package thunderdb
 
 import (
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -250,7 +249,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	headQuery, err := NewDatalogQuery(0, nil)
+	headQuery, err := NewDatalogQuery(9, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +274,6 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get name: %v", err)
 		}
-		fmt.Println("Found:", name)
 		results = append(results, name)
 	}
 

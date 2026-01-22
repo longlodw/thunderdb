@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"maps"
 	"slices"
 	// "github.com/davecgh/go-spew/spew"
 )
@@ -140,6 +139,9 @@ func (n *joinedQueryNode) Find(
 			return nil, err
 		}
 		return func(yield func(*Row, error) bool) {
+			mergedRightEquals := make(map[int]*Value)
+			mergedRightExclusion := make(map[int][]*Value)
+			mergedRightRanges := make(map[int]*Range)
 			for leftRow, err := range leftSeq {
 				if err != nil {
 					if !yield(nil, err) {
@@ -159,7 +161,7 @@ func (n *joinedQueryNode) Find(
 					continue
 				}
 
-				mergedRightEquals, ok, err := mergeEquals(rightEquals, rowRightEquals)
+				ok, err := mergeEquals(&mergedRightEquals, rightEquals, rowRightEquals)
 				if err != nil {
 					if !yield(nil, err) {
 						return
@@ -171,8 +173,7 @@ func (n *joinedQueryNode) Find(
 					continue
 				}
 
-				mergedRightRanges, err := MergeRangesMap(rightRanges, rowRightRanges)
-				if err != nil {
+				if err := MergeRangesMap(&mergedRightRanges, rightRanges, rowRightRanges); err != nil {
 					if !yield(nil, err) {
 						return
 					}
@@ -181,7 +182,7 @@ func (n *joinedQueryNode) Find(
 
 				// mergedRightEquals is already done above
 
-				mergedRightExclusion := mergeNotEquals(leftExclusion, rowRightNotEquals)
+				mergeNotEquals(&mergedRightExclusion, leftExclusion, rowRightNotEquals)
 				rightMainIndex, rightMainRanges, err := n.right.metadata().bestIndex(mergedRightEquals, mergedRightRanges)
 				if err != nil {
 					if !yield(nil, err) {
@@ -220,6 +221,9 @@ func (n *joinedQueryNode) Find(
 		return nil, err
 	}
 	return func(yield func(*Row, error) bool) {
+		mergedLeftEquals := make(map[int]*Value)
+		mergedLeftExclusion := make(map[int][]*Value)
+		mergedLeftRanges := make(map[int]*Range)
 		for rightRow, err := range rightSeq {
 			if err != nil {
 				if !yield(nil, err) {
@@ -238,7 +242,7 @@ func (n *joinedQueryNode) Find(
 				// Constraints conflicted, skip this right row
 				continue
 			}
-			mergedLeftEquals, ok, err := mergeEquals(leftEquals, rowLeftEquals)
+			ok, err := mergeEquals(&mergedLeftEquals, leftEquals, rowLeftEquals)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -248,9 +252,9 @@ func (n *joinedQueryNode) Find(
 			if !ok {
 				continue
 			}
-			mergedLeftExclusions := mergeNotEquals(leftExclusion, rowLeftExclusions)
-			mergedLeftRanges, err := MergeRangesMap(leftRanges, rowLeftRanges)
-			if err != nil {
+			mergeNotEquals(&mergedLeftExclusion, leftExclusion, rowLeftExclusions)
+
+			if err := MergeRangesMap(&mergedLeftRanges, leftRanges, rowLeftRanges); err != nil {
 				if !yield(nil, err) {
 					return
 				}
@@ -264,7 +268,7 @@ func (n *joinedQueryNode) Find(
 				continue
 			}
 			// println("DEBUG: Join Find Left. MainIndex:", leftMainIndex, "MainRanges:", leftMainRanges)
-			leftSeq, err := n.left.Find(leftMainIndex, leftMainRanges, mergedLeftEquals, mergedLeftRanges, mergedLeftExclusions, leftCols)
+			leftSeq, err := n.left.Find(leftMainIndex, leftMainRanges, mergedLeftEquals, mergedLeftRanges, mergedLeftExclusion, leftCols)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -289,10 +293,9 @@ func (n *joinedQueryNode) Find(
 
 func (n *joinedQueryNode) joinRows(leftRow, rightRow *Row) (*Row, error) {
 	newRow := &Row{
-		values: make(map[int][]byte),
+		values: leftRow.values,
 		maUn:   leftRow.maUn,
 	}
-	maps.Copy(newRow.values, leftRow.values)
 	for k, v := range rightRow.values {
 		newRow.values[k+n.left.metadata().ColumnsCount] = v
 	}
@@ -783,7 +786,10 @@ func (n *backedQueryNode) Find(
 		return func(func(*Row, error) bool) {
 		}, nil
 	}
-	mergedEquals, possible, err := mergeEquals(n.equals, equals)
+	mergedEquals := make(map[int]*Value)
+	mergedRanges := make(map[int]*Range)
+	mergedExclusion := make(map[int][]*Value)
+	possible, err := mergeEquals(&mergedEquals, n.equals, equals)
 	if err != nil {
 		return nil, err
 	}
@@ -791,11 +797,10 @@ func (n *backedQueryNode) Find(
 		return func(func(*Row, error) bool) {
 		}, nil
 	}
-	mergedRanges, err := MergeRangesMap(n.ranges, ranges)
-	if err != nil {
+	if err := MergeRangesMap(&mergedRanges, n.ranges, ranges); err != nil {
 		return nil, err
 	}
-	mergedExclusion := mergeNotEquals(n.exclusion, exclusion)
+	mergeNotEquals(&mergedExclusion, n.exclusion, exclusion)
 	if mainIndex == 0 {
 		bestIndex, bestRanges, err := n.backing.metadata.bestIndex(mergedEquals, mergedRanges)
 		if err != nil {
@@ -818,7 +823,6 @@ func (n *backedQueryNode) propagateToParents(*Row, queryNode) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("DEBUG: BackedNode %s propagating. BestIndex: %d, BestRanges: %v\n", n.backing.name, bestIndex, bestRanges)
 	cols := make(map[int]bool)
 	for k := range n.metadata().ColumnsCount {
 		cols[k] = true
