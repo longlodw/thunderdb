@@ -317,7 +317,7 @@ func TestProjection(t *testing.T) {
 		// Projection mapping:
 		// original: id(0), username(1), age(2)
 		// target: user_id(0) -> id(0), login_name(1) -> username(1), user_age(2) -> age(2)
-		proj, err := p.Project([]int{0, 2, 1})
+		proj, err := p.Project(0, 2, 1)
 		if err != nil {
 			t.Fatal(err)
 		}

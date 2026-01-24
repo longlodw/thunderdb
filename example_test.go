@@ -20,7 +20,7 @@ func Example() {
 	defer os.Remove(dbPath) // Clean up database file
 
 	// Open the database using MessagePack marshaler (default recommended)
-	db, err := thunderdb.OpenDB(&thunderdb.MsgpackMaUn, dbPath, 0600, nil)
+	db, err := thunderdb.OpenDB(thunderdb.MsgpackMaUn, dbPath, 0600, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -30,20 +30,19 @@ func Example() {
 	err = db.Update(func(tx *thunderdb.Tx) error {
 		// Create 'users' relation
 		usersRel := "users"
-		users, err := tx.CreatePersistent(usersRel, map[string]thunderdb.ColumnSpec{
-			"id":       {},
-			"username": {Indexed: true},
-			"role":     {Indexed: true},
+		err := tx.CreateStorage(usersRel, 3, []thunderdb.IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: false},
+			{ReferencedCols: []int{1}, IsUnique: true},
 		})
 		if err != nil {
 			return err
 		}
 
 		// Insert Data
-		if err := users.Insert(map[string]any{"id": "1", "username": "alice", "role": "admin"}); err != nil {
+		if err := tx.Insert(usersRel, map[int]any{0: "1", 1: "alice", 2: "admin"}); err != nil {
 			return err
 		}
-		if err := users.Insert(map[string]any{"id": "2", "username": "bob", "role": "user"}); err != nil {
+		if err := tx.Insert(usersRel, map[int]any{0: "2", 1: "bob", 2: "user"}); err != nil {
 			return err
 		}
 		return nil
@@ -56,22 +55,17 @@ func Example() {
 	err = db.View(func(tx *thunderdb.Tx) error {
 		// Load the relation
 		usersRel := "users"
-		users, err := tx.LoadPersistent(usersRel)
+		users, err := tx.StoredQuery(usersRel)
 		if err != nil {
 			return err
-		}
-
-		// Create a filter: username == "alice"
-		key, err := thunderdb.ToKey("alice")
-		if err != nil {
-			return err
-		}
-		f := map[string]*thunderdb.BytesRange{
-			"username": thunderdb.NewBytesRange(key, key, true, true, nil),
 		}
 
 		// Execute Select
-		seq, err := users.Select(f)
+		seq, err := tx.Select(users, thunderdb.Condition{
+			Field:    1,
+			Operator: thunderdb.EQ,
+			Value:    "alice",
+		})
 		if err != nil {
 			return err
 		}
@@ -81,8 +75,13 @@ func Example() {
 			if err != nil {
 				return err
 			}
-			username, _ := row.Get("username")
-			role, _ := row.Get("role")
+			var username, role string
+			if err := row.Get(1, &username); err != nil {
+				return err
+			}
+			if err := row.Get(2, &role); err != nil {
+				return err
+			}
 			fmt.Printf("Found user: %s, Role: %s\n", username, role)
 		}
 		return nil
@@ -108,39 +107,40 @@ func Example_manualTx() {
 	tmpfile.Close()
 	defer os.Remove(dbPath)
 
-	db, err := thunderdb.OpenDB(&thunderdb.MsgpackMaUn, dbPath, 0600, nil)
+	db, err := thunderdb.OpenDB(thunderdb.MsgpackMaUn, dbPath, 0600, nil)
 	if err != nil {
 		panic(err)
 	}
 	defer db.Close()
 
-	// 2. Start a Read-Write Transaction manually
-	tx, err := db.Begin(true)
-	if err != nil {
-		panic(err)
-	}
-	// Always defer Rollback to ensure safety if a panic occurs or we return early with error
-	defer tx.Rollback()
+	func() {
+		// 2. Start a Read-Write Transaction manually
+		tx, err := db.Begin(true)
+		if err != nil {
+			panic(err)
+		}
+		// Always defer Rollback to ensure safety if a panic occurs or we return early with error
+		defer tx.Rollback()
 
-	// 3. Define Schema
-	users, err := tx.CreatePersistent("users", map[string]thunderdb.ColumnSpec{
-		"id":   {},
-		"name": {},
-	})
-	if err != nil {
-		panic(err)
-	}
+		// 3. Define Schema
+		err = tx.CreateStorage("users", 2, []thunderdb.IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: true},
+		})
+		if err != nil {
+			panic(err)
+		}
 
-	// 4. Insert Data
-	if err := users.Insert(map[string]any{"id": "1", "name": "Manual User"}); err != nil {
-		panic(err)
-	}
+		// 4. Insert Data
+		if err := tx.Insert("users", map[int]any{0: "1", 1: "Manual User"}); err != nil {
+			panic(err)
+		}
 
-	// 5. Commit Changes explicitly
-	// If Commit succeeds, the deferred Rollback becomes a no-op
-	if err := tx.Commit(); err != nil {
-		panic(err)
-	}
+		// 5. Commit Changes explicitly
+		// If Commit succeeds, the deferred Rollback becomes a no-op
+		if err := tx.Commit(); err != nil {
+			panic(err)
+		}
+	}()
 
 	// 6. Verify with Read-Only Transaction
 	readTx, err := db.Begin(false)
@@ -149,15 +149,30 @@ func Example_manualTx() {
 	}
 	defer readTx.Rollback()
 
-	users, _ = readTx.LoadPersistent("users")
-	iter, _ := users.Select(nil)
-	for row, _ := range iter {
-		name, _ := row.Get("name")
-		fmt.Printf("Found: %s\n", name)
+	users, err := readTx.StoredQuery("users")
+	if err != nil {
+		panic(err)
+	}
+	iter, err := readTx.Select(users)
+	if err != nil {
+		panic(err)
+	}
+	for row, err := range iter {
+		if err != nil {
+			panic(err)
+		}
+		var id, role string
+		if err := row.Get(0, &id); err != nil {
+			panic(err)
+		}
+		if err := row.Get(1, &role); err != nil {
+			panic(err)
+		}
+		fmt.Printf("Found: %s, %s\n", id, role)
 	}
 
 	// Output:
-	// Found: Manual User
+	// Found: 1, Manual User
 }
 
 // ExampleDB_Recursive demonstrates a recursive query to find descendants
@@ -172,7 +187,7 @@ func Example_recursive() {
 	tmpfile.Close()
 	defer os.Remove(dbPath)
 
-	db, err := thunderdb.OpenDB(&thunderdb.MsgpackMaUn, dbPath, 0600, nil)
+	db, err := thunderdb.OpenDB(thunderdb.MsgpackMaUn, dbPath, 0600, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -180,23 +195,22 @@ func Example_recursive() {
 
 	// 2. Insert Hierarchy Data
 	err = db.Update(func(tx *thunderdb.Tx) error {
-		employees, err := tx.CreatePersistent("employees", map[string]thunderdb.ColumnSpec{
-			"id":         {},
-			"name":       {},
-			"manager_id": {}, // The link to the parent node
+		err := tx.CreateStorage("employees", 3, []thunderdb.IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: true},  // id
+			{ReferencedCols: []int{2}, IsUnique: false}, // manager_id
 		})
 		if err != nil {
 			return err
 		}
 
 		// Hierarchy: Alice (CEO) -> Bob -> Charlie
-		if err := employees.Insert(map[string]any{"id": "1", "name": "Alice", "manager_id": ""}); err != nil {
+		if err := tx.Insert("employees", map[int]any{0: "1", 1: "Alice", 2: ""}); err != nil {
 			return err
 		}
-		if err := employees.Insert(map[string]any{"id": "2", "name": "Bob", "manager_id": "1"}); err != nil {
+		if err := tx.Insert("employees", map[int]any{0: "2", 1: "Bob", 2: "1"}); err != nil {
 			return err
 		}
-		if err := employees.Insert(map[string]any{"id": "3", "name": "Charlie", "manager_id": "2"}); err != nil {
+		if err := tx.Insert("employees", map[int]any{0: "3", 1: "Charlie", 2: "2"}); err != nil {
 			return err
 		}
 		return nil
@@ -208,14 +222,17 @@ func Example_recursive() {
 	// 3. Define and Execute Recursive Query
 	// Needs write lock (Update) to create temp tables for recursion
 	err = db.Update(func(tx *thunderdb.Tx) error {
-		employees, _ := tx.LoadPersistent("employees")
+		employees, err := tx.StoredQuery("employees")
+		if err != nil {
+			return err
+		}
 
 		// Create a recursive query named "path"
 		// Schema: ancestor, descendant
 		// recursive=true
-		qPath, err := tx.CreateRecursion("path", map[string]thunderdb.ColumnSpec{
-			"ancestor":   {},
-			"descendant": {},
+		qPath, err := thunderdb.NewDatalogQuery(2, []thunderdb.IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: false}, // ancestor
+			{ReferencedCols: []int{1}, IsUnique: false}, // descendant
 		})
 		if err != nil {
 			return err
@@ -223,11 +240,8 @@ func Example_recursive() {
 
 		// Rule 1 (Base Case): Direct reports
 		// path(manager_id, id) :- employees(id, ..., manager_id)
-		baseProj := employees.Project(map[string]string{
-			"ancestor":   "manager_id",
-			"descendant": "id",
-		})
-		if err := qPath.AddBranch(baseProj); err != nil {
+		baseProj, err := employees.Project(2, 0)
+		if err != nil {
 			return err
 		}
 
@@ -236,33 +250,29 @@ func Example_recursive() {
 		// We join 'employees' (manager=a, id=b) with 'path' (ancestor=b, descendant=c)
 		// Join key is implicit 'b' (mapped to the same name "join_key")
 
-		edgeProj := employees.Project(map[string]string{
-			"ancestor": "manager_id", // a
-			"join_key": "id",         // b
+		joinedPathProj, err := employees.Join(qPath, thunderdb.JoinOn{
+			LeftField:  0, // employees.id -> b
+			RightField: 0, // path.ancestor -> b
+			Operator:   thunderdb.EQ,
 		})
+		if err != nil {
+			return err
+		}
+		pathProj, err := joinedPathProj.Project(2, 4) // select a, c
+		if err != nil {
+			return err
+		}
 
-		pathProj := qPath.Project(map[string]string{
-			"join_key":   "ancestor",   // b
-			"descendant": "descendant", // c
-		})
-
-		if err := qPath.AddBranch(edgeProj.Join(pathProj).Project(map[string]string{
-			"ancestor":   "ancestor",
-			"descendant": "descendant",
-		})); err != nil {
+		if err := qPath.Bind(baseProj, pathProj); err != nil {
 			return err
 		}
 
 		// Execute: Find all descendants of Alice (id=1)
-		key, err := thunderdb.ToKey("1")
-		if err != nil {
-			return err
-		}
-		f := map[string]*thunderdb.BytesRange{
-			"ancestor": thunderdb.NewBytesRange(key, key, true, true, nil),
-		}
-
-		seq, err := qPath.Select(f)
+		seq, err := tx.Select(qPath, thunderdb.Condition{
+			Field:    0, // ancestor
+			Operator: thunderdb.EQ,
+			Value:    "1", // Alice's ID
+		})
 		if err != nil {
 			return err
 		}
@@ -275,8 +285,10 @@ func Example_recursive() {
 			}
 			// Fetch the name for the descendant ID to make the output readable
 			// (In a real app, you might join back to the employees table)
-			val, _ := row.Get("descendant")
-			descID := val.(string)
+			var descID string
+			if err := row.Get(1, &descID); err != nil {
+				return err
+			}
 			var name string
 			switch descID {
 			case "2":

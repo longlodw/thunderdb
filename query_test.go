@@ -89,9 +89,7 @@ func TestQuery_Basic(t *testing.T) {
 	// Users: id(0), username(1), department(2)
 	// Depts: department(0), location(1)
 	// Join condition: users.department (2) == depts.department (0)
-	q, err := users.Join(depts, []JoinOn{
-		{LeftField: 2, RightField: 0, Operator: EQ},
-	})
+	q, err := users.Join(depts, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,9 +210,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// Groups: 0:group_id, 1:g_name, 2:org_id
 	// Orgs: 0:org_id, 1:o_name, 2:region
 	// Join condition: groups.org_id (2) == orgs.org_id (0)
-	qGroupsOrgs, err := groups.Join(orgs, []JoinOn{
-		{LeftField: 2, RightField: 0, Operator: EQ},
-	})
+	qGroupsOrgs, err := groups.Join(orgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,9 +222,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// Users: 0:u_id, 1:u_name, 2:group_id
 	// qGroupsOrgs: 0-2 (groups), 3-5 (orgs) -> will become 3-8 in final
 	// Join condition: users.group_id (2) == groups.group_id (0 from right side)
-	branch1, err := users.Join(qGroupsOrgs, []JoinOn{
-		{LeftField: 2, RightField: 0, Operator: EQ},
-	})
+	branch1, err := users.Join(qGroupsOrgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,9 +236,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// Branch 2: Admins + qGroupsOrgs
 	// Admins: 0:u_id, 1:u_name, 2:group_id
 	// Same structure.
-	branch2, err := admins.Join(qGroupsOrgs, []JoinOn{
-		{LeftField: 2, RightField: 0, Operator: EQ},
-	})
+	branch2, err := admins.Join(qGroupsOrgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +247,9 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	}
 
 	// Bind both branches to head query
-	headQuery.Bind([]Query{branch1, branch2})
+	if err := headQuery.Bind(branch1, branch2); err != nil {
+		t.Fatal(err)
+	}
 
 	// 3. Select Region="North"
 	// Should return Alice (user) and Charlie (admin)
@@ -373,7 +367,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Body 1: Base Case
 	// reach(X, Y) :- nodes(X, Y).
 	// Project nodes(0,1) -> reach(0,1)
-	baseProj, err := nodes.Project([]int{0, 1})
+	baseProj, err := nodes.Project(0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,9 +377,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Join on Y: reach.target (1) == nodes.source (0)
 
 	// Join condition: qReach.col1 == nodes.col0
-	recJoin, err := qReach.Join(nodes, []JoinOn{
-		{LeftField: 1, RightField: 0, Operator: EQ},
-	})
+	recJoin, err := qReach.Join(nodes, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,13 +389,15 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// 3: nodes.target (Z)
 
 	// We want Reach(X, Z) -> project cols 0 and 3
-	recProj, err := recJoin.Project([]int{0, 3})
+	recProj, err := recJoin.Project(0, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Bind the bodies to the HeadQuery
-	qReach.Bind([]Query{baseProj, recProj})
+	if err := qReach.Bind(baseProj, recProj); err != nil {
+		t.Fatal(err)
+	}
 
 	// 4. Execution
 	// Find all reachable nodes from A.
@@ -530,7 +524,7 @@ func TestQuery_Recursive(t *testing.T) {
 	// Body 1: Base Case
 	// path(a, b) :- employees(id:b, manager_id:a)
 	// Project employees: manager_id(2) -> ancestor(0), id(0) -> descendant(1)
-	baseProj, err := employees.Project([]int{2, 0})
+	baseProj, err := employees.Project(2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,9 +534,7 @@ func TestQuery_Recursive(t *testing.T) {
 	// Join on b: employees.id (0) == path.ancestor (0)
 
 	// Join condition: employees.col0 == qPath.col0
-	recJoin, err := employees.Join(qPath, []JoinOn{
-		{LeftField: 0, RightField: 0, Operator: EQ},
-	})
+	recJoin, err := employees.Join(qPath, JoinOn{LeftField: 0, RightField: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,13 +547,15 @@ func TestQuery_Recursive(t *testing.T) {
 	// 4: path.descendant (c)
 
 	// We want path(a, c) -> project cols 2 (a) and 4 (c)
-	recProj, err := recJoin.Project([]int{2, 4})
+	recProj, err := recJoin.Project(2, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Bind bodies
-	qPath.Bind([]Query{baseProj, recProj})
+	if err := qPath.Bind(baseProj, recProj); err != nil {
+		t.Fatal(err)
+	}
 
 	// 4. Execution
 	// Find all descendants of Alice (id=1).
@@ -698,44 +692,44 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 	}
 
 	// even_reach base case: even_reach(X, Y) :- edges(X, Y)
-	evenBase, err := edges.Project([]int{0, 1})
+	evenBase, err := edges.Project(0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// even_reach recursive case: even_reach(X, Z) :- odd_reach(X, Y), edges(Y, Z)
 	// Join on Y: odd_reach.to (1) == edges.from (0)
-	evenRecJoin, err := qOddReach.Join(edges, []JoinOn{
-		{LeftField: 1, RightField: 0, Operator: EQ},
-	})
+	evenRecJoin, err := qOddReach.Join(edges, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Project odd_reach.from (0) and edges.to (3) -> even_reach(X, Z)
-	evenRecProj, err := evenRecJoin.Project([]int{0, 3})
+	evenRecProj, err := evenRecJoin.Project(0, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// odd_reach case: odd_reach(X, Y) :- edges(X, Z), even_reach(Z, Y)
 	// Join on Z: edges.to (1) == even_reach.from (0)
-	oddRecJoin, err := edges.Join(qEvenReach, []JoinOn{
-		{LeftField: 1, RightField: 0, Operator: EQ},
-	})
+	oddRecJoin, err := edges.Join(qEvenReach, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Project edges.from (0) and even_reach.to (3) -> odd_reach(X, Y)
-	oddRecProj, err := oddRecJoin.Project([]int{0, 3})
+	oddRecProj, err := oddRecJoin.Project(0, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Bind bodies to create mutual recursion
-	qEvenReach.Bind([]Query{evenBase, evenRecProj})
-	qOddReach.Bind([]Query{oddRecProj})
+	if err := qEvenReach.Bind(evenBase, evenRecProj); err != nil {
+		t.Fatal(err)
+	}
+	if err := qOddReach.Bind(oddRecProj); err != nil {
+		t.Fatal(err)
+	}
 
 	// 4. Execution
 	// Find all nodes reachable from A in even number of steps

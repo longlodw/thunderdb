@@ -3,8 +3,8 @@ package thunderdb
 import "bytes"
 
 type Query interface {
-	Project(cols []int) (Query, error)
-	Join(other Query, conditions []JoinOn) (Query, error)
+	Project(cols ...int) (Query, error)
+	Join(other Query, conditions ...JoinOn) (Query, error)
 	Metadata() *Metadata
 }
 
@@ -21,11 +21,11 @@ func NewDatalogQuery(colsCount int, indexInfos []IndexInfo) (*HeadQuery, error) 
 	return result, nil
 }
 
-func (h *HeadQuery) Project(cols []int) (Query, error) {
+func (h *HeadQuery) Project(cols ...int) (Query, error) {
 	return newProjectedQuery(h, cols)
 }
 
-func (h *HeadQuery) Join(other Query, conditions []JoinOn) (Query, error) {
+func (h *HeadQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
 	return newJoinedQuery(h, other, conditions)
 }
 
@@ -33,8 +33,14 @@ func (h *HeadQuery) Metadata() *Metadata {
 	return &h.metadata
 }
 
-func (h *HeadQuery) Bind(bodies []Query) {
+func (h *HeadQuery) Bind(bodies ...Query) error {
+	for _, body := range bodies {
+		if body.Metadata().ColumnsCount != h.metadata.ColumnsCount {
+			return ErrFieldCountMismatch(h.Metadata().ColumnsCount, body.Metadata().ColumnsCount)
+		}
+	}
 	h.bodies = bodies
+	return nil
 }
 
 type ProjectedQuery struct {
@@ -57,11 +63,11 @@ func newProjectedQuery(
 	return result, nil
 }
 
-func (ph *ProjectedQuery) Project(cols []int) (Query, error) {
+func (ph *ProjectedQuery) Project(cols ...int) (Query, error) {
 	return newProjectedQuery(ph, cols)
 }
 
-func (ph *ProjectedQuery) Join(other Query, conditions []JoinOn) (Query, error) {
+func (ph *ProjectedQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
 	return newJoinedQuery(ph, other, conditions)
 }
 
@@ -92,11 +98,11 @@ func newJoinedQuery(
 	return result, nil
 }
 
-func (jh *JoinedQuery) Project(cols []int) (Query, error) {
+func (jh *JoinedQuery) Project(cols ...int) (Query, error) {
 	return newProjectedQuery(jh, cols)
 }
 
-func (jh *JoinedQuery) Join(other Query, conditions []JoinOn) (Query, error) {
+func (jh *JoinedQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
 	return newJoinedQuery(jh, other, conditions)
 }
 
@@ -126,11 +132,11 @@ type StoredQuery struct {
 	metadata    Metadata
 }
 
-func (ph *StoredQuery) Project(cols []int) (Query, error) {
+func (ph *StoredQuery) Project(cols ...int) (Query, error) {
 	return newProjectedQuery(ph, cols)
 }
 
-func (ph *StoredQuery) Join(other Query, conditions []JoinOn) (Query, error) {
+func (ph *StoredQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
 	return newJoinedQuery(ph, other, conditions)
 }
 

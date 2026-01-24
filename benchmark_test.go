@@ -197,59 +197,61 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 	}
 	largeStr := string(largeVal)
 
-	tx, _ := db.Begin(true)
-	defer tx.Rollback()
+	func() {
+		tx, _ := db.Begin(true)
+		defer tx.Rollback()
 
-	// Schema setup
-	// users: u_id(0), u_name(1), group_id(2), u_payload(3)
-	tx.CreateStorage("users", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
+		// Schema setup
+		// users: u_id(0), u_name(1), group_id(2), u_payload(3)
+		tx.CreateStorage("users", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
 
-	// groups: group_id(0), g_name(1), org_id(2), g_payload(3)
-	tx.CreateStorage("groups", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
+		// groups: group_id(0), g_name(1), org_id(2), g_payload(3)
+		tx.CreateStorage("groups", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
 
-	// orgs: org_id(0), o_name(1), region(2), o_payload(3)
-	tx.CreateStorage("orgs", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
+		// orgs: org_id(0), o_name(1), region(2), o_payload(3)
+		tx.CreateStorage("orgs", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
 
-	// Pre-populate some data
-	count := 1000
-	for i := range count {
-		// Orgs
-		orgID := fmt.Sprintf("o%d", i)
-		region := "North"
-		if i%2 == 0 {
-			region = "South"
+		// Pre-populate some data
+		count := 1000
+		for i := range count {
+			// Orgs
+			orgID := fmt.Sprintf("o%d", i)
+			region := "North"
+			if i%2 == 0 {
+				region = "South"
+			}
+			tx.Insert("orgs", map[int]any{
+				0: orgID,
+				1: fmt.Sprintf("Org_%d", i),
+				2: region,
+				3: largeStr,
+			})
+
+			// Groups
+			groupID := fmt.Sprintf("g%d", i)
+			tx.Insert("groups", map[int]any{
+				0: groupID,
+				1: fmt.Sprintf("Group_%d", i),
+				2: orgID,
+				3: largeStr,
+			})
+
+			// Users
+			userID := fmt.Sprintf("u%d", i)
+			tx.Insert("users", map[int]any{
+				0: userID,
+				1: fmt.Sprintf("User_%d", i),
+				2: groupID,
+				3: largeStr,
+			})
 		}
-		tx.Insert("orgs", map[int]any{
-			0: orgID,
-			1: fmt.Sprintf("Org_%d", i),
-			2: region,
-			3: largeStr,
-		})
-
-		// Groups
-		groupID := fmt.Sprintf("g%d", i)
-		tx.Insert("groups", map[int]any{
-			0: groupID,
-			1: fmt.Sprintf("Group_%d", i),
-			2: orgID,
-			3: largeStr,
-		})
-
-		// Users
-		userID := fmt.Sprintf("u%d", i)
-		tx.Insert("users", map[int]any{
-			0: userID,
-			1: fmt.Sprintf("User_%d", i),
-			2: groupID,
-			3: largeStr,
-		})
-	}
-	tx.Commit()
+		err := tx.Commit()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}()
 
 	b.Run("InsertLargeRows", func(b *testing.B) {
-		db, cleanup := setupBenchmarkDB(b)
-		defer cleanup()
-
 		tx, err := db.Begin(true)
 		if err != nil {
 			b.Fatal(err)
@@ -268,7 +270,10 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 	})
 
 	b.Run("QueryDeeplyNested", func(b *testing.B) {
-		readTx, _ := db.Begin(false)
+		readTx, err := db.Begin(false)
+		if err != nil {
+			b.Fatal(err)
+		}
 		defer readTx.Rollback()
 
 		users, err := readTx.StoredQuery("users")
@@ -285,9 +290,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		}
 		// Nested Query: qGroupsOrgs (Groups + Orgs)
 		// groups(0,1,2,3) join orgs(0,1,2,3) on groups.org_id(2) == orgs.org_id(0)
-		qGroupsOrgs, err := groups.Join(orgs, []JoinOn{
-			{LeftField: 2, RightField: 0, Operator: EQ},
-		})
+		qGroupsOrgs, err := groups.Join(orgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -298,14 +301,11 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		// JoinedQuery columns: left cols... then right cols...
 		// groups has 4 cols. orgs has 4 cols.
 		// So in qGroupsOrgs, groups.group_id is at index 0.
-		qAll, err := users.Join(qGroupsOrgs, []JoinOn{
-			{LeftField: 2, RightField: 0, Operator: EQ},
-		})
+		qAll, err := users.Join(qGroupsOrgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
 		if err != nil {
 			b.Fatal(err)
 		}
 
-		b.ResetTimer()
 		for b.Loop() {
 			// Query for a specific region. Region is orgs.region(2).
 			// In qGroupsOrgs, orgs is on right. groups cols 0-3. orgs cols 4-7.
@@ -372,13 +372,11 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		})
 
 		// Base: chain(src, dst, payload) -> reach(src, dst)
-		base, _ := chain.Project([]int{0, 1})
+		base, _ := chain.Project(0, 1)
 
 		// Recursive: reach(x, y) JOIN chain(y, z, p) -> reach(x, z)
 		// Join: reach.dst(1) == chain.src(0)
-		join, _ := qReach.Join(chain, []JoinOn{
-			{LeftField: 1, RightField: 0, Operator: EQ},
-		})
+		join, _ := qReach.Join(chain, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
 
 		// Join Cols:
 		// 0: reach.src
@@ -387,9 +385,9 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		// 3: chain.dst
 		// 4: chain.payload
 		// Project: reach.src(0), chain.dst(3)
-		rec, _ := join.Project([]int{0, 3})
+		rec, _ := join.Project(0, 3)
 
-		qReach.Bind([]Query{base, rec})
+		qReach.Bind(base, rec)
 
 		b.ResetTimer()
 		for b.Loop() {
@@ -447,17 +445,15 @@ func BenchmarkRecursion(b *testing.B) {
 	})
 
 	// Base: chain(x, y) -> reach(x, y)
-	base, _ := chain.Project([]int{0, 1})
+	base, _ := chain.Project(0, 1)
 
 	// Rec: reach(x, y) JOIN chain(y, z) -> reach(x, z)
-	join, _ := qReach.Join(chain, []JoinOn{
-		{LeftField: 1, RightField: 0, Operator: EQ},
-	})
+	join, _ := qReach.Join(chain, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
 	// Join result: r.src(0), r.dst(1), c.src(2), c.dst(3)
 	// Project: 0, 3
-	rec, _ := join.Project([]int{0, 3})
+	rec, _ := join.Project(0, 3)
 
-	qReach.Bind([]Query{base, rec})
+	qReach.Bind(base, rec)
 
 	b.ResetTimer()
 	for b.Loop() {
@@ -522,13 +518,11 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 
-	base, _ := chain.Project([]int{0, 1})
-	join, _ := qReach.Join(chain, []JoinOn{
-		{LeftField: 1, RightField: 0, Operator: EQ},
-	})
-	rec, _ := join.Project([]int{0, 3})
+	base, _ := chain.Project(0, 1)
+	join, _ := qReach.Join(chain, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
+	rec, _ := join.Project(0, 3)
 
-	qReach.Bind([]Query{base, rec})
+	qReach.Bind(base, rec)
 
 	b.ResetTimer()
 	for b.Loop() {
