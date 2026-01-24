@@ -603,3 +603,214 @@ func TestQuery_Recursive(t *testing.T) {
 		}
 	}
 }
+
+func TestQuery_MutualRecursion(t *testing.T) {
+	// Enforce a timeout to detect infinite loops
+	done := make(chan bool)
+	go func() {
+		testQuery_MutualRecursion_Body(t)
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		// Test completed
+	case <-time.After(3 * time.Second):
+		t.Fatal("Test timed out - likely infinite recursion loop due to mutual recursion")
+	}
+}
+
+func testQuery_MutualRecursion_Body(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// 1. Setup Schema: Graph with bidirectional relationships
+	// edges: from, to (directed edges)
+	edgesRel := "edges"
+	// 0: from, 1: to
+	err = tx.CreateStorage(edgesRel, 2, []IndexInfo{
+		{ReferencedCols: []int{0, 1}, IsUnique: true}, // (from, to) unique
+		{ReferencedCols: []int{0}, IsUnique: false},   // index on from
+		{ReferencedCols: []int{1}, IsUnique: false},   // index on to
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Insert Data (Graph with cycles)
+	// A -> B, B -> C, C -> A (cycle)
+	// A -> D, D -> E (chain)
+	if err := tx.Insert(edgesRel, map[int]any{0: "A", 1: "B"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(edgesRel, map[int]any{0: "B", 1: "C"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(edgesRel, map[int]any{0: "C", 1: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(edgesRel, map[int]any{0: "A", 1: "D"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(edgesRel, map[int]any{0: "D", 1: "E"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	edges, err := tx.StoredQuery(edgesRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Define Mutually Recursive Queries
+	// even_reach(X, Y) :- edges(X, Y).
+	// even_reach(X, Z) :- odd_reach(X, Y), edges(Y, Z).
+	// odd_reach(X, Y) :- edges(X, Z), even_reach(Z, Y).
+
+	// Schema: from(0), to(1)
+	qEvenReach, err := NewDatalogQuery(2, []IndexInfo{
+		{ReferencedCols: []int{0, 1}, IsUnique: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	qOddReach, err := NewDatalogQuery(2, []IndexInfo{
+		{ReferencedCols: []int{0, 1}, IsUnique: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// even_reach base case: even_reach(X, Y) :- edges(X, Y)
+	evenBase, err := edges.Project([]int{0, 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// even_reach recursive case: even_reach(X, Z) :- odd_reach(X, Y), edges(Y, Z)
+	// Join on Y: odd_reach.to (1) == edges.from (0)
+	evenRecJoin, err := qOddReach.Join(edges, []JoinOn{
+		{LeftField: 1, RightField: 0, Operator: EQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Project odd_reach.from (0) and edges.to (3) -> even_reach(X, Z)
+	evenRecProj, err := evenRecJoin.Project([]int{0, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// odd_reach case: odd_reach(X, Y) :- edges(X, Z), even_reach(Z, Y)
+	// Join on Z: edges.to (1) == even_reach.from (0)
+	oddRecJoin, err := edges.Join(qEvenReach, []JoinOn{
+		{LeftField: 1, RightField: 0, Operator: EQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Project edges.from (0) and even_reach.to (3) -> odd_reach(X, Y)
+	oddRecProj, err := oddRecJoin.Project([]int{0, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bind bodies to create mutual recursion
+	qEvenReach.Bind([]Query{evenBase, evenRecProj})
+	qOddReach.Bind([]Query{oddRecProj})
+
+	// 4. Execution
+	// Find all nodes reachable from A in even number of steps
+	// Expected: B (1 step), E (2 steps: A->D->E), A (3 steps: A->B->C->A)
+	seq, err := tx.Select(qEvenReach, Condition{Field: 0, Operator: EQ, Value: "A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(map[string]bool)
+	count := 0
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+
+		var from string
+		if err := row.Get(0, &from); err != nil {
+			t.Fatalf("failed to get from: %v", err)
+		}
+		if from != "A" {
+			t.Errorf("Expected from=A, got %v", from)
+		}
+
+		var to string
+		if err := row.Get(1, &to); err != nil {
+			t.Fatalf("failed to get to: %v", err)
+		}
+		results[to] = true
+	}
+
+	// Should find B (direct), E (A->D->E), and A (A->B->C->A)
+	if count < 3 {
+		t.Errorf("Expected at least 3 even-reachable nodes, got %d. Results: %v", count, results)
+	}
+
+	expectedNodes := []string{"B", "E", "A"}
+	for _, node := range expectedNodes {
+		if !results[node] {
+			t.Errorf("Expected node %s not found in even-reachable results", node)
+		}
+	}
+
+	// 5. Test odd_reach as well
+	// Find all nodes reachable from A in odd number of steps
+	// Expected: D (1 step), C (2 steps: A->B->C)
+	seqOdd, err := tx.Select(qOddReach, Condition{Field: 0, Operator: EQ, Value: "A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oddResults := make(map[string]bool)
+	oddCount := 0
+	for row, err := range seqOdd {
+		if err != nil {
+			t.Fatal(err)
+		}
+		oddCount++
+
+		var to string
+		if err := row.Get(1, &to); err != nil {
+			t.Fatalf("failed to get to: %v", err)
+		}
+		oddResults[to] = true
+	}
+
+	if oddCount < 2 {
+		t.Errorf("Expected at least 2 odd-reachable nodes, got %d. Results: %v", oddCount, oddResults)
+	}
+
+	expectedOddNodes := []string{"D", "C"}
+	for _, node := range expectedOddNodes {
+		if !oddResults[node] {
+			t.Errorf("Expected node %s not found in odd-reachable results", node)
+		}
+	}
+}
