@@ -296,7 +296,6 @@ func (s *storage) scan(
 					}
 					vals[col] = val
 				}
-				c.Seek(k)
 			}
 			// Yield the last row
 			if prev != nil {

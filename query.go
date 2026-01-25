@@ -314,7 +314,6 @@ func (n *joinedQueryNode) Find(
 				}
 				continue
 			}
-			// println("DEBUG: Join Find Left. MainIndex:", leftMainIndex, "MainRanges:", leftMainRanges)
 			leftSeq, err := n.left.Find(leftMainIndex, leftMainRanges, mergedLeftEquals, mergedLeftRanges, mergedLeftExclusion, leftCols)
 			if err != nil {
 				if !yield(nil, err) {
