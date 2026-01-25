@@ -117,8 +117,8 @@ func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*Range) (uin
 }
 
 func splitRanges(left, right *Metadata, ranges map[int]*Range) (map[int]*Range, map[int]*Range, error) {
-	leftRanges := make(map[int]*Range)
-	rightRanges := make(map[int]*Range)
+	leftRanges := make(map[int]*Range, len(ranges))
+	rightRanges := make(map[int]*Range, len(ranges))
 	for col, r := range ranges {
 		if col < left.ColumnsCount {
 			leftRanges[col] = r
@@ -132,8 +132,8 @@ func splitRanges(left, right *Metadata, ranges map[int]*Range) (map[int]*Range, 
 }
 
 func splitEquals(left, right *Metadata, equals map[int]*Value) (map[int]*Value, map[int]*Value, error) {
-	leftEquals := make(map[int]*Value)
-	rightEquals := make(map[int]*Value)
+	leftEquals := make(map[int]*Value, len(equals))
+	rightEquals := make(map[int]*Value, len(equals))
 	for col, v := range equals {
 		if col < left.ColumnsCount {
 			leftEquals[col] = v
@@ -147,8 +147,8 @@ func splitEquals(left, right *Metadata, equals map[int]*Value) (map[int]*Value, 
 }
 
 func splitCols(left, right *Metadata, cols map[int]bool) (map[int]bool, map[int]bool, error) {
-	leftCols := make(map[int]bool)
-	rightCols := make(map[int]bool)
+	leftCols := make(map[int]bool, len(cols))
+	rightCols := make(map[int]bool, len(cols))
 	for col := range cols {
 		if col < left.ColumnsCount {
 			leftCols[col] = true
@@ -162,8 +162,8 @@ func splitCols(left, right *Metadata, cols map[int]bool) (map[int]bool, map[int]
 }
 
 func splitExclusion(left, right *Metadata, exclusion map[int][]*Value) (map[int][]*Value, map[int][]*Value, error) {
-	leftExclusion := make(map[int][]*Value)
-	rightExclusion := make(map[int][]*Value)
+	leftExclusion := make(map[int][]*Value, len(exclusion))
+	rightExclusion := make(map[int][]*Value, len(exclusion))
 	for col, vals := range exclusion {
 		if col < left.ColumnsCount {
 			leftExclusion[col] = vals

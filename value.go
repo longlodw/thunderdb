@@ -54,6 +54,12 @@ func (v *Value) GetRaw() ([]byte, error) {
 	return nil, nil
 }
 
+func (v *Value) SetRaw(b []byte, m MarshalUnmarshaler) {
+	v.raw = b
+	v.marshaler = m
+	v.value = nil
+}
+
 func mergeEquals(result *map[int]*Value, equalsLeft, equalsRight map[int]*Value) (bool, error) {
 	clear(*result)
 	maps.Copy(*result, equalsLeft)

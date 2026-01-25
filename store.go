@@ -220,12 +220,23 @@ func (s *storage) scan(
 		colsForConditionCheck[idx] = true
 	}
 	return func(yield func(*scanResult, error) bool) {
+		// Reusable buffers
+		vals := make(map[int]*Value)
+		rawVals := make(map[int][]byte)
+		valueCache := make(map[int]*Value)
+		res := &scanResult{
+			values:    vals,
+			rawValues: rawVals,
+		}
+
 		if forcedIndex == 0 {
 			// Full Scan
 			c := s.dataBucket().Cursor()
 			var prev []byte
-			vals := make(map[int]*Value)
-			rawVals := make(map[int][]byte)
+
+			// Clear buffers initially
+			clear(vals)
+			clear(rawVals)
 
 			checkAndYield := func(k []byte) bool {
 				if prev == nil {
@@ -236,15 +247,14 @@ func (s *storage) scan(
 					return yield(nil, err)
 				}
 				if ok {
-					res := &scanResult{
-						id:        prev,
-						values:    vals,
-						rawValues: rawVals,
-					}
+					res.id = prev
+					// res.values/rawValues are already pointing to vals/rawVals
 					if !yield(res, nil) {
 						return false
 					}
-					c.Seek(k)
+					if k != nil {
+						c.Seek(k)
+					}
 				}
 				return true
 			}
@@ -257,8 +267,9 @@ func (s *storage) scan(
 					if !checkAndYield(k) {
 						return
 					}
-					vals = make(map[int]*Value)
-					rawVals = make(map[int][]byte)
+					// Reset buffers for the next row
+					clear(vals)
+					clear(rawVals)
 				}
 				prev = id
 
@@ -278,110 +289,152 @@ func (s *storage) scan(
 						yield(nil, err)
 						return
 					}
-					vals[col] = ValueOfLiteral(vAny, orderedMaUn)
+
+					val, ok := valueCache[col]
+					if !ok {
+						val = ValueOfLiteral(vAny, s.maUn)
+						valueCache[col] = val
+					} else {
+						val.value = vAny
+						val.raw = nil
+						val.marshaler = s.maUn
+					}
+					vals[col] = val
+				}
+				if k != nil {
+					c.Seek(k)
 				}
 			}
-			checkAndYield(k)
+			// Yield the last row
+			if prev != nil {
+				checkAndYield(nil)
+			}
 		} else {
 			// Index Scan
-			var idxBytes [8]byte
-			binary.BigEndian.PutUint64(idxBytes[:], forcedIndex)
-			idxBucket := s.indexBucket().Bucket(idxBytes[:])
+			var idxName [8]byte
+			binary.BigEndian.PutUint64(idxName[:], forcedIndex)
+			idxBucket := s.indexBucket().Bucket(idxName[:])
+			if idxBucket == nil {
+				return
+			}
 			c := idxBucket.Cursor()
-			var k []byte
-			if forcedRange.start != nil {
-				start, err := forcedRange.start.GetRaw()
+
+			var startKey []byte
+			if forcedRange != nil && forcedRange.start != nil {
+				sk, err := forcedRange.start.GetRaw()
 				if err != nil {
 					yield(nil, err)
 					return
 				}
-				k, _ = c.Seek(start)
+				startKey = sk
+			}
+
+			// Range end check
+			var endKey []byte
+			if forcedRange != nil && forcedRange.end != nil {
+				ek, err := forcedRange.end.GetRaw()
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				endKey = ek
+			}
+
+			// Clear buffers initially
+			clear(vals)
+			clear(rawVals)
+
+			var k []byte
+			if startKey != nil {
+				k, _ = c.Seek(startKey)
 			} else {
 				k, _ = c.First()
 			}
-			lessThan := func(k []byte) bool {
-				if forcedRange.end == nil {
-					return true
-				}
-				end, err := forcedRange.end.GetRaw()
-				if err != nil {
-					return false
-				}
-				cmp := bytes.Compare(k[:len(k)-8], end)
-				return cmp < 0 || (cmp == 0 && forcedRange.includeEnd)
-			}
-			for ; k != nil && lessThan(k); k, _ = c.Next() {
-				vals := make(map[int]*Value)
-				rawVals := make(map[int][]byte)
-				rowID := k[len(k)-8:]
-				// Logic for what to unmarshal/keep raw
-				for colIdx := range unmarshalCols {
-					var columnKey [12]byte
-					copy(columnKey[0:8], rowID)
-					binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
-					v := s.dataBucket().Get(columnKey[:])
-					if v != nil {
-						var vAny any
-						if err := s.maUn.Unmarshal(v, &vAny); err != nil {
-							if !yield(nil, err) {
-								return
-							}
-							continue
-						}
-						vals[colIdx] = ValueOfLiteral(vAny, orderedMaUn)
-					}
-				}
-				for colIdx := range rawCols {
-					var columnKey [12]byte
-					copy(columnKey[0:8], rowID)
-					binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
-					v := s.dataBucket().Get(columnKey[:])
-					if v != nil {
-						if vals == nil {
-							vals = make(map[int]*Value)
-						}
-						rawVals[colIdx] = v
-					}
-				}
-				for colIdx := range colsForConditionCheck {
-					if _, ok := vals[colIdx]; !ok {
-						var columnKey [12]byte
-						copy(columnKey[0:8], rowID)
-						binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
-						v := s.dataBucket().Get(columnKey[:])
-						if v != nil {
-							var vAny any
-							if err := s.maUn.Unmarshal(v, &vAny); err != nil {
-								if !yield(nil, err) {
-									return
-								}
-								continue
-							}
-							vals[colIdx] = ValueOfLiteral(vAny, orderedMaUn)
+
+			dataC := s.dataBucket().Cursor()
+
+			for ; k != nil; k, _ = c.Next() {
+				// Check range end
+				if endKey != nil {
+					// Index keys are [ValueBytes][RowID].
+					// We check if ValueBytes > endKey.
+					// ValueBytes length is len(k) - 8.
+					if len(k) > 8 {
+						valBytes := k[:len(k)-8]
+						if bytes.Compare(valBytes, endKey) > 0 {
+							break
 						}
 					}
-				}
-				ok, err := s.inRanges(&vals, equals, ranges, excludes)
-				if err != nil {
-					if !yield(nil, err) {
-						return
-					}
-					continue
-				} else if !ok {
-					continue
 				}
 
-				res := &scanResult{
-					id:     rowID,
-					values: vals,
-					deleteIndexEntry: func() error {
-						return c.Delete()
-					},
+				// Extract ID
+				if len(k) < 8 {
+					continue
 				}
-				if !yield(res, nil) {
+				id := k[len(k)-8:]
+
+				// Fetch columns for this ID
+				var rowPrefix [8]byte
+				copy(rowPrefix[:], id)
+
+				// Seek to the first column of this row in data bucket
+				// Keys are [ID 8 bytes][ColID 4 bytes]
+				var seekData [12]byte
+				copy(seekData[:], id)
+
+				dk, dv := dataC.Seek(seekData[:])
+				for ; dk != nil; dk, dv = dataC.Next() {
+					if !bytes.HasPrefix(dk, rowPrefix[:]) {
+						break
+					}
+					col := int(binary.BigEndian.Uint32(dk[8:12]))
+
+					shouldUnmarshal := unmarshalCols != nil && unmarshalCols[col]
+					shouldKeepRaw := rawCols != nil && rawCols[col]
+
+					if shouldKeepRaw {
+						rawVals[col] = dv
+					}
+
+					if shouldUnmarshal || colsForConditionCheck[col] {
+						var vAny any
+						if err := s.maUn.Unmarshal(dv, &vAny); err != nil {
+							yield(nil, err)
+							return
+						}
+
+						val, ok := valueCache[col]
+						if !ok {
+							val = ValueOfLiteral(vAny, s.maUn)
+							valueCache[col] = val
+						} else {
+							val.value = vAny
+							val.raw = nil
+							val.marshaler = s.maUn
+						}
+						vals[col] = val
+					}
+				}
+
+				ok, err := s.inRanges(&vals, equals, ranges, excludes)
+				if err != nil {
+					yield(nil, err)
 					return
 				}
-				c.Seek(k)
+				if ok {
+					res.id = id
+					currentK := k
+					res.deleteIndexEntry = func() error {
+						return idxBucket.Delete(currentK)
+					}
+					if !yield(res, nil) {
+						return
+					}
+				}
+
+				// Reset buffers
+				clear(vals)
+				clear(rawVals)
 			}
 		}
 	}
@@ -569,6 +622,11 @@ func (s *storage) find(
 	cols map[int]bool,
 ) (iter.Seq2[*Row, error], error) {
 	return func(yield func(*Row, error) bool) {
+		// Create a reusable Row
+		row := &Row{
+			maUn: s.maUn,
+		}
+
 		for res, err := range s.scan(mainIndex, indexRange, equals, ranges, exclusion, nil, cols) {
 			if err != nil {
 				if !yield(nil, err) {
@@ -591,10 +649,10 @@ func (s *storage) find(
 					}
 				}
 			}
-			row := &Row{
-				values: res.rawValues,
-				maUn:   s.maUn,
-			}
+
+			// Point the reusable row to the current values
+			row.values = res.rawValues
+
 			if !yield(row, nil) {
 				return
 			}
