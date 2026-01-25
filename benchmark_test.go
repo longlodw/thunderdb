@@ -466,6 +466,7 @@ func BenchmarkRecursion(b *testing.B) {
 			// It should find 0->1, 0->2, ... 0->1000. Total 1000 paths (or 1001 if including 0->1000?)
 			// The loop inserts 0->1 ... 999->1000.
 			// Reachable from 0: 1, 2, ... 1000. Count = 1000.
+			b.Fatalf("Expected at least %d reachable nodes, got %d", chainLen, count)
 		}
 	}
 }
