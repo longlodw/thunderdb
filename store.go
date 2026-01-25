@@ -182,13 +182,14 @@ func (s *storage) toKeyFromColumn(value *map[int]*Value, idx int) ([]byte, error
 
 func (s *storage) toIndexKey(value *map[int]*Value, idx uint64) ([]byte, error) {
 	refColumns := ReferenceColumns(idx)
-	selectedValues := make([]any, len(refColumns))
-	for k, colIdx := range refColumns {
+	selectedValues := make([]any, 0)
+	for colIdx := range refColumns {
 		var err error
-		selectedValues[k], err = (*value)[colIdx].GetValue()
+		v, err := (*value)[colIdx].GetValue()
 		if err != nil {
 			return nil, err
 		}
+		selectedValues = append(selectedValues, v)
 	}
 	return ToKey(selectedValues...)
 }
@@ -283,27 +284,19 @@ func (s *storage) scan(
 				}
 
 				if shouldUnmarshal || colsForConditionCheck[col] {
-					// println("Unmarshaling column", col, "relation", s.name)
-					var vAny any
-					if err := s.maUn.Unmarshal(v, &vAny); err != nil {
-						yield(nil, err)
-						return
-					}
-
+					// Lazy unmarshaling: store raw bytes in Value
 					val, ok := valueCache[col]
 					if !ok {
-						val = ValueOfLiteral(vAny, s.maUn)
+						val = ValueOfRaw(v, s.maUn)
 						valueCache[col] = val
 					} else {
-						val.value = vAny
-						val.raw = nil
+						val.value = nil
+						val.raw = v
 						val.marshaler = s.maUn
 					}
 					vals[col] = val
 				}
-				if k != nil {
-					c.Seek(k)
-				}
+				c.Seek(k)
 			}
 			// Yield the last row
 			if prev != nil {
@@ -397,19 +390,14 @@ func (s *storage) scan(
 					}
 
 					if shouldUnmarshal || colsForConditionCheck[col] {
-						var vAny any
-						if err := s.maUn.Unmarshal(dv, &vAny); err != nil {
-							yield(nil, err)
-							return
-						}
-
+						// Lazy unmarshaling: store raw bytes in Value
 						val, ok := valueCache[col]
 						if !ok {
-							val = ValueOfLiteral(vAny, s.maUn)
+							val = ValueOfRaw(dv, s.maUn)
 							valueCache[col] = val
 						} else {
-							val.value = vAny
-							val.raw = nil
+							val.value = nil
+							val.raw = dv
 							val.marshaler = s.maUn
 						}
 						vals[col] = val
@@ -484,7 +472,7 @@ func (s *storage) Update(
 			}
 		}
 		refCols := ReferenceColumns(i)
-		for _, colIdx := range refCols {
+		for colIdx := range refCols {
 			colsToUnmarshal[colIdx] = true
 		}
 	}
@@ -537,7 +525,7 @@ func (s *storage) insertIndexes(id []byte, values *map[int]*Value, skip map[uint
 			continue
 		}
 		selectedValues := make([]any, 0, s.metadata.ColumnsCount)
-		for _, j := range ReferenceColumns(i) {
+		for j := range ReferenceColumns(i) {
 			if v, ok := (*values)[j]; ok {
 				var unwrapped any
 				var err error
@@ -661,10 +649,19 @@ func (s *storage) find(
 }
 
 func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges map[int]*Range, exclusions map[int][]*Value) (bool, error) {
+	comparableBytesCache := make(map[int][]byte)
 	for idx, val := range equals {
-		kBytes, err := s.toKeyFromColumn(vals, idx)
-		if err != nil {
-			return false, err
+		var kBytes []byte
+		var err error
+		// check cache
+		if cached, ok := comparableBytesCache[idx]; ok {
+			kBytes = cached
+		} else {
+			kBytes, err = s.toKeyFromColumn(vals, idx)
+			if err != nil {
+				return false, err
+			}
+			comparableBytesCache[idx] = kBytes
 		}
 		eqBytes, err := val.GetRaw()
 		if err != nil {
@@ -675,11 +672,19 @@ func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges m
 		}
 	}
 	for idx, kr := range ranges {
-		kBytes, err := s.toKeyFromColumn(vals, idx)
-		if err != nil {
-			return false, err
+		var kBytes []byte
+		var err error
+		// check cache
+		if cached, ok := comparableBytesCache[idx]; ok {
+			kBytes = cached
+		} else {
+			kBytes, err = s.toKeyFromColumn(vals, idx)
+			if err != nil {
+				return false, err
+			}
+			comparableBytesCache[idx] = kBytes
 		}
-		kVals := ValueOfRaw(kBytes, s.maUn)
+		kVals := ValueOfRaw(kBytes, orderedMaUn)
 		if con, err := kr.Contains(kVals); err != nil {
 			return false, err
 		} else if !con {
@@ -687,9 +692,17 @@ func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges m
 		}
 	}
 	for idx, exList := range exclusions {
-		kBytes, err := s.toKeyFromColumn(vals, idx)
-		if err != nil {
-			return false, err
+		var kBytes []byte
+		var err error
+		// check cache
+		if cached, ok := comparableBytesCache[idx]; ok {
+			kBytes = cached
+		} else {
+			kBytes, err = s.toKeyFromColumn(vals, idx)
+			if err != nil {
+				return false, err
+			}
+			comparableBytesCache[idx] = kBytes
 		}
 		for _, ex := range exList {
 			rawEx, err := ex.GetRaw()
@@ -757,12 +770,14 @@ func (s *storage) Insert(values map[int]any) error {
 	return nil
 }
 
-func ReferenceColumns(idx uint64) []int {
-	refs := []int{}
-	for i := range 64 {
-		if (idx & (1 << uint64(i))) != 0 {
-			refs = append(refs, i)
+func ReferenceColumns(idx uint64) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for i := range 64 {
+			if (idx & (1 << uint64(i))) != 0 {
+				if !yield(i) {
+					return
+				}
+			}
 		}
 	}
-	return refs
 }

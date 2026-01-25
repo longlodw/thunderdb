@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	// "github.com/davecgh/go-spew/spew"
 )
@@ -340,22 +341,11 @@ func (n *joinedQueryNode) Find(
 func (n *joinedQueryNode) joinInto(dest *Row, leftRow, rightRow *Row) {
 	clear(dest.values)
 	dest.maUn = leftRow.maUn
-	for k, v := range leftRow.values {
-		dest.values[k] = v
-	}
+	maps.Copy(dest.values, leftRow.values)
 	offset := n.left.metadata().ColumnsCount
 	for k, v := range rightRow.values {
 		dest.values[k+offset] = v
 	}
-}
-
-func (n *joinedQueryNode) joinRows(leftRow, rightRow *Row) (*Row, error) {
-	newRow := &Row{
-		values: make(map[int][]byte),
-		maUn:   leftRow.maUn,
-	}
-	n.joinInto(newRow, leftRow, rightRow)
-	return newRow, nil
 }
 
 func (n *joinedQueryNode) ComputeContraintsForRight(
@@ -778,7 +768,7 @@ func initProjectedQueryNode(result *projectedQueryNode, child queryNode, columns
 	for idx, isUnique := range child.metadata().Indexes {
 		var projectedIdx uint64 = 0
 		refCols := ReferenceColumns(idx)
-		for _, col := range refCols {
+		for col := range refCols {
 			childCols := childToResultColumnMap[col]
 			for _, childCol := range childCols {
 				projectedIdx |= 1 << uint64(childCol)
@@ -818,7 +808,7 @@ func (n *projectedQueryNode) Find(
 	}
 	childIndex := uint64(0)
 	refCols := ReferenceColumns(mainIndex)
-	for _, col := range refCols {
+	for col := range refCols {
 		if col >= len(n.columns) {
 			return nil, ErrFieldNotFound(fmt.Sprintf("computed column %d", col))
 		}
