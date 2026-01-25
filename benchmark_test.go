@@ -197,60 +197,6 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 	}
 	largeStr := string(largeVal)
 
-	func() {
-		tx, _ := db.Begin(true)
-		defer tx.Rollback()
-
-		// Schema setup
-		// users: u_id(0), u_name(1), group_id(2), u_payload(3)
-		tx.CreateStorage("users", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
-
-		// groups: group_id(0), g_name(1), org_id(2), g_payload(3)
-		tx.CreateStorage("groups", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
-
-		// orgs: org_id(0), o_name(1), region(2), o_payload(3)
-		tx.CreateStorage("orgs", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
-
-		// Pre-populate some data
-		count := 1000
-		for i := range count {
-			// Orgs
-			orgID := fmt.Sprintf("o%d", i)
-			region := "North"
-			if i%2 == 0 {
-				region = "South"
-			}
-			tx.Insert("orgs", map[int]any{
-				0: orgID,
-				1: fmt.Sprintf("Org_%d", i),
-				2: region,
-				3: largeStr,
-			})
-
-			// Groups
-			groupID := fmt.Sprintf("g%d", i)
-			tx.Insert("groups", map[int]any{
-				0: groupID,
-				1: fmt.Sprintf("Group_%d", i),
-				2: orgID,
-				3: largeStr,
-			})
-
-			// Users
-			userID := fmt.Sprintf("u%d", i)
-			tx.Insert("users", map[int]any{
-				0: userID,
-				1: fmt.Sprintf("User_%d", i),
-				2: groupID,
-				3: largeStr,
-			})
-		}
-		err := tx.Commit()
-		if err != nil {
-			b.Fatal(err)
-		}
-	}()
-
 	b.Run("InsertLargeRows", func(b *testing.B) {
 		tx, err := db.Begin(true)
 		if err != nil {
@@ -270,6 +216,59 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 	})
 
 	b.Run("QueryDeeplyNested", func(b *testing.B) {
+		func() {
+			tx, _ := db.Begin(true)
+			defer tx.Rollback()
+
+			// Schema setup
+			// users: u_id(0), u_name(1), group_id(2), u_payload(3)
+			tx.CreateStorage("users", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
+
+			// groups: group_id(0), g_name(1), org_id(2), g_payload(3)
+			tx.CreateStorage("groups", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
+
+			// orgs: org_id(0), o_name(1), region(2), o_payload(3)
+			tx.CreateStorage("orgs", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
+
+			// Pre-populate some data
+			count := 1000
+			for i := range count {
+				// Orgs
+				orgID := fmt.Sprintf("o%d", i)
+				region := "North"
+				if i%2 == 0 {
+					region = "South"
+				}
+				tx.Insert("orgs", map[int]any{
+					0: orgID,
+					1: fmt.Sprintf("Org_%d", i),
+					2: region,
+					3: largeStr,
+				})
+
+				// Groups
+				groupID := fmt.Sprintf("g%d", i)
+				tx.Insert("groups", map[int]any{
+					0: groupID,
+					1: fmt.Sprintf("Group_%d", i),
+					2: orgID,
+					3: largeStr,
+				})
+
+				// Users
+				userID := fmt.Sprintf("u%d", i)
+				tx.Insert("users", map[int]any{
+					0: userID,
+					1: fmt.Sprintf("User_%d", i),
+					2: groupID,
+					3: largeStr,
+				})
+			}
+			err := tx.Commit()
+			if err != nil {
+				b.Fatal(err)
+			}
+		}()
 		readTx, err := db.Begin(false)
 		if err != nil {
 			b.Fatal(err)
@@ -306,6 +305,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			b.Fatal(err)
 		}
 
+		b.ResetTimer()
 		for b.Loop() {
 			// Query for a specific region. Region is orgs.region(2).
 			// In qGroupsOrgs, orgs is on right. groups cols 0-3. orgs cols 4-7.
