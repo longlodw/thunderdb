@@ -614,6 +614,987 @@ func TestQuery_MutualRecursion(t *testing.T) {
 	}
 }
 
+// TestQuery_MultiColumnIndex tests queries with composite (multi-column) indexes
+func TestQuery_MultiColumnIndex(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Schema: products(id, category, subcategory, price, name)
+	// Composite index on (category, subcategory) to speed up category browsing
+	productsRel := "products"
+	err = tx.CreateStorage(productsRel, 5, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},     // id unique
+		{ReferencedCols: []int{1, 2}, IsUnique: false}, // (category, subcategory) composite
+		{ReferencedCols: []int{1}, IsUnique: false},    // category alone
+		{ReferencedCols: []int{3}, IsUnique: false},    // price for range queries
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert test data
+	testProducts := []map[int]any{
+		{0: "p1", 1: "electronics", 2: "phones", 3: int64(500), 4: "iPhone"},
+		{0: "p2", 1: "electronics", 2: "phones", 3: int64(400), 4: "Android"},
+		{0: "p3", 1: "electronics", 2: "laptops", 3: int64(1000), 4: "MacBook"},
+		{0: "p4", 1: "electronics", 2: "laptops", 3: int64(800), 4: "ThinkPad"},
+		{0: "p5", 1: "clothing", 2: "shirts", 3: int64(50), 4: "T-Shirt"},
+		{0: "p6", 1: "clothing", 2: "pants", 3: int64(80), 4: "Jeans"},
+		{0: "p7", 1: "clothing", 2: "shirts", 3: int64(100), 4: "Dress Shirt"},
+	}
+	for _, p := range testProducts {
+		if err := tx.Insert(productsRel, p); err != nil {
+			t.Fatalf("Failed to insert product: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query tests
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	products, err := tx.StoredQuery(productsRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test 1: Query with both columns of composite index (category=electronics, subcategory=phones)
+	t.Run("CompositeIndexBothColumns", func(t *testing.T) {
+		seq, err := tx.Select(products,
+			Condition{Field: 1, Operator: EQ, Value: "electronics"},
+			Condition{Field: 2, Operator: EQ, Value: "phones"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var names []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var name string
+			if err := row.Get(4, &name); err != nil {
+				t.Fatal(err)
+			}
+			names = append(names, name)
+		}
+
+		if len(names) != 2 {
+			t.Errorf("Expected 2 results, got %d: %v", len(names), names)
+		}
+	})
+
+	// Test 2: Query with first column of composite index only
+	t.Run("CompositeIndexFirstColumnOnly", func(t *testing.T) {
+		seq, err := tx.Select(products,
+			Condition{Field: 1, Operator: EQ, Value: "electronics"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		count := 0
+		for _, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+
+		if count != 4 {
+			t.Errorf("Expected 4 electronics products, got %d", count)
+		}
+	})
+
+	// Test 3: Query combining composite index with another condition
+	t.Run("CompositeIndexWithAdditionalFilter", func(t *testing.T) {
+		seq, err := tx.Select(products,
+			Condition{Field: 1, Operator: EQ, Value: "electronics"},
+			Condition{Field: 2, Operator: EQ, Value: "laptops"},
+			Condition{Field: 3, Operator: GT, Value: int64(900)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var names []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var name string
+			if err := row.Get(4, &name); err != nil {
+				t.Fatal(err)
+			}
+			names = append(names, name)
+		}
+
+		if len(names) != 1 || names[0] != "MacBook" {
+			t.Errorf("Expected only MacBook (price > 900), got: %v", names)
+		}
+	})
+}
+
+// TestQuery_LessThanConditions tests LT and LTE filtering
+func TestQuery_LessThanConditions(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Schema: scores(id, player, score, level)
+	scoresRel := "scores"
+	err = tx.CreateStorage(scoresRel, 4, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{2}, IsUnique: false}, // score index for range queries
+		{ReferencedCols: []int{3}, IsUnique: false}, // level index
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert test data with various scores
+	testScores := []map[int]any{
+		{0: "s1", 1: "Alice", 2: int64(100), 3: int64(1)},
+		{0: "s2", 1: "Bob", 2: int64(200), 3: int64(2)},
+		{0: "s3", 1: "Charlie", 2: int64(300), 3: int64(2)},
+		{0: "s4", 1: "Diana", 2: int64(400), 3: int64(3)},
+		{0: "s5", 1: "Eve", 2: int64(500), 3: int64(3)},
+		{0: "s6", 1: "Frank", 2: int64(150), 3: int64(1)},
+	}
+	for _, s := range testScores {
+		if err := tx.Insert(scoresRel, s); err != nil {
+			t.Fatalf("Failed to insert score: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	scores, err := tx.StoredQuery(scoresRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test LT: scores < 200
+	t.Run("LessThan", func(t *testing.T) {
+		seq, err := tx.Select(scores,
+			Condition{Field: 2, Operator: LT, Value: int64(200)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var players []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var player string
+			if err := row.Get(1, &player); err != nil {
+				t.Fatal(err)
+			}
+			players = append(players, player)
+		}
+
+		// Expect Alice (100) and Frank (150)
+		if len(players) != 2 {
+			t.Errorf("Expected 2 players with score < 200, got %d: %v", len(players), players)
+		}
+	})
+
+	// Test LTE: scores <= 200
+	t.Run("LessThanOrEqual", func(t *testing.T) {
+		seq, err := tx.Select(scores,
+			Condition{Field: 2, Operator: LTE, Value: int64(200)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var players []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var player string
+			if err := row.Get(1, &player); err != nil {
+				t.Fatal(err)
+			}
+			players = append(players, player)
+		}
+
+		// Expect Alice (100), Frank (150), Bob (200)
+		if len(players) != 3 {
+			t.Errorf("Expected 3 players with score <= 200, got %d: %v", len(players), players)
+		}
+	})
+
+	// Test LT with additional EQ condition
+	t.Run("LessThanWithEquality", func(t *testing.T) {
+		seq, err := tx.Select(scores,
+			Condition{Field: 2, Operator: LT, Value: int64(350)},
+			Condition{Field: 3, Operator: EQ, Value: int64(2)}, // level = 2
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var players []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var player string
+			if err := row.Get(1, &player); err != nil {
+				t.Fatal(err)
+			}
+			players = append(players, player)
+		}
+
+		// Expect Bob (200, level 2) and Charlie (300, level 2)
+		if len(players) != 2 {
+			t.Errorf("Expected 2 players (level 2, score < 350), got %d: %v", len(players), players)
+		}
+	})
+}
+
+// TestQuery_GreaterThanConditions tests GT and GTE filtering
+func TestQuery_GreaterThanConditions(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Schema: inventory(id, product, quantity, warehouse)
+	inventoryRel := "inventory"
+	err = tx.CreateStorage(inventoryRel, 4, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{2}, IsUnique: false}, // quantity for range queries
+		{ReferencedCols: []int{3}, IsUnique: false}, // warehouse
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert test data
+	testItems := []map[int]any{
+		{0: "i1", 1: "Widget A", 2: int64(10), 3: "warehouse1"},
+		{0: "i2", 1: "Widget B", 2: int64(50), 3: "warehouse1"},
+		{0: "i3", 1: "Gadget X", 2: int64(100), 3: "warehouse2"},
+		{0: "i4", 1: "Gadget Y", 2: int64(200), 3: "warehouse2"},
+		{0: "i5", 1: "Tool Z", 2: int64(75), 3: "warehouse1"},
+		{0: "i6", 1: "Part Q", 2: int64(150), 3: "warehouse2"},
+	}
+	for _, item := range testItems {
+		if err := tx.Insert(inventoryRel, item); err != nil {
+			t.Fatalf("Failed to insert item: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	inventory, err := tx.StoredQuery(inventoryRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test GT: quantity > 100
+	t.Run("GreaterThan", func(t *testing.T) {
+		seq, err := tx.Select(inventory,
+			Condition{Field: 2, Operator: GT, Value: int64(100)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var products []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var product string
+			if err := row.Get(1, &product); err != nil {
+				t.Fatal(err)
+			}
+			products = append(products, product)
+		}
+
+		// Expect Gadget Y (200) and Part Q (150)
+		if len(products) != 2 {
+			t.Errorf("Expected 2 items with quantity > 100, got %d: %v", len(products), products)
+		}
+	})
+
+	// Test GTE: quantity >= 100
+	t.Run("GreaterThanOrEqual", func(t *testing.T) {
+		seq, err := tx.Select(inventory,
+			Condition{Field: 2, Operator: GTE, Value: int64(100)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var products []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var product string
+			if err := row.Get(1, &product); err != nil {
+				t.Fatal(err)
+			}
+			products = append(products, product)
+		}
+
+		// Expect Gadget X (100), Gadget Y (200), Part Q (150)
+		if len(products) != 3 {
+			t.Errorf("Expected 3 items with quantity >= 100, got %d: %v", len(products), products)
+		}
+	})
+
+	// Test GT with warehouse filter
+	t.Run("GreaterThanWithEquality", func(t *testing.T) {
+		seq, err := tx.Select(inventory,
+			Condition{Field: 2, Operator: GT, Value: int64(25)},
+			Condition{Field: 3, Operator: EQ, Value: "warehouse1"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var products []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var product string
+			if err := row.Get(1, &product); err != nil {
+				t.Fatal(err)
+			}
+			products = append(products, product)
+		}
+
+		// Expect Widget B (50) and Tool Z (75) in warehouse1
+		if len(products) != 2 {
+			t.Errorf("Expected 2 items (warehouse1, quantity > 25), got %d: %v", len(products), products)
+		}
+	})
+}
+
+// TestQuery_CombinedRangeConditions tests combining LT/LTE and GT/GTE in the same query
+func TestQuery_CombinedRangeConditions(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Schema: temperatures(id, city, temp, date)
+	tempsRel := "temperatures"
+	err = tx.CreateStorage(tempsRel, 4, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{2}, IsUnique: false}, // temp for range queries
+		{ReferencedCols: []int{1}, IsUnique: false}, // city
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert test data: temperatures in various ranges
+	testTemps := []map[int]any{
+		{0: "t1", 1: "CityA", 2: int64(-10), 3: "2024-01-01"},
+		{0: "t2", 1: "CityA", 2: int64(5), 3: "2024-02-01"},
+		{0: "t3", 1: "CityA", 2: int64(20), 3: "2024-03-01"},
+		{0: "t4", 1: "CityB", 2: int64(15), 3: "2024-01-01"},
+		{0: "t5", 1: "CityB", 2: int64(25), 3: "2024-02-01"},
+		{0: "t6", 1: "CityB", 2: int64(35), 3: "2024-03-01"},
+		{0: "t7", 1: "CityC", 2: int64(10), 3: "2024-01-01"},
+		{0: "t8", 1: "CityC", 2: int64(22), 3: "2024-02-01"},
+	}
+	for _, temp := range testTemps {
+		if err := tx.Insert(tempsRel, temp); err != nil {
+			t.Fatalf("Failed to insert temp: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	temps, err := tx.StoredQuery(tempsRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test: 10 <= temp <= 25 (range query)
+	t.Run("BetweenRangeInclusive", func(t *testing.T) {
+		seq, err := tx.Select(temps,
+			Condition{Field: 2, Operator: GTE, Value: int64(10)},
+			Condition{Field: 2, Operator: LTE, Value: int64(25)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var cities []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var city string
+			if err := row.Get(1, &city); err != nil {
+				t.Fatal(err)
+			}
+			cities = append(cities, city)
+		}
+
+		// Expect: CityA(20), CityB(15), CityB(25), CityC(10), CityC(22)
+		if len(cities) != 5 {
+			t.Errorf("Expected 5 records with 10 <= temp <= 25, got %d: %v", len(cities), cities)
+		}
+	})
+
+	// Test: 10 < temp < 25 (exclusive range)
+	t.Run("BetweenRangeExclusive", func(t *testing.T) {
+		seq, err := tx.Select(temps,
+			Condition{Field: 2, Operator: GT, Value: int64(10)},
+			Condition{Field: 2, Operator: LT, Value: int64(25)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var cities []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var city string
+			if err := row.Get(1, &city); err != nil {
+				t.Fatal(err)
+			}
+			cities = append(cities, city)
+		}
+
+		// Expect: CityA(20), CityB(15), CityC(22) -- excludes 10 and 25
+		if len(cities) != 3 {
+			t.Errorf("Expected 3 records with 10 < temp < 25, got %d: %v", len(cities), cities)
+		}
+	})
+
+	// Test: range + equality filter on city
+	t.Run("RangeWithCityFilter", func(t *testing.T) {
+		seq, err := tx.Select(temps,
+			Condition{Field: 2, Operator: GTE, Value: int64(0)},
+			Condition{Field: 2, Operator: LT, Value: int64(30)},
+			Condition{Field: 1, Operator: EQ, Value: "CityB"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		count := 0
+		for _, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+
+		// Expect: CityB(15), CityB(25) -- 35 is excluded
+		if count != 2 {
+			t.Errorf("Expected 2 CityB records with 0 <= temp < 30, got %d", count)
+		}
+	})
+
+	// Test: multiple conditions that result in empty set
+	t.Run("EmptyResultRange", func(t *testing.T) {
+		seq, err := tx.Select(temps,
+			Condition{Field: 2, Operator: GT, Value: int64(100)},
+			Condition{Field: 2, Operator: LT, Value: int64(50)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		count := 0
+		for _, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+
+		// No temps > 100 AND < 50 (impossible range)
+		if count != 0 {
+			t.Errorf("Expected 0 results for impossible range, got %d", count)
+		}
+	})
+}
+
+// TestQuery_JoinWithRangeConditions tests joins combined with range filters
+func TestQuery_JoinWithRangeConditions(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Schema: orders(id, customer_id, total, status)
+	ordersRel := "orders"
+	err = tx.CreateStorage(ordersRel, 4, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{1}, IsUnique: false}, // customer_id for joins
+		{ReferencedCols: []int{2}, IsUnique: false}, // total for range queries
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Schema: customers(id, name, tier)
+	customersRel := "customers"
+	err = tx.CreateStorage(customersRel, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{2}, IsUnique: false}, // tier
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert customers
+	customers := []map[int]any{
+		{0: "c1", 1: "Alice", 2: "gold"},
+		{0: "c2", 1: "Bob", 2: "silver"},
+		{0: "c3", 1: "Charlie", 2: "gold"},
+	}
+	for _, c := range customers {
+		if err := tx.Insert(customersRel, c); err != nil {
+			t.Fatalf("Failed to insert customer: %v", err)
+		}
+	}
+
+	// Insert orders
+	orders := []map[int]any{
+		{0: "o1", 1: "c1", 2: int64(500), 3: "completed"},
+		{0: "o2", 1: "c1", 2: int64(150), 3: "completed"},
+		{0: "o3", 1: "c2", 2: int64(300), 3: "pending"},
+		{0: "o4", 1: "c2", 2: int64(75), 3: "completed"},
+		{0: "o5", 1: "c3", 2: int64(1000), 3: "completed"},
+		{0: "o6", 1: "c3", 2: int64(200), 3: "pending"},
+	}
+	for _, o := range orders {
+		if err := tx.Insert(ordersRel, o); err != nil {
+			t.Fatalf("Failed to insert order: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	ordersQ, err := tx.StoredQuery(ordersRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	customersQ, err := tx.StoredQuery(customersRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Join orders with customers on customer_id
+	// orders: id(0), customer_id(1), total(2), status(3)
+	// customers: id(4), name(5), tier(6)
+	joinedQ, err := ordersQ.Join(customersQ, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test: Find all gold tier customers with orders > 200
+	t.Run("JoinWithRangeAndEquality", func(t *testing.T) {
+		seq, err := tx.Select(joinedQ,
+			Condition{Field: 6, Operator: EQ, Value: "gold"},     // tier = gold
+			Condition{Field: 2, Operator: GT, Value: int64(200)}, // total > 200
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var results []struct {
+			name  string
+			total int64
+		}
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var name string
+			var total int64
+			if err := row.Get(5, &name); err != nil {
+				t.Fatal(err)
+			}
+			if err := row.Get(2, &total); err != nil {
+				t.Fatal(err)
+			}
+			results = append(results, struct {
+				name  string
+				total int64
+			}{name, total})
+		}
+
+		// Expect: Alice (500), Charlie (1000) -- both gold tier with orders > 200
+		if len(results) != 2 {
+			t.Errorf("Expected 2 results for gold tier orders > 200, got %d: %v", len(results), results)
+		}
+	})
+
+	// Test: Orders between 100 and 400 for silver customers
+	t.Run("JoinWithRangeBetween", func(t *testing.T) {
+		seq, err := tx.Select(joinedQ,
+			Condition{Field: 6, Operator: EQ, Value: "silver"},
+			Condition{Field: 2, Operator: GTE, Value: int64(100)},
+			Condition{Field: 2, Operator: LTE, Value: int64(400)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		count := 0
+		for _, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+
+		// Expect: Bob's order of 300 (75 is too low)
+		if count != 1 {
+			t.Errorf("Expected 1 silver tier order between 100-400, got %d", count)
+		}
+	})
+}
+
+// TestQuery_NEQConditions tests NEQ (not equal) filtering
+func TestQuery_NEQConditions(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Schema: tasks(id, title, status, priority)
+	tasksRel := "tasks"
+	err = tx.CreateStorage(tasksRel, 4, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{2}, IsUnique: false}, // status
+		{ReferencedCols: []int{3}, IsUnique: false}, // priority
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert test data
+	tasks := []map[int]any{
+		{0: "t1", 1: "Task 1", 2: "open", 3: int64(1)},
+		{0: "t2", 1: "Task 2", 2: "closed", 3: int64(2)},
+		{0: "t3", 1: "Task 3", 2: "open", 3: int64(3)},
+		{0: "t4", 1: "Task 4", 2: "in_progress", 3: int64(1)},
+		{0: "t5", 1: "Task 5", 2: "closed", 3: int64(2)},
+		{0: "t6", 1: "Task 6", 2: "open", 3: int64(1)},
+	}
+	for _, task := range tasks {
+		if err := tx.Insert(tasksRel, task); err != nil {
+			t.Fatalf("Failed to insert task: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	tasksQ, err := tx.StoredQuery(tasksRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test: status != "closed"
+	t.Run("NotEqualString", func(t *testing.T) {
+		seq, err := tx.Select(tasksQ,
+			Condition{Field: 2, Operator: NEQ, Value: "closed"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		count := 0
+		for _, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+
+		// Expect 4 tasks (all except the 2 closed ones)
+		if count != 4 {
+			t.Errorf("Expected 4 non-closed tasks, got %d", count)
+		}
+	})
+
+	// Test: priority != 1 AND status != "closed"
+	t.Run("MultipleNEQConditions", func(t *testing.T) {
+		seq, err := tx.Select(tasksQ,
+			Condition{Field: 3, Operator: NEQ, Value: int64(1)},
+			Condition{Field: 2, Operator: NEQ, Value: "closed"},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var titles []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var title string
+			if err := row.Get(1, &title); err != nil {
+				t.Fatal(err)
+			}
+			titles = append(titles, title)
+		}
+
+		// Expect Task 3 (open, priority 3) only
+		// Task 2 and 5 are closed, Task 1, 4, 6 have priority 1
+		if len(titles) != 1 || titles[0] != "Task 3" {
+			t.Errorf("Expected only 'Task 3', got: %v", titles)
+		}
+	})
+
+	// Test: NEQ combined with range
+	t.Run("NEQWithRange", func(t *testing.T) {
+		seq, err := tx.Select(tasksQ,
+			Condition{Field: 2, Operator: NEQ, Value: "closed"},
+			Condition{Field: 3, Operator: LTE, Value: int64(2)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		count := 0
+		for _, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+
+		// Expect: Task 1 (open, 1), Task 4 (in_progress, 1), Task 6 (open, 1)
+		// Not closed AND priority <= 2
+		if count != 3 {
+			t.Errorf("Expected 3 tasks (not closed, priority <= 2), got %d", count)
+		}
+	})
+}
+
+// TestQuery_MultiColumnIndexWithRanges tests composite indexes with range queries
+func TestQuery_MultiColumnIndexWithRanges(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Schema: events(id, year, month, day, description)
+	// Composite index on (year, month) for date range queries
+	eventsRel := "events"
+	err = tx.CreateStorage(eventsRel, 5, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},     // id
+		{ReferencedCols: []int{1, 2}, IsUnique: false}, // (year, month) composite
+		{ReferencedCols: []int{1}, IsUnique: false},    // year alone
+		{ReferencedCols: []int{2}, IsUnique: false},    // month alone
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert test data
+	events := []map[int]any{
+		{0: "e1", 1: int64(2023), 2: int64(1), 3: int64(15), 4: "New Year Event"},
+		{0: "e2", 1: int64(2023), 2: int64(6), 3: int64(1), 4: "Summer Start"},
+		{0: "e3", 1: int64(2023), 2: int64(12), 3: int64(25), 4: "Holiday"},
+		{0: "e4", 1: int64(2024), 2: int64(1), 3: int64(1), 4: "New Year 2024"},
+		{0: "e5", 1: int64(2024), 2: int64(3), 3: int64(20), 4: "Spring Event"},
+		{0: "e6", 1: int64(2024), 2: int64(6), 3: int64(15), 4: "Summer 2024"},
+		{0: "e7", 1: int64(2024), 2: int64(9), 3: int64(1), 4: "Fall Event"},
+	}
+	for _, e := range events {
+		if err := tx.Insert(eventsRel, e); err != nil {
+			t.Fatalf("Failed to insert event: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	eventsQ, err := tx.StoredQuery(eventsRel)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test: year = 2024 AND month >= 3 AND month <= 9
+	t.Run("CompositeIndexWithYearEqMonthRange", func(t *testing.T) {
+		seq, err := tx.Select(eventsQ,
+			Condition{Field: 1, Operator: EQ, Value: int64(2024)},
+			Condition{Field: 2, Operator: GTE, Value: int64(3)},
+			Condition{Field: 2, Operator: LTE, Value: int64(9)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var descriptions []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var desc string
+			if err := row.Get(4, &desc); err != nil {
+				t.Fatal(err)
+			}
+			descriptions = append(descriptions, desc)
+		}
+
+		// Expect: Spring Event (Mar), Summer 2024 (Jun), Fall Event (Sep)
+		if len(descriptions) != 3 {
+			t.Errorf("Expected 3 events in 2024 (months 3-9), got %d: %v", len(descriptions), descriptions)
+		}
+	})
+
+	// Test: year range with month filter
+	t.Run("YearRangeWithMonthEq", func(t *testing.T) {
+		seq, err := tx.Select(eventsQ,
+			Condition{Field: 1, Operator: GTE, Value: int64(2023)},
+			Condition{Field: 1, Operator: LTE, Value: int64(2024)},
+			Condition{Field: 2, Operator: EQ, Value: int64(6)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var descriptions []string
+		for row, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var desc string
+			if err := row.Get(4, &desc); err != nil {
+				t.Fatal(err)
+			}
+			descriptions = append(descriptions, desc)
+		}
+
+		// Expect: Summer Start (2023/6), Summer 2024 (2024/6)
+		if len(descriptions) != 2 {
+			t.Errorf("Expected 2 June events (2023-2024), got %d: %v", len(descriptions), descriptions)
+		}
+	})
+
+	// Test: only year range (using partial composite index)
+	t.Run("YearRangeOnly", func(t *testing.T) {
+		seq, err := tx.Select(eventsQ,
+			Condition{Field: 1, Operator: GT, Value: int64(2023)},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		count := 0
+		for _, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+
+		// Expect: 4 events in 2024
+		if count != 4 {
+			t.Errorf("Expected 4 events after 2023, got %d", count)
+		}
+	})
+}
+
 func testQuery_MutualRecursion_Body(t *testing.T) {
 	db, cleanup := setupTestDBForQuery(t)
 	defer cleanup()
