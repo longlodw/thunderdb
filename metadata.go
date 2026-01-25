@@ -92,8 +92,8 @@ func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*Range) (uin
 			if err != nil {
 				continue
 			}
-			r, err := NewRangeFromBytes(keyBytes, keyBytes, true, true)
-			return idx, r, err
+			r := NewPointRangeFromBytes(keyBytes)
+			return idx, r, nil
 		}
 	}
 	shortestIndex := uint64(0)

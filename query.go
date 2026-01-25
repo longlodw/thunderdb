@@ -138,6 +138,9 @@ func (n *joinedQueryNode) Find(
 		if err != nil {
 			return nil, err
 		}
+		// Pre-calculate capacity for joined row map
+		joinedRowCap := n.left.metadata().ColumnsCount + n.right.metadata().ColumnsCount
+
 		return func(yield func(*Row, error) bool) {
 			mergedRightEquals := make(map[int]*Value)
 			mergedRightExclusion := make(map[int][]*Value)
@@ -150,6 +153,11 @@ func (n *joinedQueryNode) Find(
 			equalsBytes := make(map[int][]byte)
 			exclusionBytes := make(map[int]map[string]bool)
 			rowBytes := make(map[int][]byte)
+
+			// Reusable row for joining - moved outside loop
+			joinedRow := &Row{
+				values: make(map[int][]byte, joinedRowCap),
+			}
 
 			for leftRow, err := range leftSeq {
 				if err != nil {
@@ -216,11 +224,6 @@ func (n *joinedQueryNode) Find(
 					continue
 				}
 
-				// Reusable row for joining
-				joinedRow := &Row{
-					values: make(map[int][]byte),
-				}
-
 				for rightRow, err := range rightSeq {
 					if err != nil {
 						if !yield(nil, err) {
@@ -243,6 +246,10 @@ func (n *joinedQueryNode) Find(
 	if err != nil {
 		return nil, err
 	}
+
+	// Pre-calculate capacity for joined row map
+	joinedRowCap := n.left.metadata().ColumnsCount + n.right.metadata().ColumnsCount
+
 	return func(yield func(*Row, error) bool) {
 		mergedLeftEquals := make(map[int]*Value)
 		mergedLeftExclusion := make(map[int][]*Value)
@@ -258,7 +265,7 @@ func (n *joinedQueryNode) Find(
 
 		// Reusable row for joining
 		joinedRow := &Row{
-			values: make(map[int][]byte),
+			values: make(map[int][]byte, joinedRowCap),
 		}
 
 		for rightRow, err := range rightSeq {
@@ -841,6 +848,10 @@ func (n *projectedQueryNode) Find(
 		return nil, err
 	}
 	return func(yield func(*Row, error) bool) {
+		// Reusable row for projection - moved outside loop
+		newRow := &Row{
+			values: make(map[int][]byte, len(cols)),
+		}
 		for childRow, err := range childSeq {
 			if err != nil {
 				if !yield(nil, err) {
@@ -848,9 +859,7 @@ func (n *projectedQueryNode) Find(
 				}
 				continue
 			}
-			newRow := &Row{
-				values: make(map[int][]byte),
-			}
+			clear(newRow.values)
 			for col := range cols {
 				if col >= len(n.columns) {
 					if !yield(nil, ErrFieldNotFound(fmt.Sprintf("column %d", col))) {

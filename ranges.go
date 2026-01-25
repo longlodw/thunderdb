@@ -56,6 +56,19 @@ func NewRangeFromBytes(startKey, endKey []byte, includeStart, includeEnd bool) (
 	return NewRangeFromValue(start, end, includeStart, includeEnd)
 }
 
+// NewPointRangeFromBytes creates a range for a single point (start == end).
+// This is optimized to avoid allocations for distance computation since distance is always zero.
+func NewPointRangeFromBytes(key []byte) *Range {
+	val := ValueOfRaw(key)
+	return &Range{
+		start:        val,
+		end:          val,
+		includeStart: true,
+		includeEnd:   true,
+		distance:     nil, // Zero distance for point lookups
+	}
+}
+
 func NewRangeFromLiteral(startVals, endVals any, includeStart, includeEnd bool) (*Range, error) {
 	return NewRangeFromValue(ValueOfLiteral(startVals), ValueOfLiteral(endVals), includeStart, includeEnd)
 }
@@ -134,6 +147,11 @@ func (ir *Range) Contains(key *Value) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return ir.ContainsBytes(keyRaw)
+}
+
+// ContainsBytes checks if raw bytes are within the range without allocating a Value
+func (ir *Range) ContainsBytes(keyRaw []byte) (bool, error) {
 	if ir.start != nil {
 		irStart, err := ir.start.GetRaw()
 		if err != nil {

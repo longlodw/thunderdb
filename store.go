@@ -641,8 +641,7 @@ func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges m
 			}
 			comparableBytesCache[idx] = kBytes
 		}
-		kVals := ValueOfRaw(kBytes)
-		if con, err := kr.Contains(kVals); err != nil {
+		if con, err := kr.ContainsBytes(kBytes); err != nil {
 			return false, err
 		} else if !con {
 			return false, nil
