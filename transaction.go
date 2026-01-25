@@ -12,6 +12,15 @@ import (
 	"github.com/openkvlab/boltdb"
 )
 
+// Tx represents a database transaction. It provides methods for creating
+// storage relations, inserting, updating, deleting, and querying data.
+//
+// A transaction must be committed or rolled back when finished.
+// For managed transactions (created via View, Update, or Batch), this is
+// handled automatically. For manual transactions (created via Begin),
+// you must call Commit or Rollback explicitly.
+//
+// A Tx is not safe for concurrent use by multiple goroutines.
 type Tx struct {
 	tx           *boltdb.Tx
 	tempTx       *boltdb.Tx
@@ -21,6 +30,9 @@ type Tx struct {
 	stores       map[string]*storage
 }
 
+// Commit writes all changes to disk and closes the transaction.
+// It panics if called on a managed transaction (one created via View, Update, or Batch).
+// After Commit returns successfully, any subsequent Rollback call will be a no-op.
 func (tx *Tx) Commit() error {
 	if tx.managed {
 		panic("cannot commit a managed transaction")
@@ -28,6 +40,10 @@ func (tx *Tx) Commit() error {
 	return tx.tx.Commit()
 }
 
+// Rollback discards all changes and closes the transaction.
+// It panics if called on a managed transaction (one created via View, Update, or Batch).
+// It is safe to call Rollback after a successful Commit (it will be a no-op).
+// Always defer Rollback() when using manual transactions to ensure cleanup.
 func (tx *Tx) Rollback() error {
 	if tx.managed {
 		panic("cannot rollback a managed transaction")
@@ -89,10 +105,26 @@ func (tx *Tx) ensureTempTx() (*boltdb.Tx, error) {
 	return tempTx, nil
 }
 
+// ID returns the transaction's unique identifier.
 func (tx *Tx) ID() int {
 	return tx.tx.ID()
 }
 
+// CreateStorage creates a new persistent storage relation with the given name,
+// column count, and index specifications. The relation is stored in the database
+// and persists across transactions.
+//
+// Columns are referenced by zero-based integer indices. The columnCount specifies
+// the total number of columns. Indexes are defined using IndexInfo which specifies
+// which columns to index and whether the index enforces uniqueness.
+//
+// Example:
+//
+//	err := tx.CreateStorage("users", 3, []thunderdb.IndexInfo{
+//	    {ReferencedCols: []int{0}, IsUnique: true},  // unique index on column 0
+//	    {ReferencedCols: []int{1}, IsUnique: false}, // non-unique index on column 1
+//	    {ReferencedCols: []int{1, 2}, IsUnique: false}, // composite index on columns 1 and 2
+//	})
 func (tx *Tx) CreateStorage(
 	relation string,
 	columnCount int,
@@ -111,6 +143,18 @@ func (tx *Tx) CreateStorage(
 	return nil
 }
 
+// Insert adds a new row to the specified relation. The value map uses column
+// indices as keys and the column values as map values.
+//
+// Returns an error if the insert would violate a unique constraint.
+//
+// Example:
+//
+//	err := tx.Insert("users", map[int]any{
+//	    0: "user-123",    // id
+//	    1: "alice",       // username
+//	    2: "admin",       // role
+//	})
 func (tx *Tx) Insert(relation string, value map[int]any) error {
 	s, err := tx.loadStorage(relation)
 	if err != nil {
@@ -132,6 +176,17 @@ func (tx *Tx) loadStorage(relation string) (*storage, error) {
 	return s, nil
 }
 
+// Delete removes rows from the specified relation that match the given conditions.
+// If no conditions are provided, all rows are deleted.
+//
+// Example:
+//
+//	// Delete user with id "user-123"
+//	err := tx.Delete("users", thunderdb.Condition{
+//	    Field:    0,
+//	    Operator: thunderdb.EQ,
+//	    Value:    "user-123",
+//	})
 func (tx *Tx) Delete(
 	relation string,
 	conditions ...Condition,
@@ -150,6 +205,20 @@ func (tx *Tx) Delete(
 	return s.Delete(equals, ranges, exclusion)
 }
 
+// Update modifies rows in the specified relation that match the given conditions.
+// The updates map specifies which columns to update and their new values.
+//
+// Example:
+//
+//	// Update role to "superadmin" for user with id "user-123"
+//	err := tx.Update("users",
+//	    map[int]any{2: "superadmin"}, // update column 2 (role)
+//	    thunderdb.Condition{
+//	        Field:    0,
+//	        Operator: thunderdb.EQ,
+//	        Value:    "user-123",
+//	    },
+//	)
 func (tx *Tx) Update(
 	relation string,
 	updates map[int]any,
@@ -169,6 +238,7 @@ func (tx *Tx) Update(
 	return s.Update(equals, ranges, exclusion, updates)
 }
 
+// DeleteStorage removes a storage relation and all its data from the database.
 func (tx *Tx) DeleteStorage(relation string) error {
 	tnx := tx.tx
 	if err := deleteStorage(tnx, relation); err != nil {
@@ -178,6 +248,20 @@ func (tx *Tx) DeleteStorage(relation string) error {
 	return nil
 }
 
+// StoredQuery returns a Query representing a stored relation, which can be used
+// to build complex queries with projections, joins, and filters.
+//
+// Example:
+//
+//	users, err := tx.StoredQuery("users")
+//	if err != nil {
+//	    return err
+//	}
+//	results, err := tx.Select(users, thunderdb.Condition{
+//	    Field:    1,
+//	    Operator: thunderdb.EQ,
+//	    Value:    "alice",
+//	})
 func (tx *Tx) StoredQuery(name string) (*StoredQuery, error) {
 	var metadataObj Metadata
 	if err := loadMetadata(tx.tx, name, &metadataObj); err != nil {
@@ -189,6 +273,8 @@ func (tx *Tx) StoredQuery(name string) (*StoredQuery, error) {
 	}, nil
 }
 
+// Metadata returns the metadata for a stored relation, including column count
+// and index information.
 func (tx *Tx) Metadata(relation string) (*Metadata, error) {
 	var metadataObj Metadata
 	if err := loadMetadata(tx.tx, relation, &metadataObj); err != nil {
@@ -197,6 +283,33 @@ func (tx *Tx) Metadata(relation string) (*Metadata, error) {
 	return &metadataObj, nil
 }
 
+// Select executes a query and returns an iterator over the matching rows.
+// The query can be a StoredQuery, ProjectedQuery, JoinedQuery, or DatalogQuery
+// (for recursive/datalog queries).
+//
+// Conditions filter the results using field comparisons. Multiple conditions
+// are combined with AND logic.
+//
+// The returned iterator yields (Row, error) pairs. Always check the error value.
+//
+// Example:
+//
+//	users, _ := tx.StoredQuery("users")
+//	results, err := tx.Select(users,
+//	    thunderdb.Condition{Field: 1, Operator: thunderdb.EQ, Value: "alice"},
+//	    thunderdb.Condition{Field: 2, Operator: thunderdb.NEQ, Value: "banned"},
+//	)
+//	if err != nil {
+//	    return err
+//	}
+//	for row, err := range results {
+//	    if err != nil {
+//	        return err
+//	    }
+//	    var username string
+//	    row.Get(1, &username)
+//	    fmt.Println(username)
+//	}
 func (tx *Tx) Select(
 	body Query,
 	conditions ...Condition,
@@ -252,7 +365,7 @@ func (tx *Tx) constructQueryGraph(
 		return node, nil
 	}
 	switch b := body.(type) {
-	case *HeadQuery:
+	case *DatalogQuery:
 		tempTx, err := tx.ensureTempTx()
 		if err != nil {
 			return nil, err

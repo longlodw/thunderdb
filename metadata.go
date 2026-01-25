@@ -5,9 +5,16 @@ import (
 	"fmt"
 )
 
+// Metadata describes the schema of a storage relation or query result.
+// It includes the number of columns and information about available indexes.
 type Metadata struct {
+	// ColumnsCount is the total number of columns in the relation.
 	ColumnsCount int
-	Indexes      map[uint64]bool
+
+	// Indexes maps index bitmaps to uniqueness flags.
+	// The key is a uint64 where each bit represents a column (bit i = column i).
+	// The value indicates whether the index enforces uniqueness.
+	Indexes map[uint64]bool
 }
 
 func initStoredMetadata(result *Metadata, colsCount int, indexes []IndexInfo) error {

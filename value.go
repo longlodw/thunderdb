@@ -5,23 +5,30 @@ import (
 	"maps"
 )
 
+// Value represents a column value that can be lazily marshaled/unmarshaled.
+// Values are returned by Row.Iter() and can be converted to Go types using GetValue().
 type Value struct {
 	value any
 	raw   []byte
 }
 
+// ValueOfLiteral creates a Value from a Go value. The value will be
+// marshaled lazily when needed.
 func ValueOfLiteral(v any) *Value {
 	return &Value{
 		value: v,
 	}
 }
 
+// ValueOfRaw creates a Value from raw bytes. The bytes will be
+// unmarshaled lazily when GetValue() is called.
 func ValueOfRaw(b []byte) *Value {
 	return &Value{
 		raw: b,
 	}
 }
 
+// GetValue returns the Go value, unmarshaling from raw bytes if necessary.
 func (v *Value) GetValue() (any, error) {
 	if v.value != nil {
 		return v.value, nil
@@ -36,6 +43,7 @@ func (v *Value) GetValue() (any, error) {
 	return nil, nil
 }
 
+// GetRaw returns the raw byte representation, marshaling if necessary.
 func (v *Value) GetRaw() ([]byte, error) {
 	if v.raw != nil {
 		return v.raw, nil
@@ -81,6 +89,7 @@ func (v *Value) GetSingleRaw() ([]byte, error) {
 	return nil, nil
 }
 
+// SetRaw updates the raw byte representation and clears the cached value.
 func (v *Value) SetRaw(b []byte) {
 	v.raw = b
 	v.value = nil

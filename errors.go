@@ -5,28 +5,54 @@ import (
 	"fmt"
 )
 
+// ErrorCode represents a category of errors that can occur in ThunderDB.
+// Error codes can be used with errors.Is() to check error types.
+//
+// Example:
+//
+//	if errors.Is(err, thunderdb.ErrCodeUniqueConstraint) {
+//	    // Handle unique constraint violation
+//	}
 type ErrorCode int
 
 const (
+	// ErrCodeFieldCountMismatch indicates a mismatch between expected and actual field counts.
 	ErrCodeFieldCountMismatch ErrorCode = iota
+	// ErrCodeFieldNotFound indicates a requested field/column does not exist.
 	ErrCodeFieldNotFound
+	// ErrCodeFieldNotFoundInColumns indicates a field reference is invalid for the column set.
 	ErrCodeFieldNotFoundInColumns
+	// ErrCodeUnsupportedOperator indicates an invalid comparison operator was used.
 	ErrCodeUnsupportedOperator
+	// ErrCodeUnsupportedSelector indicates an invalid selector was used.
 	ErrCodeUnsupportedSelector
+	// ErrCodeIndexNotFound indicates a required index does not exist.
 	ErrCodeIndexNotFound
+	// ErrCodeUniqueConstraint indicates an insert/update would violate a unique constraint.
 	ErrCodeUniqueConstraint
+	// ErrCodeCannotMarshal indicates a value could not be serialized.
 	ErrCodeCannotMarshal
+	// ErrCodeCannotUnmarshal indicates a value could not be deserialized.
 	ErrCodeCannotUnmarshal
+	// ErrCodeMetaDataNotFound indicates relation metadata was not found.
 	ErrCodeMetaDataNotFound
+	// ErrCodeCorruptedIndexEntry indicates an index entry is corrupted.
 	ErrCodeCorruptedIndexEntry
+	// ErrCodeCorruptedMetaDataEntry indicates metadata is corrupted.
 	ErrCodeCorruptedMetaDataEntry
+	// ErrCodeCannotEvaluateExpression indicates an expression could not be evaluated.
 	ErrCodeCannotEvaluateExpression
+	// ErrCodeRecursionDepthExceeded indicates a recursive query exceeded the depth limit.
 	ErrCodeRecursionDepthExceeded
+	// ErrCodeColumnCountExceeded64 indicates the column count exceeds the maximum of 64.
 	ErrCodeColumnCountExceeded64
+	// ErrCodeInvalidColumnReference indicates a column reference is out of bounds.
 	ErrCodeInvalidColumnReference
+	// ErrCodeInvalidEncoding indicates data has invalid encoding.
 	ErrCodeInvalidEncoding
 )
 
+// Error returns a human-readable description of the error code.
 func (e ErrorCode) Error() string {
 	switch e {
 	case ErrCodeFieldCountMismatch:
@@ -68,12 +94,21 @@ func (e ErrorCode) Error() string {
 	}
 }
 
+// ThunderError is the primary error type returned by ThunderDB operations.
+// It includes an error code, message, and optional cause for error chaining.
+//
+// Use errors.Is() to check for specific error codes:
+//
+//	if errors.Is(err, thunderdb.ErrCodeUniqueConstraint) {
+//	    // Handle unique constraint violation
+//	}
 type ThunderError struct {
-	Code    ErrorCode
-	Message string
-	Cause   error
+	Code    ErrorCode // The category of error
+	Message string    // Human-readable error description
+	Cause   error     // Underlying error, if any
 }
 
+// Error returns the error message, including the cause if present.
 func (e *ThunderError) Error() string {
 	if e.Cause != nil {
 		return fmt.Sprintf("%s: %v", e.Message, e.Cause)
@@ -81,10 +116,12 @@ func (e *ThunderError) Error() string {
 	return e.Message
 }
 
+// Unwrap returns the underlying cause of the error for error chain traversal.
 func (e *ThunderError) Unwrap() error {
 	return e.Cause
 }
 
+// Is reports whether the error matches a target ErrorCode.
 func (e *ThunderError) Is(target error) bool {
 	if t, ok := target.(ErrorCode); ok {
 		return e.Code == t

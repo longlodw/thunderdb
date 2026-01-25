@@ -16,10 +16,27 @@ type storage struct {
 	metadata Metadata
 }
 
+// Row represents a single row returned from a query. It provides methods
+// to access column values by index.
 type Row struct {
 	values map[int][]byte
 }
 
+// Get retrieves a column value by index and unmarshals it into the provided
+// pointer. The destination must be a pointer to the expected type.
+//
+// Returns ErrFieldNotFound if the column index doesn't exist in the row.
+//
+// Example:
+//
+//	var username string
+//	var age int
+//	if err := row.Get(1, &username); err != nil {
+//	    return err
+//	}
+//	if err := row.Get(2, &age); err != nil {
+//	    return err
+//	}
 func (sr *Row) Get(idx int, v any) error {
 	vBytes, ok := sr.values[idx]
 	if !ok {
@@ -28,6 +45,8 @@ func (sr *Row) Get(idx int, v any) error {
 	return orderedMaUn.Unmarshal(vBytes, v)
 }
 
+// Iter returns an iterator over all columns in the row. Each iteration yields
+// the column index and a Value that can be used to retrieve the column's data.
 func (sr *Row) Iter() iter.Seq2[int, *Value] {
 	return func(yield func(int, *Value) bool) {
 		for k, b := range sr.values {
@@ -736,6 +755,9 @@ func (s *storage) Insert(values map[int]any) error {
 	return nil
 }
 
+// ReferenceColumns returns an iterator over the column indices that are part
+// of the given index bitmap. This is useful for inspecting which columns
+// make up a composite index.
 func ReferenceColumns(idx uint64) iter.Seq[int] {
 	return func(yield func(int) bool) {
 		for i := range 64 {

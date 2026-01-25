@@ -2,38 +2,92 @@ package thunderdb
 
 import "bytes"
 
+// Query is the interface for all query types in ThunderDB. It provides methods
+// for building complex queries through projections and joins.
+//
+// Query implementations include:
+//   - StoredQuery: represents a stored relation
+//   - ProjectedQuery: represents a projection (column selection/reordering)
+//   - JoinedQuery: represents a join between two queries
+//   - DatalogQuery: represents a recursive/datalog query
 type Query interface {
+	// Project creates a new query that selects and reorders columns.
+	// The cols parameter specifies which columns to include by their indices.
+	// Columns can be duplicated or reordered.
 	Project(cols ...int) (Query, error)
+
+	// Join creates a new query that joins this query with another.
+	// The conditions specify how rows from the two queries should be matched.
+	// The resulting query has columns from both queries concatenated
+	// (left columns first, then right columns).
 	Join(other Query, conditions ...JoinOn) (Query, error)
+
+	// Metadata returns the query's metadata including column count and indexes.
 	Metadata() *Metadata
 }
 
-type HeadQuery struct {
+// DatalogQuery represents a recursive (datalog-style) query. It allows defining
+// queries that reference themselves, enabling traversal of hierarchical data
+// structures like trees or graphs.
+//
+// A DatalogQuery must be bound to one or more body queries using Bind() before
+// it can be executed with Select().
+//
+// Example (finding all descendants in an org chart):
+//
+//	// Create recursive query with 2 columns: ancestor, descendant
+//	qPath, _ := thunderdb.NewDatalogQuery(2, []thunderdb.IndexInfo{
+//	    {ReferencedCols: []int{0}, IsUnique: false},
+//	})
+//
+//	// Base case: direct reports
+//	baseProj, _ := employees.Project(2, 0) // manager_id, id
+//
+//	// Recursive case: join employees with path
+//	joined, _ := employees.Join(qPath, thunderdb.JoinOn{
+//	    LeftField: 0, RightField: 0, Operator: thunderdb.EQ,
+//	})
+//	recursiveProj, _ := joined.Project(2, 4)
+//
+//	// Bind both branches
+//	qPath.Bind(baseProj, recursiveProj)
+type DatalogQuery struct {
 	bodies   []Query
 	metadata Metadata
 }
 
-func NewDatalogQuery(colsCount int, indexInfos []IndexInfo) (*HeadQuery, error) {
-	result := &HeadQuery{}
+// NewDatalogQuery creates a new recursive query with the specified number of
+// columns and index specifications. The query must be bound to body queries
+// using Bind() before execution.
+//
+// The maximum number of columns is 64.
+func NewDatalogQuery(colsCount int, indexInfos []IndexInfo) (*DatalogQuery, error) {
+	result := &DatalogQuery{}
 	if err := initStoredMetadata(&result.metadata, colsCount, indexInfos); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-func (h *HeadQuery) Project(cols ...int) (Query, error) {
+// Project creates a projected query selecting the specified columns.
+func (h *DatalogQuery) Project(cols ...int) (Query, error) {
 	return newProjectedQuery(h, cols)
 }
 
-func (h *HeadQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
+// Join creates a joined query with another query.
+func (h *DatalogQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
 	return newJoinedQuery(h, other, conditions)
 }
 
-func (h *HeadQuery) Metadata() *Metadata {
+// Metadata returns the query's metadata.
+func (h *DatalogQuery) Metadata() *Metadata {
 	return &h.metadata
 }
 
-func (h *HeadQuery) Bind(bodies ...Query) error {
+// Bind associates one or more body queries with this recursive query.
+// All body queries must have the same number of columns as the DatalogQuery.
+// At least one body should be non-recursive (base case) to ensure termination.
+func (h *DatalogQuery) Bind(bodies ...Query) error {
 	for _, body := range bodies {
 		if body.Metadata().ColumnsCount != h.metadata.ColumnsCount {
 			return ErrFieldCountMismatch(h.Metadata().ColumnsCount, body.Metadata().ColumnsCount)
@@ -43,6 +97,8 @@ func (h *HeadQuery) Bind(bodies ...Query) error {
 	return nil
 }
 
+// ProjectedQuery represents a query with column projection (selection/reordering).
+// It wraps another query and transforms its output by selecting specific columns.
 type ProjectedQuery struct {
 	child    Query
 	cols     []int
@@ -63,18 +119,24 @@ func newProjectedQuery(
 	return result, nil
 }
 
+// Project creates a projected query selecting the specified columns.
 func (ph *ProjectedQuery) Project(cols ...int) (Query, error) {
 	return newProjectedQuery(ph, cols)
 }
 
+// Join creates a joined query with another query.
 func (ph *ProjectedQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
 	return newJoinedQuery(ph, other, conditions)
 }
 
+// Metadata returns the query's metadata.
 func (ph *ProjectedQuery) Metadata() *Metadata {
 	return &ph.metadata
 }
 
+// JoinedQuery represents a join between two queries. The resulting columns
+// are the concatenation of the left query's columns followed by the right
+// query's columns.
 type JoinedQuery struct {
 	left       Query
 	right      Query
@@ -98,61 +160,107 @@ func newJoinedQuery(
 	return result, nil
 }
 
+// Project creates a projected query selecting the specified columns.
 func (jh *JoinedQuery) Project(cols ...int) (Query, error) {
 	return newProjectedQuery(jh, cols)
 }
 
+// Join creates a joined query with another query.
 func (jh *JoinedQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
 	return newJoinedQuery(jh, other, conditions)
 }
 
+// Metadata returns the query's metadata.
 func (jh *JoinedQuery) Metadata() *Metadata {
 	return &jh.metadata
 }
 
+// Op represents a comparison operator used in conditions and joins.
+type Op int
+
 const (
+	// EQ tests for equality (==)
 	EQ = Op(iota)
+	// NEQ tests for inequality (!=)
 	NEQ
+	// LT tests for less than (<)
 	LT
+	// LTE tests for less than or equal (<=)
 	LTE
+	// GT tests for greater than (>)
 	GT
+	// GTE tests for greater than or equal (>=)
 	GTE
 )
 
-type Op int
-
+// JoinOn specifies a join condition between two queries. It defines how
+// columns from the left and right queries should be compared.
+//
+// Example:
+//
+//	// Join users and orders where users.id = orders.user_id
+//	joined, _ := users.Join(orders, thunderdb.JoinOn{
+//	    LeftField:  0,  // users.id (column 0 of left query)
+//	    RightField: 2,  // orders.user_id (column 2 of right query)
+//	    Operator:   thunderdb.EQ,
+//	})
 type JoinOn struct {
-	LeftField  int
-	RightField int
-	Operator   Op
+	LeftField  int // Column index in the left query
+	RightField int // Column index in the right query
+	Operator   Op  // Comparison operator
 }
 
+// StoredQuery represents a query backed by a persistent storage relation.
+// It is created using Tx.StoredQuery() and can be used as a base for building
+// more complex queries with projections and joins.
 type StoredQuery struct {
 	storageName string
 	metadata    Metadata
 }
 
+// Project creates a projected query selecting the specified columns.
 func (ph *StoredQuery) Project(cols ...int) (Query, error) {
 	return newProjectedQuery(ph, cols)
 }
 
+// Join creates a joined query with another query.
 func (ph *StoredQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
 	return newJoinedQuery(ph, other, conditions)
 }
 
+// Metadata returns the query's metadata.
 func (ph *StoredQuery) Metadata() *Metadata {
 	return &ph.metadata
 }
 
+// IndexInfo specifies an index to be created on a storage relation.
+// Indexes improve query performance for filtered selects and enforce
+// uniqueness constraints when IsUnique is true.
 type IndexInfo struct {
+	// ReferencedCols lists the column indices that make up this index.
+	// For a single-column index, this contains one element.
+	// For a composite index, this contains multiple elements in order.
 	ReferencedCols []int
-	IsUnique       bool
+
+	// IsUnique indicates whether this index enforces a uniqueness constraint.
+	// If true, no two rows can have the same values for the indexed columns.
+	IsUnique bool
 }
 
+// Condition specifies a filter condition for Select, Delete, or Update operations.
+// Multiple conditions are combined with AND logic.
+//
+// Example:
+//
+//	// Find users where role = "admin" AND age >= 18
+//	results, _ := tx.Select(users,
+//	    thunderdb.Condition{Field: 2, Operator: thunderdb.EQ, Value: "admin"},
+//	    thunderdb.Condition{Field: 3, Operator: thunderdb.GTE, Value: 18},
+//	)
 type Condition struct {
-	Field    int
-	Operator Op
-	Value    any
+	Field    int // Column index to filter on
+	Operator Op  // Comparison operator
+	Value    any // Value to compare against
 }
 
 func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[int]*Range, exclusion map[int][]*Value, possible bool, err error) {

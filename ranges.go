@@ -8,6 +8,8 @@ import (
 	"slices"
 )
 
+// Range represents a range of values for index-based queries.
+// It is used internally for range scans and query optimization.
 type Range struct {
 	includeStart bool
 	includeEnd   bool

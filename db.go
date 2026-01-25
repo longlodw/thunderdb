@@ -7,12 +7,32 @@ import (
 	"github.com/openkvlab/boltdb"
 )
 
+// DB represents an open ThunderDB database. It wraps an underlying bolt database
+// and provides transaction management for persistent data storage.
+//
+// A DB is safe for concurrent use by multiple goroutines.
 type DB struct {
 	db *boltdb.DB
 }
 
+// DBOptions configures the database behavior. It is an alias for boltdb.Options.
+// Common options include:
+//   - Timeout: time to wait for a file lock
+//   - NoSync: disable fsync after each commit (faster but less durable)
+//   - ReadOnly: open database in read-only mode
 type DBOptions = boltdb.Options
 
+// OpenDB opens a ThunderDB database at the specified path.
+// If the file does not exist, it will be created with the given file mode.
+// Options can be nil for default settings.
+//
+// Example:
+//
+//	db, err := thunderdb.OpenDB("my.db", 0600, nil)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer db.Close()
 func OpenDB(path string, mode os.FileMode, options *DBOptions) (*DB, error) {
 	bdb, err := boltdb.Open(path, mode, options)
 	if err != nil {
@@ -21,10 +41,32 @@ func OpenDB(path string, mode os.FileMode, options *DBOptions) (*DB, error) {
 	return &DB{db: bdb}, nil
 }
 
+// Close releases all database resources and closes the underlying file.
+// All transactions must be closed before calling Close.
 func (d *DB) Close() error {
 	return d.db.Close()
 }
 
+// Begin starts a new transaction. If writable is true, the transaction can
+// modify the database; otherwise it is read-only.
+//
+// For manually managed transactions, you must always call Rollback() to release
+// resources. If you call Commit() successfully, the subsequent Rollback() will
+// be a no-op.
+//
+// For most use cases, prefer the managed transaction methods: View, Update, or Batch.
+//
+// Example:
+//
+//	tx, err := db.Begin(true)
+//	if err != nil {
+//	    return err
+//	}
+//	defer tx.Rollback()
+//
+//	// ... perform operations ...
+//
+//	return tx.Commit()
 func (d *DB) Begin(writable bool) (*Tx, error) {
 	tx, err := d.db.Begin(writable)
 	if err != nil {
@@ -36,6 +78,21 @@ func (d *DB) Begin(writable bool) (*Tx, error) {
 	}, nil
 }
 
+// View executes a function within the context of a read-only transaction.
+// The transaction is automatically rolled back after the function returns.
+//
+// Any error returned by the function is propagated to the caller.
+//
+// Example:
+//
+//	err := db.View(func(tx *thunderdb.Tx) error {
+//	    users, err := tx.StoredQuery("users")
+//	    if err != nil {
+//	        return err
+//	    }
+//	    // ... read data ...
+//	    return nil
+//	})
 func (d *DB) View(fn func(*Tx) error) error {
 	return d.db.View(func(btx *boltdb.Tx) error {
 		tx := &Tx{
@@ -48,6 +105,15 @@ func (d *DB) View(fn func(*Tx) error) error {
 	})
 }
 
+// Update executes a function within the context of a read-write transaction.
+// The transaction is automatically committed if the function returns nil.
+// If the function returns an error or panics, the transaction is rolled back.
+//
+// Example:
+//
+//	err := db.Update(func(tx *thunderdb.Tx) error {
+//	    return tx.Insert("users", map[int]any{0: "1", 1: "alice"})
+//	})
 func (d *DB) Update(fn func(*Tx) error) error {
 	return d.db.Update(func(btx *boltdb.Tx) error {
 		tx := &Tx{

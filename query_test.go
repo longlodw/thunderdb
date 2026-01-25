@@ -394,7 +394,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Bind the bodies to the HeadQuery
+	// Bind the bodies to the DatalogQuery
 	if err := qReach.Bind(baseProj, recProj); err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Standard Datalog usually implies Set semantics, so 2 results if uniqueness is handled.
 	// If Bag semantics (or just naive loop), it could be infinite, but we have a timeout.
 	// Since we defined a Unique Index on qReach (source, target), duplicates should be suppressed
-	// by the backing storage of the HeadQuery node if implemented correctly.
+	// by the backing storage of the DatalogQuery node if implemented correctly.
 
 	if count < 2 {
 		t.Errorf("Expected at least 2 reachable paths, got %d. Results: %v", count, results)
