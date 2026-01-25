@@ -8,18 +8,17 @@ import (
 )
 
 type DB struct {
-	db   *boltdb.DB
-	maUn MarshalUnmarshaler
+	db *boltdb.DB
 }
 
 type DBOptions = boltdb.Options
 
-func OpenDB(maUn MarshalUnmarshaler, path string, mode os.FileMode, options *DBOptions) (*DB, error) {
+func OpenDB(path string, mode os.FileMode, options *DBOptions) (*DB, error) {
 	bdb, err := boltdb.Open(path, mode, options)
 	if err != nil {
 		return nil, err
 	}
-	return &DB{db: bdb, maUn: maUn}, nil
+	return &DB{db: bdb}, nil
 }
 
 func (d *DB) Close() error {
@@ -34,7 +33,6 @@ func (d *DB) Begin(writable bool) (*Tx, error) {
 
 	return &Tx{
 		tx: tx, stores: make(map[string]*storage),
-		maUn: d.maUn,
 	}, nil
 }
 
@@ -42,7 +40,6 @@ func (d *DB) View(fn func(*Tx) error) error {
 	return d.db.View(func(btx *boltdb.Tx) error {
 		tx := &Tx{
 			tx:      btx,
-			maUn:    d.maUn,
 			managed: true,
 			stores:  make(map[string]*storage),
 		}
@@ -55,7 +52,6 @@ func (d *DB) Update(fn func(*Tx) error) error {
 	return d.db.Update(func(btx *boltdb.Tx) error {
 		tx := &Tx{
 			tx:      btx,
-			maUn:    d.maUn,
 			managed: true,
 			stores:  make(map[string]*storage),
 		}
@@ -78,7 +74,6 @@ func (d *DB) Batch(fn func(*Tx) error) error {
 	return d.db.Batch(func(btx *boltdb.Tx) error {
 		tx := &Tx{
 			tx:      btx,
-			maUn:    d.maUn,
 			managed: true,
 			stores:  make(map[string]*storage),
 		}

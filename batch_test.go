@@ -19,7 +19,7 @@ func setupBatchTestDB(t testing.TB) (*DB, func()) {
 	}
 
 	dbPath := filepath.Join(dir, "test.db")
-	db, err := OpenDB(MsgpackMaUn, dbPath, 0600, nil)
+	db, err := OpenDB(dbPath, 0600, nil)
 	if err != nil {
 		os.RemoveAll(dir)
 		t.Fatalf("failed to open db: %v", err)

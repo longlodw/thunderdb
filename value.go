@@ -6,22 +6,19 @@ import (
 )
 
 type Value struct {
-	value     any
-	marshaler MarshalUnmarshaler
-	raw       []byte
+	value any
+	raw   []byte
 }
 
-func ValueOfLiteral(v any, m MarshalUnmarshaler) *Value {
+func ValueOfLiteral(v any) *Value {
 	return &Value{
-		value:     v,
-		marshaler: m,
+		value: v,
 	}
 }
 
-func ValueOfRaw(b []byte, m MarshalUnmarshaler) *Value {
+func ValueOfRaw(b []byte) *Value {
 	return &Value{
-		marshaler: m,
-		raw:       b,
+		raw: b,
 	}
 }
 
@@ -30,7 +27,7 @@ func (v *Value) GetValue() (any, error) {
 		return v.value, nil
 	}
 	if v.raw != nil {
-		err := v.marshaler.Unmarshal(v.raw, &v.value)
+		err := orderedMaUn.Unmarshal(v.raw, &v.value)
 		if err != nil {
 			return nil, err
 		}
@@ -44,7 +41,15 @@ func (v *Value) GetRaw() ([]byte, error) {
 		return v.raw, nil
 	}
 	if v.value != nil {
-		b, err := v.marshaler.Marshal(v.value)
+		// Wrap single values as a tuple to match how ToKey encodes values
+		// ToKey(val) produces []any{val}, so we need to match that format
+		var toMarshal any
+		if slice, ok := v.value.([]any); ok {
+			toMarshal = slice
+		} else {
+			toMarshal = []any{v.value}
+		}
+		b, err := orderedMaUn.Marshal(toMarshal)
 		if err != nil {
 			return nil, err
 		}
@@ -54,9 +59,8 @@ func (v *Value) GetRaw() ([]byte, error) {
 	return nil, nil
 }
 
-func (v *Value) SetRaw(b []byte, m MarshalUnmarshaler) {
+func (v *Value) SetRaw(b []byte) {
 	v.raw = b
-	v.marshaler = m
 	v.value = nil
 }
 

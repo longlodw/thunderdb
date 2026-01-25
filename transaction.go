@@ -17,7 +17,6 @@ type Tx struct {
 	tempTx       *boltdb.Tx
 	tempDb       *boltdb.DB
 	tempFilePath string
-	maUn         MarshalUnmarshaler
 	managed      bool
 	stores       map[string]*storage
 }
@@ -106,7 +105,7 @@ func (tx *Tx) CreateStorage(
 	if err := initStoredMetadata(&metadataObj, columnCount, indexInfos); err != nil {
 		return err
 	}
-	if _, err := newStorage(tx.tx, relation, metadataObj.ColumnsCount, metadataObj.Indexes, tx.maUn); err != nil {
+	if _, err := newStorage(tx.tx, relation, metadataObj.ColumnsCount, metadataObj.Indexes); err != nil {
 		return err
 	}
 	return nil
@@ -125,7 +124,7 @@ func (tx *Tx) loadStorage(relation string) (*storage, error) {
 	if ok {
 		return s, nil
 	}
-	s, err := loadStorage(tx.tx, relation, tx.maUn)
+	s, err := loadStorage(tx.tx, relation)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +271,6 @@ func (tx *Tx) constructQueryGraph(
 			backingName,
 			b.Metadata().ColumnsCount,
 			indexes,
-			tx.maUn,
 		)
 		if err != nil {
 			return nil, err
@@ -361,7 +359,7 @@ func (tx *Tx) constructQueryGraph(
 	case *StoredQuery:
 		result := &backedQueryNode{}
 		explored[bf] = result
-		storage, err := loadStorage(tx.tx, b.storageName, tx.maUn)
+		storage, err := loadStorage(tx.tx, b.storageName)
 		if err != nil {
 			return nil, err
 		}

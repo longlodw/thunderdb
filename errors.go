@@ -24,6 +24,7 @@ const (
 	ErrCodeRecursionDepthExceeded
 	ErrCodeColumnCountExceeded64
 	ErrCodeInvalidColumnReference
+	ErrCodeInvalidEncoding
 )
 
 func (e ErrorCode) Error() string {
@@ -60,6 +61,8 @@ func (e ErrorCode) Error() string {
 		return "column count exceeded maximum of 64"
 	case ErrCodeInvalidColumnReference:
 		return "invalid column reference"
+	case ErrCodeInvalidEncoding:
+		return "invalid encoding"
 	default:
 		return fmt.Sprintf("unknown error code: %d", int(e))
 	}
@@ -188,6 +191,13 @@ func ErrInvalidColumnReference(relation string, col int) error {
 	return &ThunderError{
 		Code:    ErrCodeInvalidColumnReference,
 		Message: fmt.Sprintf("invalid column index %d for storage %s", col, relation),
+	}
+}
+
+func ErrInvalidEncoding(detail string) error {
+	return &ThunderError{
+		Code:    ErrCodeInvalidEncoding,
+		Message: fmt.Sprintf("invalid encoding: %s", detail),
 	}
 }
 

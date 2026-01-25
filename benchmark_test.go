@@ -19,8 +19,8 @@ func setupBenchmarkDB(b *testing.B) (*DB, func()) {
 	dbPath := tmpfile.Name()
 	tmpfile.Close()
 
-	// Using MsgpackMaUn as default
-	db, err := OpenDB(MsgpackMaUn, dbPath, 0600, nil)
+	// Using orderedMaUn internally now
+	db, err := OpenDB(dbPath, 0600, nil)
 	if err != nil {
 		os.Remove(dbPath)
 		b.Fatal(err)
@@ -547,7 +547,7 @@ func BenchmarkConcurrency(b *testing.B) {
 	tmpfile.Close()
 	defer os.Remove(dbPath)
 
-	db, err := OpenDB(MsgpackMaUn, dbPath, 0600, nil)
+	db, err := OpenDB(dbPath, 0600, nil)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -650,7 +650,7 @@ func BenchmarkConcurrency(b *testing.B) {
 }
 
 func BenchmarkUpdateSequential(b *testing.B) {
-	db, cleanup := setupBenchmarkDB(b) // Uses MsgpackMaUn
+	db, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
 	// Setup data
@@ -693,7 +693,7 @@ func BenchmarkUpdateSequential(b *testing.B) {
 
 func BenchmarkBatchConcurrent(b *testing.B) {
 	// 1. Setup DB
-	db, cleanup := setupBenchmarkDB(b) // Uses MsgpackMaUn
+	db, cleanup := setupBenchmarkDB(b)
 	defer cleanup()
 
 	// 2. Initialize Schema

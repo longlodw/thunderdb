@@ -14,12 +14,10 @@ type storage struct {
 	bucket   *boltdb.Bucket
 	name     string
 	metadata Metadata
-	maUn     MarshalUnmarshaler
 }
 
 type Row struct {
 	values map[int][]byte
-	maUn   MarshalUnmarshaler
 }
 
 func (sr *Row) Get(idx int, v any) error {
@@ -27,13 +25,13 @@ func (sr *Row) Get(idx int, v any) error {
 	if !ok {
 		return ErrFieldNotFound(fmt.Sprintf("column %d", idx))
 	}
-	return sr.maUn.Unmarshal(vBytes, v)
+	return orderedMaUn.Unmarshal(vBytes, v)
 }
 
 func (sr *Row) Iter() iter.Seq2[int, *Value] {
 	return func(yield func(int, *Value) bool) {
 		for k, b := range sr.values {
-			if !yield(k, ValueOfRaw(b, sr.maUn)) {
+			if !yield(k, ValueOfRaw(b)) {
 				return
 			}
 		}
@@ -45,7 +43,6 @@ func newStorage(
 	name string,
 	columnsCount int,
 	indexes map[uint64]bool,
-	maUn MarshalUnmarshaler,
 ) (*storage, error) {
 	bucket, err := tx.CreateBucketIfNotExists([]byte(name))
 	if err != nil {
@@ -73,9 +70,8 @@ func newStorage(
 			ColumnsCount: columnsCount,
 			Indexes:      indexes,
 		},
-		maUn: maUn,
 	}
-	metadataBytes, err := GobMaUn.Marshal(s.metadata)
+	metadataBytes, err := gobCodec.Marshal(s.metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +95,7 @@ func loadMetadata(
 	if metadataBytes == nil {
 		return ErrMetaDataNotFound(name)
 	}
-	if err := GobMaUn.Unmarshal(metadataBytes, metadata); err != nil {
+	if err := gobCodec.Unmarshal(metadataBytes, metadata); err != nil {
 		return err
 	}
 	return nil
@@ -108,7 +104,6 @@ func loadMetadata(
 func loadStorage(
 	tx *boltdb.Tx,
 	name string,
-	maUn MarshalUnmarshaler,
 ) (*storage, error) {
 	bucket := tx.Bucket([]byte(name))
 	if bucket == nil {
@@ -117,7 +112,6 @@ func loadStorage(
 	s := &storage{
 		bucket: bucket,
 		name:   name,
-		maUn:   maUn,
 	}
 	if err := loadMetadata(tx, name, &s.metadata); err != nil {
 		return nil, err
@@ -287,12 +281,11 @@ func (s *storage) scan(
 					// Lazy unmarshaling: store raw bytes in Value
 					val, ok := valueCache[col]
 					if !ok {
-						val = ValueOfRaw(v, s.maUn)
+						val = ValueOfRaw(v)
 						valueCache[col] = val
 					} else {
 						val.value = nil
 						val.raw = v
-						val.marshaler = s.maUn
 					}
 					vals[col] = val
 				}
@@ -392,12 +385,11 @@ func (s *storage) scan(
 						// Lazy unmarshaling: store raw bytes in Value
 						val, ok := valueCache[col]
 						if !ok {
-							val = ValueOfRaw(dv, s.maUn)
+							val = ValueOfRaw(dv)
 							valueCache[col] = val
 						} else {
 							val.value = nil
 							val.raw = dv
-							val.marshaler = s.maUn
 						}
 						vals[col] = val
 					}
@@ -444,7 +436,7 @@ func (s *storage) updateData(id []byte, updates map[int]any) error {
 		var columnKey [12]byte
 		copy(columnKey[0:8], id)
 		binary.BigEndian.PutUint32(columnKey[8:12], uint32(colIdx))
-		vBytes, err := s.maUn.Marshal(newVal)
+		vBytes, err := orderedMaUn.Marshal(newVal)
 		if err != nil {
 			return err
 		}
@@ -504,7 +496,7 @@ func (s *storage) Update(
 		}
 		// apply updates
 		for colIdx, newVal := range updates {
-			res.values[colIdx] = ValueOfLiteral(newVal, orderedMaUn)
+			res.values[colIdx] = ValueOfLiteral(newVal)
 		}
 		// insert new indexes
 		if err := s.insertIndexes(res.id, &res.values, indexesToSkip); err != nil {
@@ -610,9 +602,7 @@ func (s *storage) find(
 ) (iter.Seq2[*Row, error], error) {
 	return func(yield func(*Row, error) bool) {
 		// Create a reusable Row
-		row := &Row{
-			maUn: s.maUn,
-		}
+		row := &Row{}
 
 		for res, err := range s.scan(mainIndex, indexRange, equals, ranges, exclusion, nil, cols) {
 			if err != nil {
@@ -683,7 +673,7 @@ func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges m
 			}
 			comparableBytesCache[idx] = kBytes
 		}
-		kVals := ValueOfRaw(kBytes, orderedMaUn)
+		kVals := ValueOfRaw(kBytes)
 		if con, err := kr.Contains(kVals); err != nil {
 			return false, err
 		} else if !con {
@@ -726,7 +716,7 @@ func (s *storage) Insert(values map[int]any) error {
 		var columnKey [12]byte
 		binary.BigEndian.PutUint64(columnKey[0:8], id)
 		binary.BigEndian.PutUint32(columnKey[8:12], uint32(i))
-		vBytes, err := s.maUn.Marshal(v)
+		vBytes, err := orderedMaUn.Marshal(v)
 		if err != nil {
 			return err
 		}
@@ -737,7 +727,7 @@ func (s *storage) Insert(values map[int]any) error {
 	}
 	boxedValues := make(map[int]*Value)
 	for i, v := range values {
-		boxedValues[i] = ValueOfLiteral(v, orderedMaUn)
+		boxedValues[i] = ValueOfLiteral(v)
 	}
 	// check unique and insert indexes
 	for i, isUnique := range s.metadata.Indexes {

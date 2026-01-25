@@ -164,7 +164,7 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 	exclusionBytes := make(map[int]map[string]bool)
 
 	for _, cond := range conditions {
-		val := ValueOfLiteral(cond.Value, orderedMaUn)
+		val := ValueOfLiteral(cond.Value)
 		valBytes, err := val.GetRaw()
 		if err != nil {
 			return nil, nil, nil, false, err

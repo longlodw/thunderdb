@@ -23,17 +23,17 @@ func ToKey(values ...any) ([]byte, error) {
 func NewRangeFromBytes(startKey, endKey []byte, includeStart, includeEnd bool) (*Range, error) {
 	var start *Value
 	if startKey != nil {
-		start = ValueOfRaw(startKey, orderedMaUn)
+		start = ValueOfRaw(startKey)
 	}
 	var end *Value
 	if endKey != nil {
-		end = ValueOfRaw(endKey, orderedMaUn)
+		end = ValueOfRaw(endKey)
 	}
 	return NewRangeFromValue(start, end, includeStart, includeEnd)
 }
 
 func NewRangeFromLiteral(startVals, endVals any, includeStart, includeEnd bool) (*Range, error) {
-	return NewRangeFromValue(ValueOfLiteral(startVals, orderedMaUn), ValueOfLiteral(endVals, orderedMaUn), includeStart, includeEnd)
+	return NewRangeFromValue(ValueOfLiteral(startVals), ValueOfLiteral(endVals), includeStart, includeEnd)
 }
 
 func NewRangeFromValue(start, end *Value, includeStart, includeEnd bool) (*Range, error) {

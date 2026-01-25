@@ -19,8 +19,8 @@ func Example() {
 	tmpfile.Close()
 	defer os.Remove(dbPath) // Clean up database file
 
-	// Open the database using MessagePack marshaler (default recommended)
-	db, err := thunderdb.OpenDB(thunderdb.MsgpackMaUn, dbPath, 0600, nil)
+	// Open the database
+	db, err := thunderdb.OpenDB(dbPath, 0600, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -107,7 +107,7 @@ func Example_manualTx() {
 	tmpfile.Close()
 	defer os.Remove(dbPath)
 
-	db, err := thunderdb.OpenDB(thunderdb.MsgpackMaUn, dbPath, 0600, nil)
+	db, err := thunderdb.OpenDB(dbPath, 0600, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -187,7 +187,7 @@ func Example_recursive() {
 	tmpfile.Close()
 	defer os.Remove(dbPath)
 
-	db, err := thunderdb.OpenDB(thunderdb.MsgpackMaUn, dbPath, 0600, nil)
+	db, err := thunderdb.OpenDB(dbPath, 0600, nil)
 	if err != nil {
 		panic(err)
 	}

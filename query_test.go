@@ -16,7 +16,7 @@ func setupTestDBForQuery(t *testing.T) (*DB, func()) {
 	f.Close()
 
 	// Open DB
-	db, err := OpenDB(MsgpackMaUn, name, 0600, nil)
+	db, err := OpenDB(name, 0600, nil)
 	if err != nil {
 		os.Remove(name)
 		t.Fatal(err)

@@ -117,7 +117,6 @@ func (n *joinedQueryNode) Find(
 	exclusion map[int][]*Value,
 	cols map[int]bool,
 ) (iter.Seq2[*Row, error], error) {
-	// println("DEBUG: Join Find. MainIndex:", mainIndex, "IndexRange:", indexRange, "Equals:", equals, "Ranges:", ranges, "Exclusion:", exclusion, "Cols:", cols)
 	leftRanges, rightRanges, err := splitRanges(n.left.metadata(), n.right.metadata(), ranges)
 	if err != nil {
 		return nil, err
@@ -339,7 +338,6 @@ func (n *joinedQueryNode) Find(
 
 func (n *joinedQueryNode) joinInto(dest *Row, leftRow, rightRow *Row) {
 	clear(dest.values)
-	dest.maUn = leftRow.maUn
 	maps.Copy(dest.values, leftRow.values)
 	offset := n.left.metadata().ColumnsCount
 	for k, v := range rightRow.values {
@@ -371,10 +369,10 @@ func (n *joinedQueryNode) ComputeContraintsForRight(
 		// The row comes from the left child, so its indices are 0 to left.ColumnsCount-1.
 		// cond.LeftField refers to a column in the left table, so we use it directly.
 		var key []byte
+		var leftVal any
 		if rowByte, ok := rowBytes[cond.LeftField]; ok {
 			key = rowByte
 		} else {
-			var leftVal any
 			err := row.Get(cond.LeftField, &leftVal)
 			if err != nil {
 				return false, err
@@ -395,7 +393,7 @@ func (n *joinedQueryNode) ComputeContraintsForRight(
 			}
 			if rng, ok := resultRanges[cond.RightField]; ok {
 				// Avoid allocating ValueOfRaw every time
-				valCheck := &Value{marshaler: orderedMaUn, raw: key}
+				valCheck := &Value{raw: key}
 				contains, err := rng.Contains(valCheck)
 				if err != nil {
 					return false, err
@@ -413,9 +411,15 @@ func (n *joinedQueryNode) ComputeContraintsForRight(
 				equalsBytes[cond.RightField] = key
 				// Use existing Value struct if possible, or allocate one
 				if val, exists := resultEquals[cond.RightField]; exists {
-					val.SetRaw(key, orderedMaUn)
+					val.SetRaw(key)
 				} else {
-					resultEquals[cond.RightField] = ValueOfRaw(key, orderedMaUn)
+					// Use ValueOfLiteral instead of ValueOfRaw to avoid double-wrapping
+					// when bestIndex calls GetValue() + ToKey()
+					if leftVal == nil {
+						// Need to get the value if we didn't already
+						row.Get(cond.LeftField, &leftVal)
+					}
+					resultEquals[cond.RightField] = ValueOfLiteral(leftVal)
 				}
 			}
 		case LT:
@@ -455,11 +459,11 @@ func (n *joinedQueryNode) ComputeContraintsForRight(
 				// We need a Value here for resultExclusion.
 				// Since resultExclusion is a list, we append.
 				// For now, we accept allocation here as NEQ might be less frequent or we can pool Values later.
-				curValue := ValueOfRaw(key, orderedMaUn)
+				curValue := ValueOfRaw(key)
 				resultExclusion[cond.RightField] = append(resultExclusion[cond.RightField], curValue)
 				exclusionBytes[cond.RightField][string(key)] = true
 			} else if !excs[string(key)] {
-				curValue := ValueOfRaw(key, orderedMaUn)
+				curValue := ValueOfRaw(key)
 				resultExclusion[cond.RightField] = append(resultExclusion[cond.RightField], curValue)
 				excs[string(key)] = true
 			}
@@ -512,10 +516,10 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(
 		// The row comes from the right child, so its indices are left.ColumnsCount to left.ColumnsCount+right.ColumnsCount-1.
 		// cond.RightField refers to a column in the right table, so we need to adjust it.
 		var key []byte
+		var rightVal any
 		if rowByte, ok := rowBytes[cond.RightField]; ok {
 			key = rowByte
 		} else {
-			var rightVal any
 			err := row.Get(cond.RightField, &rightVal)
 			if err != nil {
 				return false, err
@@ -535,7 +539,7 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(
 				}
 			}
 			if rng, ok := resultRanges[cond.LeftField]; ok {
-				valCheck := &Value{marshaler: orderedMaUn, raw: key}
+				valCheck := &Value{raw: key}
 				contains, err := rng.Contains(valCheck)
 				if err != nil {
 					return false, err
@@ -552,9 +556,15 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(
 			} else {
 				equalsBytes[cond.LeftField] = key
 				if val, exists := resultEquals[cond.LeftField]; exists {
-					val.SetRaw(key, orderedMaUn)
+					val.SetRaw(key)
 				} else {
-					resultEquals[cond.LeftField] = ValueOfRaw(key, orderedMaUn)
+					// Use ValueOfLiteral instead of ValueOfRaw to avoid double-wrapping
+					// when bestIndex calls GetValue() + ToKey()
+					if rightVal == nil {
+						// Need to get the value if we didn't already
+						row.Get(cond.RightField, &rightVal)
+					}
+					resultEquals[cond.LeftField] = ValueOfLiteral(rightVal)
 				}
 			}
 		case LT:
@@ -590,11 +600,11 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(
 			}
 			if excs, exists := exclusionBytes[cond.LeftField]; !exists {
 				exclusionBytes[cond.LeftField] = make(map[string]bool)
-				curValue := ValueOfRaw(key, orderedMaUn)
+				curValue := ValueOfRaw(key)
 				resultExclusion[cond.LeftField] = append(resultExclusion[cond.LeftField], curValue)
 				exclusionBytes[cond.LeftField][string(key)] = true
 			} else if !excs[string(key)] {
-				curValue := ValueOfRaw(key, orderedMaUn)
+				curValue := ValueOfRaw(key)
 				resultExclusion[cond.LeftField] = append(resultExclusion[cond.LeftField], curValue)
 				excs[string(key)] = true
 			}
@@ -673,7 +683,6 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 
 		joinedRow := &Row{
 			values: make(map[int][]byte),
-			maUn:   row.maUn,
 		}
 
 		for rightRow, err := range rightSeq {
@@ -725,7 +734,6 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 
 		joinedRow := &Row{
 			values: make(map[int][]byte),
-			maUn:   row.maUn,
 		}
 
 		count := 0
@@ -842,7 +850,6 @@ func (n *projectedQueryNode) Find(
 			}
 			newRow := &Row{
 				values: make(map[int][]byte),
-				maUn:   childRow.maUn,
 			}
 			for col := range cols {
 				if col >= len(n.columns) {
@@ -863,7 +870,6 @@ func (n *projectedQueryNode) Find(
 func (n *projectedQueryNode) propagateToParents(row *Row, child queryNode) error {
 	parentRow := &Row{
 		values: make(map[int][]byte),
-		maUn:   row.maUn,
 	}
 	for k, col := range n.columns {
 		if val, ok := row.values[col]; ok {
@@ -929,10 +935,8 @@ func (n *backedQueryNode) Find(
 		if err != nil {
 			return nil, err
 		}
-		// println("DEBUG: BackedNode Find. BestIndex:", bestIndex, "BestRanges:", bestRanges)
 		return n.backing.find(bestIndex, bestRanges, mergedEquals, mergedRanges, mergedExclusion, cols)
 	}
-	// println("DEBUG: BackedNode Find. Given Index:", mainIndex, "IndexRange:", indexRange)
 	return n.backing.find(mainIndex, indexRange, mergedEquals, mergedRanges, mergedExclusion, cols)
 }
 

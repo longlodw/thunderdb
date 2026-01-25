@@ -7,10 +7,6 @@ import (
 
 // setupTestDBFromPersistent is a helper that mimics setupTestDB from original persistent_test.go
 func setupTestDBFromPersistent(t *testing.T) (*DB, func()) {
-	return setupTestDBWithMaUnFromPersistent(t, MsgpackMaUn)
-}
-
-func setupTestDBWithMaUnFromPersistent(t *testing.T, maUn MarshalUnmarshaler) (*DB, func()) {
 	tmpfile, err := os.CreateTemp("", "thunder_test_*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -18,7 +14,7 @@ func setupTestDBWithMaUnFromPersistent(t *testing.T, maUn MarshalUnmarshaler) (*
 	dbPath := tmpfile.Name()
 	tmpfile.Close()
 
-	db, err := OpenDB(maUn, dbPath, 0600, nil)
+	db, err := OpenDB(dbPath, 0600, nil)
 	if err != nil {
 		os.Remove(dbPath)
 		t.Fatal(err)
