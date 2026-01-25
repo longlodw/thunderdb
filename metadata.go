@@ -55,7 +55,7 @@ func initProjectedMetadata(result, child *Metadata, cols []int) error {
 	for idx, isUnique := range child.Indexes {
 		var projectedIdx uint64 = 0
 		refCols := ReferenceColumns(idx)
-		for _, col := range refCols {
+		for col := range refCols {
 			childCols := childToResultColumnMap[col]
 			for _, childCol := range childCols {
 				projectedIdx |= 1 << uint64(childCol)
