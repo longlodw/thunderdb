@@ -16,8 +16,32 @@ type Range struct {
 	distance     []byte
 }
 
-func ToKey(values ...any) ([]byte, error) {
-	return orderedMaUn.Marshal(values)
+// ToKey creates a tuple-encoded key from one or more Values.
+// It concatenates the single-value encoded bytes from each Value
+// and wraps them in tuple markers.
+func ToKey(values ...*Value) ([]byte, error) {
+	// Calculate total size needed
+	totalSize := 2 // tagTuple + tagTupleEnd
+	parts := make([][]byte, len(values))
+	for i, v := range values {
+		singleRaw, err := v.GetSingleRaw()
+		if err != nil {
+			return nil, err
+		}
+		parts[i] = singleRaw
+		totalSize += len(singleRaw)
+	}
+
+	// Build the tuple
+	buf := make([]byte, totalSize)
+	buf[0] = tagTuple
+	pos := 1
+	for _, part := range parts {
+		copy(buf[pos:], part)
+		pos += len(part)
+	}
+	buf[pos] = tagTupleEnd
+	return buf, nil
 }
 
 func NewRangeFromBytes(startKey, endKey []byte, includeStart, includeEnd bool) (*Range, error) {

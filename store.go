@@ -136,16 +136,10 @@ func (s *storage) deleteIndexes(id []byte, values *map[int]*Value, skip map[uint
 		if skip != nil && skip[i] {
 			continue
 		}
-		selectedValues := make([]any, 0, s.metadata.ColumnsCount)
+		selectedValues := make([]*Value, 0, s.metadata.ColumnsCount)
 		for j := range ReferenceColumns(uint64(i)) {
 			if v, ok := (*values)[j]; ok {
-				var unwrapped any
-				var err error
-				unwrapped, err = v.GetValue()
-				if err != nil {
-					return err
-				}
-				selectedValues = append(selectedValues, unwrapped)
+				selectedValues = append(selectedValues, v)
 			} else {
 				return ErrFieldNotFound(fmt.Sprintf("column %d", j))
 			}
@@ -164,28 +158,6 @@ func (s *storage) deleteIndexes(id []byte, values *map[int]*Value, skip map[uint
 		}
 	}
 	return nil
-}
-
-func (s *storage) toKeyFromColumn(value *map[int]*Value, idx int) ([]byte, error) {
-	v, err := (*value)[idx].GetValue()
-	if err != nil {
-		return nil, err
-	}
-	return ToKey(v)
-}
-
-func (s *storage) toIndexKey(value *map[int]*Value, idx uint64) ([]byte, error) {
-	refColumns := ReferenceColumns(idx)
-	selectedValues := make([]any, 0)
-	for colIdx := range refColumns {
-		var err error
-		v, err := (*value)[colIdx].GetValue()
-		if err != nil {
-			return nil, err
-		}
-		selectedValues = append(selectedValues, v)
-	}
-	return ToKey(selectedValues...)
 }
 
 type scanResult struct {
@@ -515,16 +487,10 @@ func (s *storage) insertIndexes(id []byte, values *map[int]*Value, skip map[uint
 		if skip != nil && skip[i] {
 			continue
 		}
-		selectedValues := make([]any, 0, s.metadata.ColumnsCount)
+		selectedValues := make([]*Value, 0, s.metadata.ColumnsCount)
 		for j := range ReferenceColumns(i) {
 			if v, ok := (*values)[j]; ok {
-				var unwrapped any
-				var err error
-				unwrapped, err = v.GetValue()
-				if err != nil {
-					return err
-				}
-				selectedValues = append(selectedValues, unwrapped)
+				selectedValues = append(selectedValues, v)
 			} else {
 				return ErrFieldNotFound(fmt.Sprintf("column %d", j))
 			}
@@ -646,7 +612,8 @@ func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges m
 		if cached, ok := comparableBytesCache[idx]; ok {
 			kBytes = cached
 		} else {
-			kBytes, err = s.toKeyFromColumn(vals, idx)
+			// Get tuple-encoded bytes for this column's value
+			kBytes, err = ToKey((*vals)[idx])
 			if err != nil {
 				return false, err
 			}
@@ -667,7 +634,8 @@ func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges m
 		if cached, ok := comparableBytesCache[idx]; ok {
 			kBytes = cached
 		} else {
-			kBytes, err = s.toKeyFromColumn(vals, idx)
+			// Get tuple-encoded bytes for this column's value
+			kBytes, err = ToKey((*vals)[idx])
 			if err != nil {
 				return false, err
 			}
@@ -687,7 +655,8 @@ func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges m
 		if cached, ok := comparableBytesCache[idx]; ok {
 			kBytes = cached
 		} else {
-			kBytes, err = s.toKeyFromColumn(vals, idx)
+			// Get tuple-encoded bytes for this column's value
+			kBytes, err = ToKey((*vals)[idx])
 			if err != nil {
 				return false, err
 			}
@@ -731,7 +700,16 @@ func (s *storage) Insert(values map[int]any) error {
 	}
 	// check unique and insert indexes
 	for i, isUnique := range s.metadata.Indexes {
-		vKey, err := s.toIndexKey(&boxedValues, i)
+		// Collect values for this index
+		selectedValues := make([]*Value, 0, s.metadata.ColumnsCount)
+		for j := range ReferenceColumns(i) {
+			if v, ok := boxedValues[j]; ok {
+				selectedValues = append(selectedValues, v)
+			} else {
+				return ErrFieldNotFound(fmt.Sprintf("column %d", j))
+			}
+		}
+		vKey, err := ToKey(selectedValues...)
 		if err != nil {
 			return err
 		}

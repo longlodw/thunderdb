@@ -59,6 +59,28 @@ func (v *Value) GetRaw() ([]byte, error) {
 	return nil, nil
 }
 
+// GetSingleRaw returns the single-value encoded bytes (without tuple wrapping).
+// This is used for building composite index keys where multiple values are
+// combined into a single tuple.
+func (v *Value) GetSingleRaw() ([]byte, error) {
+	if v.value != nil {
+		// Encode the value directly without tuple wrapping
+		return encodeSingle(v.value)
+	}
+	if v.raw != nil {
+		// raw is tuple-encoded, need to unwrap it
+		// Tuple format: [tagTuple][...single-encoded values...][tagTupleEnd]
+		if len(v.raw) >= 2 && v.raw[0] == tagTuple {
+			// Find the content between tagTuple and tagTupleEnd
+			// For a single-element tuple, this is just the single-encoded value
+			return v.raw[1 : len(v.raw)-1], nil
+		}
+		// Already single-encoded (shouldn't normally happen)
+		return v.raw, nil
+	}
+	return nil, nil
+}
+
 func (v *Value) SetRaw(b []byte) {
 	v.raw = b
 	v.value = nil

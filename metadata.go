@@ -76,14 +76,10 @@ func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*Range) (uin
 	for idx := range sm.Indexes {
 		if idx&equBits == idx {
 			selected := uint64(0)
-			values := make([]any, 0, sm.ColumnsCount)
+			values := make([]*Value, 0, sm.ColumnsCount)
 			for i := range sm.ColumnsCount {
 				if (idx & (1 << uint64(i))) != 0 {
-					val, err := equals[i].GetValue()
-					if err != nil {
-						return 0, nil, err
-					}
-					values = append(values, val)
+					values = append(values, equals[i])
 					selected |= (1 << uint64(i))
 				}
 			}

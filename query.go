@@ -377,7 +377,7 @@ func (n *joinedQueryNode) ComputeContraintsForRight(
 			if err != nil {
 				return false, err
 			}
-			key, err = ToKey(leftVal)
+			key, err = ToKey(ValueOfLiteral(leftVal))
 			if err != nil {
 				return false, err
 			}
@@ -524,7 +524,7 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(
 			if err != nil {
 				return false, err
 			}
-			key, err = ToKey(rightVal)
+			key, err = ToKey(ValueOfLiteral(rightVal))
 			if err != nil {
 				return false, err
 			}
