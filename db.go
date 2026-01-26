@@ -2,6 +2,7 @@ package thunderdb
 
 import (
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/openkvlab/boltdb"
@@ -12,7 +13,9 @@ import (
 //
 // A DB is safe for concurrent use by multiple goroutines.
 type DB struct {
-	db *boltdb.DB
+	db       *boltdb.DB
+	stats    internalStats
+	openedAt time.Time
 }
 
 // DBOptions configures the database behavior. It is an alias for boltdb.Options.
@@ -38,7 +41,7 @@ func OpenDB(path string, mode os.FileMode, options *DBOptions) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DB{db: bdb}, nil
+	return &DB{db: bdb, openedAt: time.Now()}, nil
 }
 
 // Close releases all database resources and closes the underlying file.
@@ -73,8 +76,19 @@ func (d *DB) Begin(writable bool) (*Tx, error) {
 		return nil, err
 	}
 
+	// Track transaction stats
+	if writable {
+		atomic.AddInt64(&d.stats.writeTx, 1)
+	} else {
+		atomic.AddInt64(&d.stats.readTx, 1)
+	}
+	atomic.AddInt64(&d.stats.openTx, 1)
+
 	return &Tx{
-		tx: tx, stores: make(map[string]*storage),
+		tx:        tx,
+		stores:    make(map[string]*storage),
+		db:        d,
+		startTime: time.Now(),
 	}, nil
 }
 
@@ -94,15 +108,25 @@ func (d *DB) Begin(writable bool) (*Tx, error) {
 //	    return nil
 //	})
 func (d *DB) View(fn func(*Tx) error) error {
-	return d.db.View(func(btx *boltdb.Tx) error {
+	atomic.AddInt64(&d.stats.readTx, 1)
+	atomic.AddInt64(&d.stats.openTx, 1)
+	startTime := time.Now()
+
+	err := d.db.View(func(btx *boltdb.Tx) error {
 		tx := &Tx{
-			tx:      btx,
-			managed: true,
-			stores:  make(map[string]*storage),
+			tx:        btx,
+			managed:   true,
+			stores:    make(map[string]*storage),
+			db:        d,
+			startTime: startTime,
 		}
 		defer tx.cleanupTempTx()
 		return fn(tx)
 	})
+
+	atomic.AddInt64(&d.stats.openTx, -1)
+	atomic.AddInt64(&d.stats.txDuration, int64(time.Since(startTime)))
+	return err
 }
 
 // Update executes a function within the context of a read-write transaction.
@@ -115,15 +139,30 @@ func (d *DB) View(fn func(*Tx) error) error {
 //	    return tx.Insert("users", map[int]any{0: "1", 1: "alice"})
 //	})
 func (d *DB) Update(fn func(*Tx) error) error {
-	return d.db.Update(func(btx *boltdb.Tx) error {
+	atomic.AddInt64(&d.stats.writeTx, 1)
+	atomic.AddInt64(&d.stats.openTx, 1)
+	startTime := time.Now()
+
+	err := d.db.Update(func(btx *boltdb.Tx) error {
 		tx := &Tx{
-			tx:      btx,
-			managed: true,
-			stores:  make(map[string]*storage),
+			tx:        btx,
+			managed:   true,
+			stores:    make(map[string]*storage),
+			db:        d,
+			startTime: startTime,
 		}
 		defer tx.cleanupTempTx()
 		return fn(tx)
 	})
+
+	atomic.AddInt64(&d.stats.openTx, -1)
+	if err == nil {
+		atomic.AddInt64(&d.stats.commits, 1)
+	} else {
+		atomic.AddInt64(&d.stats.rollbacks, 1)
+	}
+	atomic.AddInt64(&d.stats.txDuration, int64(time.Since(startTime)))
+	return err
 }
 
 // Batch executes a function within the context of a read-write managed transaction.
@@ -137,15 +176,30 @@ func (d *DB) Update(fn func(*Tx) error) error {
 // If the function returns an error, the transaction is rolled back.
 // If the function panics, the transaction is rolled back and the panic is propagated.
 func (d *DB) Batch(fn func(*Tx) error) error {
-	return d.db.Batch(func(btx *boltdb.Tx) error {
+	atomic.AddInt64(&d.stats.writeTx, 1)
+	atomic.AddInt64(&d.stats.openTx, 1)
+	startTime := time.Now()
+
+	err := d.db.Batch(func(btx *boltdb.Tx) error {
 		tx := &Tx{
-			tx:      btx,
-			managed: true,
-			stores:  make(map[string]*storage),
+			tx:        btx,
+			managed:   true,
+			stores:    make(map[string]*storage),
+			db:        d,
+			startTime: startTime,
 		}
 		defer tx.cleanupTempTx()
 		return fn(tx)
 	})
+
+	atomic.AddInt64(&d.stats.openTx, -1)
+	if err == nil {
+		atomic.AddInt64(&d.stats.commits, 1)
+	} else {
+		atomic.AddInt64(&d.stats.rollbacks, 1)
+	}
+	atomic.AddInt64(&d.stats.txDuration, int64(time.Since(startTime)))
+	return err
 }
 
 // SetMaxBatchDelay sets the maximum amount of time that the batcher will wait
@@ -183,4 +237,16 @@ func (d *DB) MaxBatchSize() int {
 // AllocSize returns the current allocation size.
 func (d *DB) AllocSize() int {
 	return d.db.AllocSize
+}
+
+// Stats returns a snapshot of database statistics.
+// The returned Stats struct is a copy and safe to use concurrently.
+func (d *DB) Stats() Stats {
+	return d.stats.snapshot(d.openedAt, d.db.Stats())
+}
+
+// ResetStats zeros all operation counters and durations.
+// This does not affect OpenedAt, TxOpenCount, or BoltDB stats.
+func (d *DB) ResetStats() {
+	d.stats.reset()
 }

@@ -443,7 +443,7 @@ func (s *storage) Update(
 	ranges map[int]*Range,
 	excludes map[int][]*Value,
 	updates map[int]any,
-) error {
+) (int64, error) {
 	// compute indexes to update and columns to unmarshal
 	indexesToUpdate := make(map[uint64]bool)
 	colsToUnmarshal := make(map[int]bool)
@@ -466,22 +466,23 @@ func (s *storage) Update(
 	}
 	shortestIndex, shortestRange, err := s.metadata.bestIndex(equals, ranges)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	updateMainIndex := indexesToUpdate[shortestIndex]
 
+	var updated int64
 	for res, err := range s.scan(shortestIndex, shortestRange, equals, ranges, excludes, colsToUnmarshal, nil) {
 		if err != nil {
-			return err
+			return updated, err
 		}
 		// delete old indexes
 		if err := s.deleteIndexes(res.id, &res.values, indexesToSkip); err != nil {
-			return err
+			return updated, err
 		}
 		// If iterating by index and that index is being updated, we must delete the current index entry
 		if updateMainIndex && res.deleteIndexEntry != nil {
 			if err := res.deleteIndexEntry(); err != nil {
-				return err
+				return updated, err
 			}
 			indexesToSkip[shortestIndex] = true
 		}
@@ -491,14 +492,15 @@ func (s *storage) Update(
 		}
 		// insert new indexes
 		if err := s.insertIndexes(res.id, &res.values, indexesToSkip); err != nil {
-			return err
+			return updated, err
 		}
 		// update data
 		if err := s.updateData(res.id, updates); err != nil {
-			return err
+			return updated, err
 		}
+		updated++
 	}
-	return nil
+	return updated, nil
 }
 
 func (s *storage) insertIndexes(id []byte, values *map[int]*Value, skip map[uint64]bool) error {
@@ -548,33 +550,35 @@ func (s *storage) insertIndexes(id []byte, values *map[int]*Value, skip map[uint
 	return nil
 }
 
-func (s *storage) Delete(equals map[int]*Value, ranges map[int]*Range, excludes map[int][]*Value) error {
+func (s *storage) Delete(equals map[int]*Value, ranges map[int]*Range, excludes map[int][]*Value) (int64, error) {
 	shortestIndex, shortestRange, err := s.metadata.bestIndex(equals, ranges)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
+	var deleted int64
 	for res, err := range s.scan(shortestIndex, shortestRange, equals, ranges, excludes, nil, nil) {
 		if err != nil {
-			return err
+			return deleted, err
 		}
 		// delete indexes
 		skip := map[uint64]bool{}
 		if res.deleteIndexEntry != nil {
 			skip[shortestIndex] = true
 			if err := res.deleteIndexEntry(); err != nil {
-				return err
+				return deleted, err
 			}
 		}
 		if err := s.deleteIndexes(res.id, &res.values, skip); err != nil {
-			return err
+			return deleted, err
 		}
 		// delete data
 		if err := s.deleteData(res.id); err != nil {
-			return err
+			return deleted, err
 		}
+		deleted++
 	}
-	return nil
+	return deleted, nil
 }
 
 func (s *storage) find(

@@ -8,6 +8,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/openkvlab/boltdb"
 )
@@ -28,6 +30,8 @@ type Tx struct {
 	tempFilePath string
 	managed      bool
 	stores       map[string]*storage
+	db           *DB       // Reference to parent DB for stats
+	startTime    time.Time // Transaction start time for duration tracking
 }
 
 // Commit writes all changes to disk and closes the transaction.
@@ -37,7 +41,15 @@ func (tx *Tx) Commit() error {
 	if tx.managed {
 		panic("cannot commit a managed transaction")
 	}
-	return tx.tx.Commit()
+	err := tx.tx.Commit()
+	if tx.db != nil {
+		atomic.AddInt64(&tx.db.stats.openTx, -1)
+		if err == nil {
+			atomic.AddInt64(&tx.db.stats.commits, 1)
+		}
+		atomic.AddInt64(&tx.db.stats.txDuration, int64(time.Since(tx.startTime)))
+	}
+	return err
 }
 
 // Rollback discards all changes and closes the transaction.
@@ -48,7 +60,13 @@ func (tx *Tx) Rollback() error {
 	if tx.managed {
 		panic("cannot rollback a managed transaction")
 	}
-	return errors.Join(tx.tx.Rollback(), tx.cleanupTempTx())
+	err := errors.Join(tx.tx.Rollback(), tx.cleanupTempTx())
+	if tx.db != nil {
+		atomic.AddInt64(&tx.db.stats.openTx, -1)
+		atomic.AddInt64(&tx.db.stats.rollbacks, 1)
+		atomic.AddInt64(&tx.db.stats.txDuration, int64(time.Since(tx.startTime)))
+	}
+	return err
 }
 
 func (tx *Tx) cleanupTempTx() error {
@@ -110,6 +128,20 @@ func (tx *Tx) ID() int {
 	return tx.tx.ID()
 }
 
+// wrapIteratorWithStats wraps an iterator to count rows read for statistics.
+func (tx *Tx) wrapIteratorWithStats(it iter.Seq2[*Row, error]) iter.Seq2[*Row, error] {
+	return func(yield func(*Row, error) bool) {
+		for row, err := range it {
+			if err == nil {
+				atomic.AddInt64(&tx.db.stats.reads, 1)
+			}
+			if !yield(row, err) {
+				return
+			}
+		}
+	}
+}
+
 // CreateStorage creates a new persistent storage relation with the given name,
 // column count, and index specifications. The relation is stored in the database
 // and persists across transactions.
@@ -140,6 +172,9 @@ func (tx *Tx) CreateStorage(
 	if _, err := newStorage(tx.tx, relation, metadataObj.ColumnsCount, metadataObj.Indexes); err != nil {
 		return err
 	}
+	if tx.db != nil {
+		atomic.AddInt64(&tx.db.stats.storagesCreated, 1)
+	}
 	return nil
 }
 
@@ -156,11 +191,19 @@ func (tx *Tx) CreateStorage(
 //	    2: "admin",       // role
 //	})
 func (tx *Tx) Insert(relation string, value map[int]any) error {
+	start := time.Now()
 	s, err := tx.loadStorage(relation)
 	if err != nil {
 		return err
 	}
-	return s.Insert(value)
+	err = s.Insert(value)
+	if tx.db != nil {
+		atomic.AddInt64(&tx.db.stats.insertDuration, int64(time.Since(start)))
+		if err == nil {
+			atomic.AddInt64(&tx.db.stats.inserts, 1)
+		}
+	}
+	return err
 }
 
 func (tx *Tx) loadStorage(relation string) (*storage, error) {
@@ -191,6 +234,7 @@ func (tx *Tx) Delete(
 	relation string,
 	conditions ...Condition,
 ) error {
+	start := time.Now()
 	equals, ranges, exclusion, possible, err := parseConditions(conditions)
 	if err != nil {
 		return err
@@ -202,7 +246,12 @@ func (tx *Tx) Delete(
 	if err != nil {
 		return err
 	}
-	return s.Delete(equals, ranges, exclusion)
+	deleted, err := s.Delete(equals, ranges, exclusion)
+	if tx.db != nil {
+		atomic.AddInt64(&tx.db.stats.deleteDuration, int64(time.Since(start)))
+		atomic.AddInt64(&tx.db.stats.deletes, deleted)
+	}
+	return err
 }
 
 // Update modifies rows in the specified relation that match the given conditions.
@@ -224,6 +273,7 @@ func (tx *Tx) Update(
 	updates map[int]any,
 	conditions ...Condition,
 ) error {
+	start := time.Now()
 	equals, ranges, exclusion, possible, err := parseConditions(conditions)
 	if err != nil {
 		return err
@@ -235,7 +285,12 @@ func (tx *Tx) Update(
 	if err != nil {
 		return err
 	}
-	return s.Update(equals, ranges, exclusion, updates)
+	updated, err := s.Update(equals, ranges, exclusion, updates)
+	if tx.db != nil {
+		atomic.AddInt64(&tx.db.stats.updateDuration, int64(time.Since(start)))
+		atomic.AddInt64(&tx.db.stats.updates, updated)
+	}
+	return err
 }
 
 // DeleteStorage removes a storage relation and all its data from the database.
@@ -245,6 +300,9 @@ func (tx *Tx) DeleteStorage(relation string) error {
 		return err
 	}
 	delete(tx.stores, relation)
+	if tx.db != nil {
+		atomic.AddInt64(&tx.db.stats.storagesDeleted, 1)
+	}
 	return nil
 }
 
@@ -314,11 +372,19 @@ func (tx *Tx) Select(
 	body Query,
 	conditions ...Condition,
 ) (iter.Seq2[*Row, error], error) {
+	start := time.Now()
+	if tx.db != nil {
+		atomic.AddInt64(&tx.db.stats.queries, 1)
+	}
+
 	equals, ranges, exclusion, possible, err := parseConditions(conditions)
 	if err != nil {
 		return nil, err
 	}
 	if !possible {
+		if tx.db != nil {
+			atomic.AddInt64(&tx.db.stats.queryDuration, int64(time.Since(start)))
+		}
 		return func(yield func(*Row, error) bool) {}, nil
 	}
 	explored := make(map[bodyFilter]queryNode)
@@ -341,7 +407,27 @@ func (tx *Tx) Select(
 	for i := range rootNode.metadata().ColumnsCount {
 		cols[i] = true
 	}
-	return rootNode.Find(bestIndex, bestIndexRange, equals, ranges, exclusion, cols)
+
+	// Track index scan vs full scan
+	if tx.db != nil {
+		if bestIndex != 0 {
+			atomic.AddInt64(&tx.db.stats.indexScans, 1)
+		} else {
+			atomic.AddInt64(&tx.db.stats.fullScans, 1)
+		}
+		atomic.AddInt64(&tx.db.stats.queryDuration, int64(time.Since(start)))
+	}
+
+	result, err := rootNode.Find(bestIndex, bestIndexRange, equals, ranges, exclusion, cols)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap the iterator to count rows read
+	if tx.db != nil {
+		return tx.wrapIteratorWithStats(result), nil
+	}
+	return result, nil
 }
 
 func (tx *Tx) constructQueryGraph(
@@ -431,6 +517,10 @@ func (tx *Tx) constructQueryGraph(
 	case *JoinedQuery:
 		result := &joinedQueryNode{}
 		explored[bf] = result
+		// Count join for stats
+		if tx.db != nil {
+			atomic.AddInt64(&tx.db.stats.joins, 1)
+		}
 		equalsLeft, equalsRight, err := splitEquals(b.left.Metadata(), b.right.Metadata(), equals)
 		if err != nil {
 			return nil, err

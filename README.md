@@ -258,6 +258,69 @@ err = db.Update(func(tx *thunderdb.Tx) error {
 })
 ```
 
+### Database Statistics
+
+Thunderdb provides comprehensive statistics tracking for monitoring database performance and behavior. Statistics are thread-safe and can be accessed at any time.
+
+```go
+// Get a snapshot of current statistics
+stats := db.Stats()
+
+// Print human-readable summary
+fmt.Println(stats.String())
+
+// Access individual metrics
+fmt.Printf("Total queries: %d\n", stats.QueriesTotal)
+fmt.Printf("Index scans: %d, Full scans: %d\n", stats.IndexScansTotal, stats.FullScansTotal)
+fmt.Printf("Rows inserted: %d\n", stats.RowsInserted)
+fmt.Printf("Query time: %v\n", stats.QueryDuration)
+
+// Reset counters (useful for periodic reporting)
+db.ResetStats()
+```
+
+#### Available Metrics
+
+| Category | Metrics |
+|----------|---------|
+| **Transactions** | `ReadTxTotal`, `WriteTxTotal`, `TxCommitTotal`, `TxRollbackTotal`, `TxOpenCount` |
+| **Operations** | `RowsInserted`, `RowsUpdated`, `RowsDeleted`, `RowsRead` |
+| **Queries** | `QueriesTotal`, `JoinsTotal`, `IndexScansTotal`, `FullScansTotal` |
+| **Storage** | `StoragesCreated`, `StoragesDeleted` |
+| **Timing** | `TxDuration`, `QueryDuration`, `InsertDuration`, `UpdateDuration`, `DeleteDuration` |
+| **BoltDB** | `BoltDB` (full passthrough of underlying BoltDB stats) |
+
+#### Sample Output
+
+```
+ThunderDB Stats (opened 2026-01-25T10:30:00Z)
+--------------------------------------------------
+Transactions:
+  Read:       1,234    Write:      567
+  Commits:    560    Rollbacks:  7
+  Open:       0
+  Total Time: 2.345s
+
+Operations:
+  Inserted:   45,678    (total: 1.234s)
+  Updated:    2,345    (total: 0.456s)
+  Deleted:    123    (total: 0.089s)
+  Rows Read:  89,012
+
+Queries:
+  Total:      5,678    (total: 2.345s)
+  Joins:      234
+  Index Scans: 5,000   Full Scans: 678
+
+Storage:
+  Created:    12    Deleted:    2
+
+BoltDB:
+  Free Pages:    128    Pending Pages: 4
+  Free Alloc:    8.00 KB    Freelist Size: 1.00 KB
+  Open Read Tx:  0    Total Tx:      100
+```
+
 ## License
 
 See the [LICENSE](LICENSE) file for details.

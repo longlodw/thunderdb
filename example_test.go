@@ -3,6 +3,7 @@ package thunderdb_test
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/longlodw/thunderdb"
 )
@@ -308,4 +309,121 @@ func Example_recursive() {
 	// Output:
 	// Descendant of Alice: Bob (ID: 2)
 	// Descendant of Alice: Charlie (ID: 3)
+}
+
+// Example_stats demonstrates how to use the Stats API to monitor database
+// performance and behavior.
+func Example_stats() {
+	// Setup database
+	tmpfile, err := os.CreateTemp("", "thunder_example_stats_*.db")
+	if err != nil {
+		panic(err)
+	}
+	dbPath := tmpfile.Name()
+	tmpfile.Close()
+	defer os.Remove(dbPath)
+
+	db, err := thunderdb.OpenDB(dbPath, 0600, nil)
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	// Perform some operations
+	err = db.Update(func(tx *thunderdb.Tx) error {
+		err := tx.CreateStorage("products", 3, []thunderdb.IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: true},  // id
+			{ReferencedCols: []int{1}, IsUnique: false}, // category
+		})
+		if err != nil {
+			return err
+		}
+
+		// Insert some products
+		for i := 0; i < 100; i++ {
+			category := "electronics"
+			if i%2 == 0 {
+				category = "books"
+			}
+			err = tx.Insert("products", map[int]any{0: i, 1: category, 2: fmt.Sprintf("Product %d", i)})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Query with index (category lookup)
+	err = db.View(func(tx *thunderdb.Tx) error {
+		products, err := tx.StoredQuery("products")
+		if err != nil {
+			return err
+		}
+		results, err := tx.Select(products, thunderdb.Condition{
+			Field:    1, // category (indexed)
+			Operator: thunderdb.EQ,
+			Value:    "electronics",
+		})
+		if err != nil {
+			return err
+		}
+		count := 0
+		for _, err := range results {
+			if err != nil {
+				return err
+			}
+			count++
+		}
+		fmt.Printf("Found %d electronics products\n", count)
+		return nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Get statistics
+	stats := db.Stats()
+
+	// Print key metrics
+	fmt.Printf("Write transactions: %d\n", stats.WriteTxTotal)
+	fmt.Printf("Read transactions: %d\n", stats.ReadTxTotal)
+	fmt.Printf("Rows inserted: %d\n", stats.RowsInserted)
+	fmt.Printf("Queries executed: %d\n", stats.QueriesTotal)
+	fmt.Printf("Index scans: %d\n", stats.IndexScansTotal)
+	fmt.Printf("Rows read: %d\n", stats.RowsRead)
+
+	// Verify timing is tracked
+	if stats.InsertDuration > 0 {
+		fmt.Println("Insert timing tracked: yes")
+	}
+	if stats.QueryDuration > 0 {
+		fmt.Println("Query timing tracked: yes")
+	}
+
+	// Print the full stats summary (showing it works, but not checking exact output)
+	fullStats := stats.String()
+	if strings.Contains(fullStats, "ThunderDB Stats") {
+		fmt.Println("Full stats summary available: yes")
+	}
+
+	// Reset stats
+	db.ResetStats()
+	statsAfterReset := db.Stats()
+	fmt.Printf("Rows inserted after reset: %d\n", statsAfterReset.RowsInserted)
+
+	// Output:
+	// Found 50 electronics products
+	// Write transactions: 1
+	// Read transactions: 1
+	// Rows inserted: 100
+	// Queries executed: 1
+	// Index scans: 1
+	// Rows read: 50
+	// Insert timing tracked: yes
+	// Query timing tracked: yes
+	// Full stats summary available: yes
+	// Rows inserted after reset: 0
 }
