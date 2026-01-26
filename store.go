@@ -3,7 +3,6 @@ package thunderdb
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"iter"
 
 	"github.com/openkvlab/boltdb"
@@ -40,7 +39,7 @@ type Row struct {
 func (sr *Row) Get(idx int, v any) error {
 	vBytes, ok := sr.values[idx]
 	if !ok {
-		return ErrFieldNotFound(fmt.Sprintf("column %d", idx))
+		return ErrFieldNotFound(idx)
 	}
 	return orderedMaUn.Unmarshal(vBytes, v)
 }
@@ -160,7 +159,7 @@ func (s *storage) deleteIndexes(id []byte, values *map[int]*Value, skip map[uint
 			if v, ok := (*values)[j]; ok {
 				selectedValues = append(selectedValues, v)
 			} else {
-				return ErrFieldNotFound(fmt.Sprintf("column %d", j))
+				return ErrFieldNotFound(j)
 			}
 		}
 		vKey, err := ToKey(selectedValues...)
@@ -513,7 +512,7 @@ func (s *storage) insertIndexes(id []byte, values *map[int]*Value, skip map[uint
 			if v, ok := (*values)[j]; ok {
 				selectedValues = append(selectedValues, v)
 			} else {
-				return ErrFieldNotFound(fmt.Sprintf("column %d", j))
+				return ErrFieldNotFound(j)
 			}
 		}
 		vKey, err := ToKey(selectedValues...)
@@ -728,7 +727,7 @@ func (s *storage) Insert(values map[int]any) error {
 			if v, ok := boxedValues[j]; ok {
 				selectedValues = append(selectedValues, v)
 			} else {
-				return ErrFieldNotFound(fmt.Sprintf("column %d", j))
+				return ErrFieldNotFound(j)
 			}
 		}
 		vKey, err := ToKey(selectedValues...)

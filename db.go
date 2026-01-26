@@ -1,6 +1,7 @@
 package thunderdb
 
 import (
+	"io"
 	"os"
 	"sync/atomic"
 	"time"
@@ -249,4 +250,20 @@ func (d *DB) Stats() Stats {
 // This does not affect OpenedAt, TxOpenCount, or BoltDB stats.
 func (d *DB) ResetStats() {
 	d.stats.reset()
+}
+
+// Snapshot writes a consistent point-in-time copy of the entire database to w.
+//
+// The snapshot is taken within a read-only transaction, so it is safe to call
+// Snapshot while other goroutines are performing reads and writes.
+//
+// The method returns the number of bytes written to w.
+func (d *DB) Snapshot(w io.Writer) (int64, error) {
+	var n int64
+	err := d.db.View(func(tx *boltdb.Tx) error {
+		var err error
+		n, err = tx.WriteTo(w)
+		return err
+	})
+	return n, err
 }
