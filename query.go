@@ -662,7 +662,6 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 			// Constraints conflicted, no matches possible
 			return nil
 		}
-		// fmt.Printf("DEBUG: Join Left->Right. Row: %v. Ranges: %v\n", spew.Sdump(row.values), rightRanges)
 		bestIndexRight, bestRangesRight, err := n.right.metadata().bestIndex(rowRightEquals, rowRightRanges)
 		if err != nil {
 			return err
@@ -716,7 +715,6 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 			// Constraints conflicted, no matches possible
 			return nil
 		}
-		// fmt.Printf("DEBUG: Join Right->Left. Row: %v. Ranges: %v\n", spew.Sdump(row.values), leftRanges)
 		bestIndexLeft, bestRangesLeft, err := n.left.metadata().bestIndex(rowLeftEquals, rowLeftRanges)
 		cols := make(map[int]bool)
 		for k := range n.left.metadata().ColumnsCount {
@@ -735,7 +733,6 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 			if err != nil {
 				return err
 			}
-			// fmt.Printf("DEBUG: Join Match Found! LeftRow: %v\n", spew.Sdump(leftRow.values))
 			n.joinInto(joinedRow, leftRow, row)
 			// Propagate to JOIN's parents, not left's parents
 			for _, parent := range n.parents {
@@ -744,7 +741,6 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 				}
 			}
 		}
-		// fmt.Printf("DEBUG: Join Right->Left Found %d matches\n", count)
 	default:
 		panic("unknown child in joinedQueryNode.propagateToParents")
 	}
