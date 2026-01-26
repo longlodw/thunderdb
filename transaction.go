@@ -474,7 +474,7 @@ func (tx *Tx) constructQueryGraph(
 		if err != nil {
 			return nil, err
 		}
-		result := &headQueryNode{}
+		result := &datalogQueryNode{}
 		explored[bf] = result
 		children := make([]queryNode, 0, len(b.bodies))
 		for _, bbody := range b.bodies {
@@ -484,7 +484,7 @@ func (tx *Tx) constructQueryGraph(
 			}
 			children = append(children, childNode)
 		}
-		initHeadQueryNode(result, backingStorage, children)
+		initDatalogQueryNode(result, backingStorage, children)
 		return result, nil
 	case *ProjectedQuery:
 		result := &projectedQueryNode{}

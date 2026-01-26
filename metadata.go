@@ -2,7 +2,6 @@ package thunderdb
 
 import (
 	"bytes"
-	"fmt"
 )
 
 // Metadata describes the schema of a storage relation or query result.
@@ -128,7 +127,7 @@ func splitRanges(left, right *Metadata, ranges map[int]*Range) (map[int]*Range, 
 		} else if col-left.ColumnsCount < right.ColumnsCount {
 			rightRanges[col-left.ColumnsCount] = r
 		} else {
-			return nil, nil, ErrFieldNotFound(fmt.Sprintf("Column %d", col))
+			return nil, nil, ErrFieldNotFound(col)
 		}
 	}
 	return leftRanges, rightRanges, nil
@@ -143,7 +142,7 @@ func splitEquals(left, right *Metadata, equals map[int]*Value) (map[int]*Value, 
 		} else if col-left.ColumnsCount < right.ColumnsCount {
 			rightEquals[col-left.ColumnsCount] = v
 		} else {
-			return nil, nil, ErrFieldNotFound(fmt.Sprintf("Column %d", col))
+			return nil, nil, ErrFieldNotFound(col)
 		}
 	}
 	return leftEquals, rightEquals, nil
@@ -158,7 +157,7 @@ func splitCols(left, right *Metadata, cols map[int]bool) (map[int]bool, map[int]
 		} else if col-left.ColumnsCount < right.ColumnsCount {
 			rightCols[col-left.ColumnsCount] = true
 		} else {
-			return nil, nil, ErrFieldNotFound(fmt.Sprintf("Column %d", col))
+			return nil, nil, ErrFieldNotFound(col)
 		}
 	}
 	return leftCols, rightCols, nil
@@ -173,7 +172,7 @@ func splitExclusion(left, right *Metadata, exclusion map[int][]*Value) (map[int]
 		} else if col-left.ColumnsCount < right.ColumnsCount {
 			rightExclusion[col-left.ColumnsCount] = vals
 		} else {
-			return nil, nil, ErrFieldNotFound(fmt.Sprintf("Column %d", col))
+			return nil, nil, ErrFieldNotFound(col)
 		}
 	}
 	return leftExclusion, rightExclusion, nil

@@ -3,11 +3,9 @@ package thunderdb
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"iter"
 	"maps"
 	"slices"
-	// "github.com/davecgh/go-spew/spew"
 )
 
 type queryNode interface {
@@ -30,13 +28,13 @@ func (n *baseQueryNode) metadata() *Metadata {
 	return &n.metadataObj
 }
 
-type headQueryNode struct {
+type datalogQueryNode struct {
 	backing  *storage
 	children []queryNode
 	baseQueryNode
 }
 
-func initHeadQueryNode(result *headQueryNode, backing *storage, children []queryNode) {
+func initDatalogQueryNode(result *datalogQueryNode, backing *storage, children []queryNode) {
 	result.backing = backing
 	result.baseQueryNode.metadataObj = Metadata{
 		ColumnsCount: backing.metadata.ColumnsCount,
@@ -47,7 +45,7 @@ func initHeadQueryNode(result *headQueryNode, backing *storage, children []query
 	}
 }
 
-func (n *headQueryNode) Find(
+func (n *datalogQueryNode) Find(
 	mainIndex uint64,
 	indexRange *Range,
 	equals map[int]*Value,
@@ -58,13 +56,7 @@ func (n *headQueryNode) Find(
 	return n.backing.find(mainIndex, indexRange, equals, ranges, exclusion, cols)
 }
 
-func (n *headQueryNode) propagateToParents(row *Row, child queryNode) error {
-	/*
-		fmt.Printf("DEBUG: headQueryNode.propagateToParents %p. Parents: %d. Row: %v\n", n, len(n.parents), spew.Sdump(row.values))
-		for i, p := range n.parents {
-			fmt.Printf("DEBUG: Head Parent %d: %T %p\n", i, p, p)
-		}
-	*/
+func (n *datalogQueryNode) propagateToParents(row *Row, child queryNode) error {
 	values := make(map[int]any)
 	for k, val := range row.Iter() {
 		v, err := val.GetValue()
@@ -79,9 +71,6 @@ func (n *headQueryNode) propagateToParents(row *Row, child queryNode) error {
 		}
 		return err
 	}
-
-	// fmt.Printf("HeadNode %p stored: %v\n", n, values)
-
 	for _, parent := range n.parents {
 		if err := parent.propagateToParents(row, n); err != nil {
 			return err
@@ -215,7 +204,6 @@ func (n *joinedQueryNode) Find(
 					}
 					continue
 				}
-				// println("DEBUG: Join Find Right. MainIndex:", rightMainIndex, "MainRanges:", rightMainRanges)
 				rightSeq, err := n.right.Find(rightMainIndex, rightMainRanges, mergedRightEquals, mergedRightRanges, mergedRightExclusion, rightCols)
 				if err != nil {
 					if !yield(nil, err) {
@@ -743,9 +731,7 @@ func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
 			values: make(map[int][]byte),
 		}
 
-		count := 0
 		for leftRow, err := range leftSeq {
-			count++
 			if err != nil {
 				return err
 			}
@@ -808,7 +794,7 @@ func (n *projectedQueryNode) Find(
 	childCols := make(map[int]bool)
 	for k := range cols {
 		if k >= len(n.columns) {
-			return nil, ErrFieldNotFound(fmt.Sprintf("computed column %d", k))
+			return nil, ErrFieldNotFound(k)
 		}
 		childCols[n.columns[k]] = true
 	}
@@ -817,28 +803,28 @@ func (n *projectedQueryNode) Find(
 		if field < n.metadataObj.ColumnsCount {
 			childRanges[n.columns[field]] = r
 		} else {
-			return nil, ErrFieldNotFound(fmt.Sprintf("column %d", field))
+			return nil, ErrFieldNotFound(field)
 		}
 	}
 	childIndex := uint64(0)
 	refCols := ReferenceColumns(mainIndex)
 	for col := range refCols {
 		if col >= len(n.columns) {
-			return nil, ErrFieldNotFound(fmt.Sprintf("computed column %d", col))
+			return nil, ErrFieldNotFound(col)
 		}
 		childIndex |= 1 << uint64(n.columns[col])
 	}
 	childEquals := make(map[int]*Value)
 	for k, v := range equals {
 		if k >= len(n.columns) {
-			return nil, ErrFieldNotFound(fmt.Sprintf("computed column %d", k))
+			return nil, ErrFieldNotFound(k)
 		}
 		childEquals[n.columns[k]] = v
 	}
 	childExclusion := make(map[int][]*Value)
 	for k, vals := range exclusion {
 		if k >= len(n.columns) {
-			return nil, ErrFieldNotFound(fmt.Sprintf("computed column %d", k))
+			return nil, ErrFieldNotFound(k)
 		}
 		childVals := slices.Clone(vals)
 		childExclusion[n.columns[k]] = childVals
@@ -862,7 +848,7 @@ func (n *projectedQueryNode) Find(
 			clear(newRow.values)
 			for col := range cols {
 				if col >= len(n.columns) {
-					if !yield(nil, ErrFieldNotFound(fmt.Sprintf("column %d", col))) {
+					if !yield(nil, ErrFieldNotFound(col)) {
 						return
 					}
 					continue
@@ -884,7 +870,7 @@ func (n *projectedQueryNode) propagateToParents(row *Row, child queryNode) error
 		if val, ok := row.values[col]; ok {
 			parentRow.values[k] = val
 		} else {
-			return ErrFieldNotFound(fmt.Sprintf("column %d", col))
+			return ErrFieldNotFound(col)
 		}
 	}
 	for _, parent := range n.parents {

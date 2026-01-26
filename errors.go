@@ -147,10 +147,10 @@ func ErrUnsupportedOperator(op Op) error {
 	}
 }
 
-func ErrFieldNotFound(field string) error {
+func ErrFieldNotFound(field int) error {
 	return &ThunderError{
 		Code:    ErrCodeFieldNotFound,
-		Message: fmt.Sprintf("field not found: %s", field),
+		Message: fmt.Sprintf("field not found: %d", field),
 	}
 }
 
