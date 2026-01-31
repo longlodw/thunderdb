@@ -28,13 +28,13 @@ func (n *baseQueryNode) metadata() *Metadata {
 	return &n.metadataObj
 }
 
-type datalogQueryNode struct {
+type closureNode struct {
 	backing  *storage
 	children []queryNode
 	baseQueryNode
 }
 
-func initDatalogQueryNode(result *datalogQueryNode, backing *storage, children []queryNode) {
+func initClosureNode(result *closureNode, backing *storage, children []queryNode) {
 	result.backing = backing
 	result.baseQueryNode.metadataObj = Metadata{
 		ColumnsCount: backing.metadata.ColumnsCount,
@@ -45,7 +45,7 @@ func initDatalogQueryNode(result *datalogQueryNode, backing *storage, children [
 	}
 }
 
-func (n *datalogQueryNode) Find(
+func (n *closureNode) Find(
 	mainIndex uint64,
 	indexRange *Range,
 	equals map[int]*Value,
@@ -56,7 +56,7 @@ func (n *datalogQueryNode) Find(
 	return n.backing.find(mainIndex, indexRange, equals, ranges, exclusion, cols)
 }
 
-func (n *datalogQueryNode) propagateToParents(row *Row, child queryNode) error {
+func (n *closureNode) propagateToParents(row *Row, child queryNode) error {
 	values := make(map[int]any)
 	for k, val := range row.Iter() {
 		v, err := val.GetValue()

@@ -9,7 +9,7 @@ import "bytes"
 //   - StoredQuery: represents a stored relation
 //   - ProjectedQuery: represents a projection (column selection/reordering)
 //   - JoinedQuery: represents a join between two queries
-//   - DatalogQuery: represents a recursive/datalog query
+//   - Closure: represents a recursive/datalog query
 type Query interface {
 	// Project creates a new query that selects and reorders columns.
 	// The cols parameter specifies which columns to include by their indices.
@@ -26,17 +26,17 @@ type Query interface {
 	Metadata() *Metadata
 }
 
-// DatalogQuery represents a recursive (datalog-style) query. It allows defining
+// Closure represents a recursive (datalog-style) query. It allows defining
 // queries that reference themselves, enabling traversal of hierarchical data
 // structures like trees or graphs.
 //
-// A DatalogQuery must be bound to one or more body queries using Bind() before
+// A Closure must be bound to one or more body queries using ClosedUnder() before
 // it can be executed with Select().
 //
 // Example (finding all descendants in an org chart):
 //
 //	// Create recursive query with 2 columns: ancestor, descendant
-//	qPath, _ := thunderdb.NewDatalogQuery(2, []thunderdb.IndexInfo{
+//	qPath, _ := thunderdb.NewClosure(2, []thunderdb.IndexInfo{
 //	    {ReferencedCols: []int{0}, IsUnique: false},
 //	})
 //
@@ -50,19 +50,19 @@ type Query interface {
 //	recursiveProj, _ := joined.Project(2, 4)
 //
 //	// Bind both branches
-//	qPath.Bind(baseProj, recursiveProj)
-type DatalogQuery struct {
+//	qPath.ClosedUnder(baseProj, recursiveProj)
+type Closure struct {
 	bodies   []Query
 	metadata Metadata
 }
 
-// NewDatalogQuery creates a new recursive query with the specified number of
+// NewClosure creates a new recursive query with the specified number of
 // columns and index specifications. The query must be bound to body queries
-// using Bind() before execution.
+// using ClosedUnder() before execution.
 //
 // The maximum number of columns is 64.
-func NewDatalogQuery(colsCount int, indexInfos []IndexInfo) (*DatalogQuery, error) {
-	result := &DatalogQuery{}
+func NewClosure(colsCount int, indexInfos []IndexInfo) (*Closure, error) {
+	result := &Closure{}
 	if err := initStoredMetadata(&result.metadata, colsCount, indexInfos); err != nil {
 		return nil, err
 	}
@@ -70,24 +70,24 @@ func NewDatalogQuery(colsCount int, indexInfos []IndexInfo) (*DatalogQuery, erro
 }
 
 // Project creates a projected query selecting the specified columns.
-func (h *DatalogQuery) Project(cols ...int) (Query, error) {
+func (h *Closure) Project(cols ...int) (Query, error) {
 	return newProjectedQuery(h, cols)
 }
 
 // Join creates a joined query with another query.
-func (h *DatalogQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
+func (h *Closure) Join(other Query, conditions ...JoinOn) (Query, error) {
 	return newJoinedQuery(h, other, conditions)
 }
 
 // Metadata returns the query's metadata.
-func (h *DatalogQuery) Metadata() *Metadata {
+func (h *Closure) Metadata() *Metadata {
 	return &h.metadata
 }
 
-// Bind associates one or more body queries with this recursive query.
-// All body queries must have the same number of columns as the DatalogQuery.
+// ClosedUnder associates one or more body queries with this recursive query.
+// All body queries must have the same number of columns as the Closure.
 // At least one body should be non-recursive (base case) to ensure termination.
-func (h *DatalogQuery) Bind(bodies ...Query) error {
+func (h *Closure) ClosedUnder(bodies ...Query) error {
 	for _, body := range bodies {
 		if body.Metadata().ColumnsCount != h.metadata.ColumnsCount {
 			return ErrFieldCountMismatch(h.Metadata().ColumnsCount, body.Metadata().ColumnsCount)

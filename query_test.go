@@ -241,13 +241,13 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	headQuery, err := NewDatalogQuery(9, nil)
+	headQuery, err := NewClosure(9, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Bind both branches to head query
-	if err := headQuery.Bind(branch1, branch2); err != nil {
+	if err := headQuery.ClosedUnder(branch1, branch2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -357,7 +357,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// reach(X, Z) :- reach(X, Y), nodes(Y, Z).
 
 	// Reach schema: source(0), target(1)
-	qReach, err := NewDatalogQuery(2, []IndexInfo{
+	qReach, err := NewClosure(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {
@@ -394,8 +394,8 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Bind the bodies to the DatalogQuery
-	if err := qReach.Bind(baseProj, recProj); err != nil {
+	// Bind the bodies to the Closure
+	if err := qReach.ClosedUnder(baseProj, recProj); err != nil {
 		t.Fatal(err)
 	}
 
@@ -427,7 +427,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Standard Datalog usually implies Set semantics, so 2 results if uniqueness is handled.
 	// If Bag semantics (or just naive loop), it could be infinite, but we have a timeout.
 	// Since we defined a Unique Index on qReach (source, target), duplicates should be suppressed
-	// by the backing storage of the DatalogQuery node if implemented correctly.
+	// by the backing storage of the Closure node if implemented correctly.
 
 	if count < 2 {
 		t.Errorf("Expected at least 2 reachable paths, got %d. Results: %v", count, results)
@@ -514,7 +514,7 @@ func TestQuery_Recursive(t *testing.T) {
 	//                         path(a, c) :- edge(a, b), path(b, c).
 
 	// Path schema: ancestor(0), descendant(1)
-	qPath, err := NewDatalogQuery(2, []IndexInfo{
+	qPath, err := NewClosure(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {
@@ -553,7 +553,7 @@ func TestQuery_Recursive(t *testing.T) {
 	}
 
 	// Bind bodies
-	if err := qPath.Bind(baseProj, recProj); err != nil {
+	if err := qPath.ClosedUnder(baseProj, recProj); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1658,14 +1658,14 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 	// odd_reach(X, Y) :- edges(X, Z), even_reach(Z, Y).
 
 	// Schema: from(0), to(1)
-	qEvenReach, err := NewDatalogQuery(2, []IndexInfo{
+	qEvenReach, err := NewClosure(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	qOddReach, err := NewDatalogQuery(2, []IndexInfo{
+	qOddReach, err := NewClosure(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {
@@ -1705,10 +1705,10 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 	}
 
 	// Bind bodies to create mutual recursion
-	if err := qEvenReach.Bind(evenBase, evenRecProj); err != nil {
+	if err := qEvenReach.ClosedUnder(evenBase, evenRecProj); err != nil {
 		t.Fatal(err)
 	}
-	if err := qOddReach.Bind(oddRecProj); err != nil {
+	if err := qOddReach.ClosedUnder(oddRecProj); err != nil {
 		t.Fatal(err)
 	}
 

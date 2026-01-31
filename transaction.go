@@ -342,7 +342,7 @@ func (tx *Tx) Metadata(relation string) (*Metadata, error) {
 }
 
 // Select executes a query and returns an iterator over the matching rows.
-// The query can be a StoredQuery, ProjectedQuery, JoinedQuery, or DatalogQuery
+// The query can be a StoredQuery, ProjectedQuery, JoinedQuery, or Closure
 // (for recursive/datalog queries).
 //
 // Conditions filter the results using field comparisons. Multiple conditions
@@ -451,7 +451,7 @@ func (tx *Tx) constructQueryGraph(
 		return node, nil
 	}
 	switch b := body.(type) {
-	case *DatalogQuery:
+	case *Closure:
 		tempTx, err := tx.ensureTempTx()
 		if err != nil {
 			return nil, err
@@ -474,7 +474,7 @@ func (tx *Tx) constructQueryGraph(
 		if err != nil {
 			return nil, err
 		}
-		result := &datalogQueryNode{}
+		result := &closureNode{}
 		explored[bf] = result
 		children := make([]queryNode, 0, len(b.bodies))
 		for _, bbody := range b.bodies {
@@ -484,7 +484,7 @@ func (tx *Tx) constructQueryGraph(
 			}
 			children = append(children, childNode)
 		}
-		initDatalogQueryNode(result, backingStorage, children)
+		initClosureNode(result, backingStorage, children)
 		return result, nil
 	case *ProjectedQuery:
 		result := &projectedQueryNode{}

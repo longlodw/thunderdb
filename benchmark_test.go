@@ -367,7 +367,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		chain, _ := readTx.StoredQuery("large_chain")
 
 		// Query: reach(src, dst)
-		qReach, _ := NewDatalogQuery(2, []IndexInfo{
+		qReach, _ := NewClosure(2, []IndexInfo{
 			{ReferencedCols: []int{0, 1}, IsUnique: true},
 		})
 
@@ -387,7 +387,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		// Project: reach.src(0), chain.dst(3)
 		rec, _ := join.Project(0, 3)
 
-		qReach.Bind(base, rec)
+		qReach.ClosedUnder(base, rec)
 
 		b.ResetTimer()
 		for b.Loop() {
@@ -440,7 +440,7 @@ func BenchmarkRecursion(b *testing.B) {
 	chain, _ := readTx.StoredQuery("chain")
 
 	// reach(x, y)
-	qReach, _ := NewDatalogQuery(2, []IndexInfo{
+	qReach, _ := NewClosure(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 
@@ -453,7 +453,7 @@ func BenchmarkRecursion(b *testing.B) {
 	// Project: 0, 3
 	rec, _ := join.Project(0, 3)
 
-	qReach.Bind(base, rec)
+	qReach.ClosedUnder(base, rec)
 
 	b.ResetTimer()
 	for b.Loop() {
@@ -515,7 +515,7 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 	chain, _ := readTx.StoredQuery("chain")
 
 	// reach(x, y)
-	qReach, _ := NewDatalogQuery(2, []IndexInfo{
+	qReach, _ := NewClosure(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 
@@ -523,7 +523,7 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 	join, _ := qReach.Join(chain, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
 	rec, _ := join.Project(0, 3)
 
-	qReach.Bind(base, rec)
+	qReach.ClosedUnder(base, rec)
 
 	b.ResetTimer()
 	for b.Loop() {
