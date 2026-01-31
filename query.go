@@ -93,19 +93,15 @@ func (n *closureFilterNode) propagateToParents(row *Row, child queryNode) error 
 }
 
 type closureNode struct {
-	backing  *storage
-	children []queryNode
+	backing *storage
 	baseQueryNode
 }
 
-func initClosureNode(result *closureNode, backing *storage, children []queryNode) {
+func initClosureNode(result *closureNode, backing *storage) {
 	result.backing = backing
 	result.baseQueryNode.metadataObj = Metadata{
 		ColumnsCount: backing.metadata.ColumnsCount,
 		Indexes:      backing.metadata.Indexes,
-	}
-	for _, child := range children {
-		child.AddParent(result)
 	}
 }
 
@@ -817,7 +813,14 @@ type projectedQueryNode struct {
 	baseQueryNode
 }
 
-func initProjectedQueryNode(result *projectedQueryNode, child queryNode, columns []int) {
+func initProjectedQueryNode(result *projectedQueryNode, child queryNode, columns []int) error {
+	// Validate that all projected columns exist in the child
+	childMeta := child.metadata()
+	for _, col := range columns {
+		if col < 0 || col >= childMeta.ColumnsCount {
+			return ErrFieldNotFound(col)
+		}
+	}
 	result.child = child
 	result.columns = columns
 	childToResultColumnMap := make(map[int][]int)
@@ -825,7 +828,7 @@ func initProjectedQueryNode(result *projectedQueryNode, child queryNode, columns
 		childToResultColumnMap[col] = append(childToResultColumnMap[col], i)
 	}
 	indexes := make(map[uint64]bool)
-	for idx, isUnique := range child.metadata().Indexes {
+	for idx, isUnique := range childMeta.Indexes {
 		var projectedIdx uint64 = 0
 		refCols := ReferenceColumns(idx)
 		for col := range refCols {
@@ -841,6 +844,7 @@ func initProjectedQueryNode(result *projectedQueryNode, child queryNode, columns
 		Indexes:      indexes,
 	}
 	child.AddParent(result)
+	return nil
 }
 
 func (n *projectedQueryNode) Find(

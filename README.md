@@ -198,7 +198,7 @@ err = db.Update(func(tx *thunderdb.Tx) error {
 
     // Create a recursive query for path traversal
     // Schema: 0=ancestor, 1=descendant
-    qPath, err := thunderdb.NewClosure(2, []thunderdb.IndexInfo{
+    qPath, err := tx.ClosureQuery(2, []thunderdb.IndexInfo{
         {ReferencedCols: []int{0}, IsUnique: false}, // ancestor
         {ReferencedCols: []int{1}, IsUnique: false}, // descendant
     })

@@ -192,7 +192,7 @@ func (tx *Tx) CreateStorage(
 //	})
 func (tx *Tx) Insert(relation string, value map[int]any) error {
 	start := time.Now()
-	s, err := tx.loadStorage(relation, false)
+	s, err := tx.loadStorage(relation)
 	if err != nil {
 		return err
 	}
@@ -206,19 +206,7 @@ func (tx *Tx) Insert(relation string, value map[int]any) error {
 	return err
 }
 
-func (tx *Tx) loadStorage(relation string, isTemp bool) (*storage, error) {
-	if isTemp {
-		s, ok := tx.tempStores[tx.tempTableID]
-		if ok {
-			return s, nil
-		}
-		s, err := loadStorage(tx.tempTx, relation)
-		if err != nil {
-			return nil, err
-		}
-		tx.tempStores[tx.tempTableID] = s
-		return s, nil
-	}
+func (tx *Tx) loadStorage(relation string) (*storage, error) {
 	s, ok := tx.stores[relation]
 	if ok {
 		return s, nil
@@ -254,7 +242,7 @@ func (tx *Tx) Delete(
 	if !possible {
 		return nil
 	}
-	s, err := tx.loadStorage(relation, false)
+	s, err := tx.loadStorage(relation)
 	if err != nil {
 		return err
 	}
@@ -293,7 +281,7 @@ func (tx *Tx) Update(
 	if !possible {
 		return nil
 	}
-	s, err := tx.loadStorage(relation, false)
+	s, err := tx.loadStorage(relation)
 	if err != nil {
 		return err
 	}
@@ -355,7 +343,6 @@ func (tx *Tx) ClosureQuery(colsCount int, indexInfos []IndexInfo) (*Closure, err
 	result := &Closure{
 		storageIdx: tx.tempTableID,
 	}
-	tx.tempTableID++
 	indexInfos = append(indexInfos, UniqueAllCols(colsCount))
 	if err := initStoredMetadata(&result.metadata, colsCount, indexInfos); err != nil {
 		return nil, err
@@ -378,6 +365,7 @@ func (tx *Tx) ClosureQuery(colsCount int, indexInfos []IndexInfo) (*Closure, err
 		return nil, err
 	}
 	tx.tempStores[result.storageIdx] = backingStorage
+	tx.tempTableID++
 	return result, nil
 }
 
@@ -503,16 +491,26 @@ func (tx *Tx) constructQueryGraph(
 	switch b := body.(type) {
 	case *Closure:
 		result := &closureFilterNode{}
-		explored[bf] = result
 		backingBf := bodyFilter{
 			body:   b,
 			filter: "",
 		}
 		resultBackingNode, ok := explored[backingBf]
 		if !ok {
+			// Create and immediately initialize the closure node's metadata
+			// before processing children, so recursive references see valid metadata
 			resultBackingNode = &closureNode{}
+			backingStorage, exist := tx.tempStores[b.storageIdx]
+			if !exist {
+				panic(fmt.Sprintf("backing storage for closure with temp ID %d not found", b.storageIdx))
+			}
+			// Initialize metadata immediately
+			initClosureNode(resultBackingNode.(*closureNode), backingStorage)
 			explored[backingBf] = resultBackingNode
 		}
+		// Initialize the closureFilterNode's metadata early, before processing children
+		initClosureFilterNode(result, resultBackingNode.(*closureNode), equals, ranges, exclusion)
+		explored[bf] = result
 		children := make([]queryNode, 0, len(b.bodies))
 		for _, bbody := range b.bodies {
 			childNode, err := tx.constructQueryGraph(explored, baseNodes, bbody, equals, ranges, exclusion, false)
@@ -522,21 +520,16 @@ func (tx *Tx) constructQueryGraph(
 			children = append(children, childNode)
 		}
 		if ok {
-			resultBackingNode.(*closureNode).children = append(resultBackingNode.(*closureNode).children, children...)
 			for _, child := range children {
 				child.AddParent(resultBackingNode)
 			}
 		} else {
-			backingNameBytes := make([]byte, 8)
-			binary.BigEndian.PutUint64(backingNameBytes, b.storageIdx)
-			backingName := string(backingNameBytes)
-			backingStorage, err := tx.loadStorage(backingName, true)
-			if err != nil {
-				return nil, err
+			// Add parent relationships for newly created node
+			for _, child := range children {
+				child.AddParent(resultBackingNode)
 			}
-			initClosureNode(resultBackingNode.(*closureNode), backingStorage, children)
 		}
-		initClosureFilterNode(result, resultBackingNode.(*closureNode), equals, ranges, exclusion)
+		resultBackingNode.AddParent(result)
 		return result, nil
 	case *ProjectedQuery:
 		result := &projectedQueryNode{}
@@ -564,7 +557,9 @@ func (tx *Tx) constructQueryGraph(
 		if err != nil {
 			return nil, err
 		}
-		initProjectedQueryNode(result, childNode, b.cols)
+		if err := initProjectedQueryNode(result, childNode, b.cols); err != nil {
+			return nil, err
+		}
 		return result, nil
 	case *JoinedQuery:
 		result := &joinedQueryNode{}

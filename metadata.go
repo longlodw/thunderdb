@@ -53,6 +53,12 @@ func initProjectedMetadata(result, child *Metadata, cols []int) error {
 	if len(cols) > 64 {
 		return ErrColumnCountExceeded64(len(cols))
 	}
+	// Validate that all projected columns exist in the child
+	for _, col := range cols {
+		if col < 0 || col >= child.ColumnsCount {
+			return ErrFieldNotFound(col)
+		}
+	}
 	indexes := make(map[uint64]bool)
 	childToResultColumnMap := make(map[int][]int)
 	for i, col := range cols {
