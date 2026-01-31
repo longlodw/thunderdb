@@ -50,6 +50,8 @@ const (
 	ErrCodeInvalidColumnReference
 	// ErrCodeInvalidEncoding indicates data has invalid encoding.
 	ErrCodeInvalidEncoding
+	// ErrCodeTooManyClosures indicates too many closures were created in a transaction.
+	ErrCodeTooManyClosures
 )
 
 // Error returns a human-readable description of the error code.
@@ -235,6 +237,13 @@ func ErrInvalidEncoding(detail string) error {
 	return &ThunderError{
 		Code:    ErrCodeInvalidEncoding,
 		Message: fmt.Sprintf("invalid encoding: %s", detail),
+	}
+}
+
+func ErrTooManyClosures() error {
+	return &ThunderError{
+		Code:    ErrCodeTooManyClosures,
+		Message: fmt.Sprintf("too many closures created in transaction"),
 	}
 }
 

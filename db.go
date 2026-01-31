@@ -86,10 +86,11 @@ func (d *DB) Begin(writable bool) (*Tx, error) {
 	atomic.AddInt64(&d.stats.openTx, 1)
 
 	return &Tx{
-		tx:        tx,
-		stores:    make(map[string]*storage),
-		db:        d,
-		startTime: time.Now(),
+		tx:         tx,
+		stores:     make(map[string]*storage),
+		db:         d,
+		startTime:  time.Now(),
+		tempStores: make(map[uint64]*storage),
 	}, nil
 }
 

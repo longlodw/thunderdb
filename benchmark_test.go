@@ -367,7 +367,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		chain, _ := readTx.StoredQuery("large_chain")
 
 		// Query: reach(src, dst)
-		qReach, _ := NewClosure(2, []IndexInfo{
+		qReach, _ := tx.ClosureQuery(2, []IndexInfo{
 			{ReferencedCols: []int{0, 1}, IsUnique: true},
 		})
 
@@ -440,7 +440,7 @@ func BenchmarkRecursion(b *testing.B) {
 	chain, _ := readTx.StoredQuery("chain")
 
 	// reach(x, y)
-	qReach, _ := NewClosure(2, []IndexInfo{
+	qReach, _ := tx.ClosureQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 
@@ -515,7 +515,7 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 	chain, _ := readTx.StoredQuery("chain")
 
 	// reach(x, y)
-	qReach, _ := NewClosure(2, []IndexInfo{
+	qReach, _ := tx.ClosureQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 

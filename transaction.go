@@ -1,6 +1,7 @@
 package thunderdb
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"iter"
@@ -30,8 +31,10 @@ type Tx struct {
 	tempFilePath string
 	managed      bool
 	stores       map[string]*storage
-	db           *DB       // Reference to parent DB for stats
-	startTime    time.Time // Transaction start time for duration tracking
+	db           *DB                 // Reference to parent DB for stats
+	startTime    time.Time           // Transaction start time for duration tracking
+	tempTableID  uint64              // Counter for temporary table names
+	tempStores   map[uint64]*storage // Cache for temporary storages
 }
 
 // Commit writes all changes to disk and closes the transaction.
@@ -166,9 +169,6 @@ func (tx *Tx) CreateStorage(
 	if err := initStoredMetadata(&metadataObj, columnCount, indexInfos); err != nil {
 		return err
 	}
-	if err := initStoredMetadata(&metadataObj, columnCount, indexInfos); err != nil {
-		return err
-	}
 	if _, err := newStorage(tx.tx, relation, metadataObj.ColumnsCount, metadataObj.Indexes); err != nil {
 		return err
 	}
@@ -192,7 +192,7 @@ func (tx *Tx) CreateStorage(
 //	})
 func (tx *Tx) Insert(relation string, value map[int]any) error {
 	start := time.Now()
-	s, err := tx.loadStorage(relation)
+	s, err := tx.loadStorage(relation, false)
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,19 @@ func (tx *Tx) Insert(relation string, value map[int]any) error {
 	return err
 }
 
-func (tx *Tx) loadStorage(relation string) (*storage, error) {
+func (tx *Tx) loadStorage(relation string, isTemp bool) (*storage, error) {
+	if isTemp {
+		s, ok := tx.tempStores[tx.tempTableID]
+		if ok {
+			return s, nil
+		}
+		s, err := loadStorage(tx.tempTx, relation)
+		if err != nil {
+			return nil, err
+		}
+		tx.tempStores[tx.tempTableID] = s
+		return s, nil
+	}
 	s, ok := tx.stores[relation]
 	if ok {
 		return s, nil
@@ -242,7 +254,7 @@ func (tx *Tx) Delete(
 	if !possible {
 		return nil
 	}
-	s, err := tx.loadStorage(relation)
+	s, err := tx.loadStorage(relation, false)
 	if err != nil {
 		return err
 	}
@@ -281,7 +293,7 @@ func (tx *Tx) Update(
 	if !possible {
 		return nil
 	}
-	s, err := tx.loadStorage(relation)
+	s, err := tx.loadStorage(relation, false)
 	if err != nil {
 		return err
 	}
@@ -329,6 +341,44 @@ func (tx *Tx) StoredQuery(name string) (*StoredQuery, error) {
 		storageName: name,
 		metadata:    metadataObj,
 	}, nil
+}
+
+// ClosureQuery creates a new recursive query with the specified number of
+// columns and index specifications. The query must be bound to body queries
+// using ClosedUnder() before execution.
+//
+// The maximum number of columns is 64.
+func (tx *Tx) ClosureQuery(colsCount int, indexInfos []IndexInfo) (*Closure, error) {
+	if tx.tempTableID == ^uint64(0) {
+		return nil, ErrTooManyClosures()
+	}
+	result := &Closure{
+		storageIdx: tx.tempTableID,
+	}
+	tx.tempTableID++
+	indexInfos = append(indexInfos, UniqueAllCols(colsCount))
+	if err := initStoredMetadata(&result.metadata, colsCount, indexInfos); err != nil {
+		return nil, err
+	}
+	tempTx, err := tx.ensureTempTx()
+	if err != nil {
+		return nil, err
+	}
+
+	backingNameBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(backingNameBytes, result.storageIdx)
+	backingName := string(backingNameBytes)
+	backingStorage, err := newStorage(
+		tempTx,
+		backingName,
+		result.Metadata().ColumnsCount,
+		result.Metadata().Indexes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	tx.tempStores[result.storageIdx] = backingStorage
+	return result, nil
 }
 
 // Metadata returns the metadata for a stored relation, including column count
@@ -452,30 +502,17 @@ func (tx *Tx) constructQueryGraph(
 	}
 	switch b := body.(type) {
 	case *Closure:
-		tempTx, err := tx.ensureTempTx()
-		if err != nil {
-			return nil, err
-		}
-		allBacking := uint64(0)
-		for i := range b.Metadata().ColumnsCount {
-			allBacking |= (1 << uint64(i))
-		}
-		backingName := fmt.Sprintf("head_backing_%p_%s", b, rangesStr)
-		indexes := maps.Clone(b.Metadata().Indexes)
-		indexes[allBacking] = true
-		// fmt.Printf("DEBUG: constructQueryGraph Head NEW for %p. BackingName: %s\n", b, backingName)
-
-		backingStorage, err := newStorage(
-			tempTx,
-			backingName,
-			b.Metadata().ColumnsCount,
-			indexes,
-		)
-		if err != nil {
-			return nil, err
-		}
-		result := &closureNode{}
+		result := &closureFilterNode{}
 		explored[bf] = result
+		backingBf := bodyFilter{
+			body:   b,
+			filter: "",
+		}
+		resultBackingNode, ok := explored[backingBf]
+		if !ok {
+			resultBackingNode = &closureNode{}
+			explored[backingBf] = resultBackingNode
+		}
 		children := make([]queryNode, 0, len(b.bodies))
 		for _, bbody := range b.bodies {
 			childNode, err := tx.constructQueryGraph(explored, baseNodes, bbody, equals, ranges, exclusion, false)
@@ -484,7 +521,22 @@ func (tx *Tx) constructQueryGraph(
 			}
 			children = append(children, childNode)
 		}
-		initClosureNode(result, backingStorage, children)
+		if ok {
+			resultBackingNode.(*closureNode).children = append(resultBackingNode.(*closureNode).children, children...)
+			for _, child := range children {
+				child.AddParent(resultBackingNode)
+			}
+		} else {
+			backingNameBytes := make([]byte, 8)
+			binary.BigEndian.PutUint64(backingNameBytes, b.storageIdx)
+			backingName := string(backingNameBytes)
+			backingStorage, err := tx.loadStorage(backingName, true)
+			if err != nil {
+				return nil, err
+			}
+			initClosureNode(resultBackingNode.(*closureNode), backingStorage, children)
+		}
+		initClosureFilterNode(result, resultBackingNode.(*closureNode), equals, ranges, exclusion)
 		return result, nil
 	case *ProjectedQuery:
 		result := &projectedQueryNode{}

@@ -231,7 +231,7 @@ func Example_recursive() {
 		// Create a recursive query named "path"
 		// Schema: ancestor, descendant
 		// recursive=true
-		qPath, err := thunderdb.NewClosure(2, []thunderdb.IndexInfo{
+		qPath, err := tx.ClosureQuery(2, []thunderdb.IndexInfo{
 			{ReferencedCols: []int{0}, IsUnique: false}, // ancestor
 			{ReferencedCols: []int{1}, IsUnique: false}, // descendant
 		})

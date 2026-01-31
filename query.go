@@ -28,6 +28,70 @@ func (n *baseQueryNode) metadata() *Metadata {
 	return &n.metadataObj
 }
 
+type closureFilterNode struct {
+	equals    map[int]*Value
+	ranges    map[int]*Range
+	exclusion map[int][]*Value
+	child     *closureNode
+	baseQueryNode
+}
+
+func initClosureFilterNode(result *closureFilterNode, child *closureNode, equals map[int]*Value, ranges map[int]*Range, exclusion map[int][]*Value) {
+	result.child = child
+	result.equals = equals
+	result.ranges = ranges
+	result.exclusion = exclusion
+	child.AddParent(result)
+	result.baseQueryNode.metadataObj = Metadata{
+		ColumnsCount: child.metadataObj.ColumnsCount,
+		Indexes:      child.metadataObj.Indexes,
+	}
+}
+
+func (n *closureFilterNode) Find(
+	mainIndex uint64,
+	indexRange *Range,
+	equals map[int]*Value,
+	ranges map[int]*Range,
+	exclusion map[int][]*Value,
+	cols map[int]bool,
+) (iter.Seq2[*Row, error], error) {
+	mergedEquals := make(map[int]*Value)
+	mergedRanges := make(map[int]*Range)
+	mergedExclusion := make(map[int][]*Value)
+	possible, err := mergeEquals(&mergedEquals, n.equals, equals)
+	if err != nil {
+		return nil, err
+	}
+	if !possible {
+		return func(func(*Row, error) bool) {
+		}, nil
+	}
+	if err := MergeRangesMap(&mergedRanges, n.ranges, ranges); err != nil {
+		return nil, err
+	}
+	mergeNotEquals(&mergedExclusion, n.exclusion, exclusion)
+	return n.child.Find(mainIndex, indexRange, mergedEquals, mergedRanges, mergedExclusion, cols)
+}
+
+func (n *closureFilterNode) propagateToParents(row *Row, child queryNode) error {
+	// check if row matches the filter
+	vals := maps.Collect(row.Iter())
+	matches, err := inRanges(vals, n.equals, n.ranges, n.exclusion)
+	if err != nil {
+		return err
+	}
+	if !matches {
+		return nil
+	}
+	for _, parent := range n.parents {
+		if err := parent.propagateToParents(row, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type closureNode struct {
 	backing  *storage
 	children []queryNode

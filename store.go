@@ -227,7 +227,7 @@ func (s *storage) scan(
 				if prev == nil {
 					return true
 				}
-				ok, err := s.inRanges(&vals, equals, ranges, excludes)
+				ok, err := inRanges(vals, equals, ranges, excludes)
 				if err != nil {
 					return yield(nil, err)
 				}
@@ -385,7 +385,7 @@ func (s *storage) scan(
 					}
 				}
 
-				ok, err := s.inRanges(&vals, equals, ranges, excludes)
+				ok, err := inRanges(vals, equals, ranges, excludes)
 				if err != nil {
 					yield(nil, err)
 					return
@@ -623,77 +623,6 @@ func (s *storage) find(
 			}
 		}
 	}, nil
-}
-
-func (s *storage) inRanges(vals *map[int]*Value, equals map[int]*Value, ranges map[int]*Range, exclusions map[int][]*Value) (bool, error) {
-	comparableBytesCache := make(map[int][]byte)
-	for idx, val := range equals {
-		var kBytes []byte
-		var err error
-		// check cache
-		if cached, ok := comparableBytesCache[idx]; ok {
-			kBytes = cached
-		} else {
-			// Get tuple-encoded bytes for this column's value
-			kBytes, err = ToKey((*vals)[idx])
-			if err != nil {
-				return false, err
-			}
-			comparableBytesCache[idx] = kBytes
-		}
-		eqBytes, err := val.GetRaw()
-		if err != nil {
-			return false, err
-		}
-		if !bytes.Equal(kBytes, eqBytes) {
-			return false, nil
-		}
-	}
-	for idx, kr := range ranges {
-		var kBytes []byte
-		var err error
-		// check cache
-		if cached, ok := comparableBytesCache[idx]; ok {
-			kBytes = cached
-		} else {
-			// Get tuple-encoded bytes for this column's value
-			kBytes, err = ToKey((*vals)[idx])
-			if err != nil {
-				return false, err
-			}
-			comparableBytesCache[idx] = kBytes
-		}
-		if con, err := kr.ContainsBytes(kBytes); err != nil {
-			return false, err
-		} else if !con {
-			return false, nil
-		}
-	}
-	for idx, exList := range exclusions {
-		var kBytes []byte
-		var err error
-		// check cache
-		if cached, ok := comparableBytesCache[idx]; ok {
-			kBytes = cached
-		} else {
-			// Get tuple-encoded bytes for this column's value
-			kBytes, err = ToKey((*vals)[idx])
-			if err != nil {
-				return false, err
-			}
-			comparableBytesCache[idx] = kBytes
-		}
-		for _, ex := range exList {
-			rawEx, err := ex.GetRaw()
-			if err != nil {
-				return false, err
-			}
-			if bytes.Equal(kBytes, rawEx) {
-				return false, nil
-			}
-		}
-	}
-	return true, nil
 }
 
 func (s *storage) Insert(values map[int]any) error {

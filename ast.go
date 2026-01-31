@@ -36,7 +36,7 @@ type Query interface {
 // Example (finding all descendants in an org chart):
 //
 //	// Create recursive query with 2 columns: ancestor, descendant
-//	qPath, _ := thunderdb.NewClosure(2, []thunderdb.IndexInfo{
+//	qPath, _ := tx.ClosureQuery(2, []thunderdb.IndexInfo{
 //	    {ReferencedCols: []int{0}, IsUnique: false},
 //	})
 //
@@ -52,21 +52,9 @@ type Query interface {
 //	// Bind both branches
 //	qPath.ClosedUnder(baseProj, recursiveProj)
 type Closure struct {
-	bodies   []Query
-	metadata Metadata
-}
-
-// NewClosure creates a new recursive query with the specified number of
-// columns and index specifications. The query must be bound to body queries
-// using ClosedUnder() before execution.
-//
-// The maximum number of columns is 64.
-func NewClosure(colsCount int, indexInfos []IndexInfo) (*Closure, error) {
-	result := &Closure{}
-	if err := initStoredMetadata(&result.metadata, colsCount, indexInfos); err != nil {
-		return nil, err
-	}
-	return result, nil
+	bodies     []Query
+	metadata   Metadata
+	storageIdx uint64
 }
 
 // Project creates a projected query selecting the specified columns.
@@ -245,6 +233,46 @@ type IndexInfo struct {
 	// IsUnique indicates whether this index enforces a uniqueness constraint.
 	// If true, no two rows can have the same values for the indexed columns.
 	IsUnique bool
+}
+
+// Unique creates a unique index on the specified columns.
+func Unique(cols ...int) IndexInfo {
+	return IndexInfo{
+		ReferencedCols: cols,
+		IsUnique:       true,
+	}
+}
+
+// Index creates a non-unique index on the specified columns.
+func Index(cols ...int) IndexInfo {
+	return IndexInfo{
+		ReferencedCols: cols,
+		IsUnique:       false,
+	}
+}
+
+// IndexAllCols creates a non-unique index on all columns of the relation.
+func IndexAllCols(count int) IndexInfo {
+	cols := make([]int, count)
+	for i := 0; i < count; i++ {
+		cols[i] = i
+	}
+	return IndexInfo{
+		ReferencedCols: cols,
+		IsUnique:       false,
+	}
+}
+
+// UniqueAllCols creates a unique index on all columns of the relation.
+func UniqueAllCols(count int) IndexInfo {
+	cols := make([]int, count)
+	for i := 0; i < count; i++ {
+		cols[i] = i
+	}
+	return IndexInfo{
+		ReferencedCols: cols,
+		IsUnique:       true,
+	}
 }
 
 // Condition specifies a filter condition for Select, Delete, or Update operations.

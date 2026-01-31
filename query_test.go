@@ -241,7 +241,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	headQuery, err := NewClosure(9, nil)
+	headQuery, err := tx.ClosureQuery(9, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// reach(X, Z) :- reach(X, Y), nodes(Y, Z).
 
 	// Reach schema: source(0), target(1)
-	qReach, err := NewClosure(2, []IndexInfo{
+	qReach, err := tx.ClosureQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {
@@ -514,7 +514,7 @@ func TestQuery_Recursive(t *testing.T) {
 	//                         path(a, c) :- edge(a, b), path(b, c).
 
 	// Path schema: ancestor(0), descendant(1)
-	qPath, err := NewClosure(2, []IndexInfo{
+	qPath, err := tx.ClosureQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {
@@ -1658,14 +1658,14 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 	// odd_reach(X, Y) :- edges(X, Z), even_reach(Z, Y).
 
 	// Schema: from(0), to(1)
-	qEvenReach, err := NewClosure(2, []IndexInfo{
+	qEvenReach, err := tx.ClosureQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	qOddReach, err := NewClosure(2, []IndexInfo{
+	qOddReach, err := tx.ClosureQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
 	})
 	if err != nil {
