@@ -255,9 +255,33 @@ func (d *DB) ResetStats() {
 // Snapshot writes a consistent point-in-time copy of the entire database to w.
 //
 // The snapshot is taken within a read-only transaction, so it is safe to call
-// Snapshot while other goroutines are performing reads and writes.
+// Snapshot while other goroutines are performing reads and writes. The snapshot
+// reflects the database state at the moment the internal read transaction begins.
 //
-// The method returns the number of bytes written to w.
+// The snapshot produces a fully functional database file that can be opened
+// directly with OpenDB. This makes it suitable for:
+//   - Creating backups to local files or remote storage
+//   - Initializing replicas or test databases
+//   - Point-in-time recovery
+//
+// The writer can be any io.Writer implementation, including files, network
+// connections, compression streams, or cloud storage writers.
+//
+// Returns the number of bytes written to w.
+//
+// Example:
+//
+//	f, err := os.Create("backup.db")
+//	if err != nil {
+//	    return err
+//	}
+//	defer f.Close()
+//
+//	n, err := db.Snapshot(f)
+//	if err != nil {
+//	    return err
+//	}
+//	fmt.Printf("Backup complete: %d bytes\n", n)
 func (d *DB) Snapshot(w io.Writer) (int64, error) {
 	var n int64
 	err := d.db.View(func(tx *boltdb.Tx) error {

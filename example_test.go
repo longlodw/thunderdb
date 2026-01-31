@@ -427,3 +427,109 @@ func Example_stats() {
 	// Full stats summary available: yes
 	// Rows inserted after reset: 0
 }
+
+// Example_snapshot demonstrates how to create a consistent point-in-time
+// backup of a database using the Snapshot method.
+//
+// Snapshots can be written to any io.Writer, making it easy to back up to:
+//   - Local files
+//   - Network connections
+//   - Cloud storage (S3, GCS, etc.)
+//   - Compression streams
+func Example_snapshot() {
+	// 1. Setup: Create and populate a database
+	tmpfile, err := os.CreateTemp("", "thunder_example_snapshot_*.db")
+	if err != nil {
+		panic(err)
+	}
+	dbPath := tmpfile.Name()
+	tmpfile.Close()
+	defer os.Remove(dbPath)
+
+	db, err := thunderdb.OpenDB(dbPath, 0600, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	// Create schema and insert data
+	err = db.Update(func(tx *thunderdb.Tx) error {
+		if err := tx.CreateStorage("users", 3, []thunderdb.IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: true},
+		}); err != nil {
+			return err
+		}
+		if err := tx.Insert("users", map[int]any{0: "1", 1: "alice", 2: "admin"}); err != nil {
+			return err
+		}
+		if err := tx.Insert("users", map[int]any{0: "2", 1: "bob", 2: "user"}); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// 2. Create a snapshot (backup)
+	// The snapshot is taken within a read transaction, so it's safe to call
+	// while other goroutines are reading or writing to the database.
+	backupFile, err := os.CreateTemp("", "thunder_backup_*.db")
+	if err != nil {
+		panic(err)
+	}
+	backupPath := backupFile.Name()
+	defer os.Remove(backupPath)
+
+	n, err := db.Snapshot(backupFile)
+	if err != nil {
+		panic(err)
+	}
+	backupFile.Close()
+	db.Close()
+
+	if n > 0 {
+		fmt.Println("Snapshot created successfully")
+	}
+
+	// 3. Restore: Open the backup as a new database
+	backupDB, err := thunderdb.OpenDB(backupPath, 0600, nil)
+	if err != nil {
+		panic(err)
+	}
+	defer backupDB.Close()
+
+	// 4. Verify: Query the restored database
+	err = backupDB.View(func(tx *thunderdb.Tx) error {
+		users, err := tx.StoredQuery("users")
+		if err != nil {
+			return err
+		}
+		results, err := tx.Select(users)
+		if err != nil {
+			return err
+		}
+		count := 0
+		for row, err := range results {
+			if err != nil {
+				return err
+			}
+			var username string
+			if err := row.Get(1, &username); err != nil {
+				return err
+			}
+			fmt.Printf("Restored user: %s\n", username)
+			count++
+		}
+		fmt.Printf("Total users restored: %d\n", count)
+		return nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Output:
+	// Snapshot created successfully
+	// Restored user: alice
+	// Restored user: bob
+	// Total users restored: 2
+}
