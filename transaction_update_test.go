@@ -19,11 +19,11 @@ func TestPersistent_Update(t *testing.T) {
 	}
 	defer tx.Rollback()
 
-	err = tx.CreateStorage(relation, 4, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: true},  // email
-		{ReferencedCols: []int{3}, IsUnique: false}, // age
-	})
+	err = tx.CreateStorage(relation, 4,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: true},  // email
+		IndexInfo{ReferencedCols: []int{3}, IsUnique: false}, // age
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,7 +46,7 @@ func BenchmarkInsert(b *testing.B) {
 				}
 				defer tx.Rollback()
 				relation := fmt.Sprintf("bench_%d", rand.Int()) // use rand to avoid conflicts if possible, or just unique
-				err = tx.CreateStorage(relation, 2, nil)
+				err = tx.CreateStorage(relation, 2)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -75,9 +75,9 @@ func BenchmarkInsert(b *testing.B) {
 				}
 				defer tx.Rollback()
 				relation := fmt.Sprintf("bench_idx_%d", rand.Int())
-				err = tx.CreateStorage(relation, 2, []IndexInfo{
-					{ReferencedCols: []int{1}},
-				})
+				err = tx.CreateStorage(relation, 2,
+					IndexInfo{ReferencedCols: []int{1}},
+				)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -108,13 +108,13 @@ func BenchmarkSelect(b *testing.B) {
 
 	// Relation with index on "val" (col 1)
 	relationIdx := "bench_select_idx"
-	tx.CreateStorage(relationIdx, 2, []IndexInfo{
-		{ReferencedCols: []int{1}},
-	})
+	tx.CreateStorage(relationIdx, 2,
+		IndexInfo{ReferencedCols: []int{1}},
+	)
 
 	// Relation WITHOUT index on "val"
 	relationNoIdx := "bench_select_noidx"
-	tx.CreateStorage(relationNoIdx, 2, nil)
+	tx.CreateStorage(relationNoIdx, 2)
 
 	for i := range count {
 		row := map[int]any{
@@ -203,7 +203,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			b.Fatal(err)
 		}
 		defer tx.Rollback()
-		tx.CreateStorage("large_rows", 2, []IndexInfo{{ReferencedCols: []int{0}}})
+		tx.CreateStorage("large_rows", 2, IndexInfo{ReferencedCols: []int{0}})
 
 		b.ResetTimer()
 		for i := 0; b.Loop(); i++ {
@@ -225,13 +225,13 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 
 			// Schema setup
 			// users: u_id(0), u_name(1), group_id(2), u_payload(3)
-			tx.CreateStorage("users", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
+			tx.CreateStorage("users", 4, IndexInfo{ReferencedCols: []int{0}}, IndexInfo{ReferencedCols: []int{2}})
 
 			// groups: group_id(0), g_name(1), org_id(2), g_payload(3)
-			tx.CreateStorage("groups", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
+			tx.CreateStorage("groups", 4, IndexInfo{ReferencedCols: []int{0}}, IndexInfo{ReferencedCols: []int{2}})
 
 			// orgs: org_id(0), o_name(1), region(2), o_payload(3)
-			tx.CreateStorage("orgs", 4, []IndexInfo{{ReferencedCols: []int{0}}, {ReferencedCols: []int{2}}})
+			tx.CreateStorage("orgs", 4, IndexInfo{ReferencedCols: []int{0}}, IndexInfo{ReferencedCols: []int{2}})
 
 			// Pre-populate some data
 			count := 1000
@@ -341,10 +341,10 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		}
 		defer tx.Rollback()
 
-		err = tx.CreateStorage("large_chain", 3, []IndexInfo{
-			{ReferencedCols: []int{0}}, // src
-			{ReferencedCols: []int{1}}, // dst
-		})
+		err = tx.CreateStorage("large_chain", 3,
+			IndexInfo{ReferencedCols: []int{0}}, // src
+			IndexInfo{ReferencedCols: []int{1}}, // dst
+		)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -370,11 +370,11 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		chain, _ := readTx.StoredQuery("large_chain")
 
 		// Query: reach(src, dst)
-		qReach, _ := readTx.ClosureQuery(2, []IndexInfo{
-			{ReferencedCols: []int{0, 1}, IsUnique: true},
-			{ReferencedCols: []int{0}}, // index on dst for faster joins
-			{ReferencedCols: []int{1}}, // index on dst for faster joins
-		})
+		qReach, _ := readTx.ClosureQuery(2,
+			IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true},
+			IndexInfo{ReferencedCols: []int{0}}, // index on dst for faster joins
+			IndexInfo{ReferencedCols: []int{1}}, // index on dst for faster joins
+		)
 
 		// Base: chain(src, dst, payload) -> reach(src, dst)
 		base, _ := chain.Project(0, 1)
@@ -421,10 +421,10 @@ func BenchmarkRecursion(b *testing.B) {
 	}
 	defer tx.Rollback()
 
-	err = tx.CreateStorage("chain", 2, []IndexInfo{
-		{ReferencedCols: []int{0}}, // src
-		{ReferencedCols: []int{1}}, // dst
-	})
+	err = tx.CreateStorage("chain", 2,
+		IndexInfo{ReferencedCols: []int{0}}, // src
+		IndexInfo{ReferencedCols: []int{1}}, // dst
+	)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -445,11 +445,11 @@ func BenchmarkRecursion(b *testing.B) {
 	chain, _ := readTx.StoredQuery("chain")
 
 	// reach(x, y)
-	qReach, _ := readTx.ClosureQuery(2, []IndexInfo{
-		{ReferencedCols: []int{0, 1}, IsUnique: true},
-		{ReferencedCols: []int{0}}, // index on dst for faster joins
-		{ReferencedCols: []int{1}}, // index on dst for faster joins
-	})
+	qReach, _ := readTx.ClosureQuery(2,
+		IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true},
+		IndexInfo{ReferencedCols: []int{0}}, // index on dst for faster joins
+		IndexInfo{ReferencedCols: []int{1}}, // index on dst for faster joins
+	)
 
 	// Base: chain(x, y) -> reach(x, y)
 	base, _ := chain.Project(0, 1)
@@ -491,10 +491,10 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 	}
 	defer tx.Rollback()
 
-	err = tx.CreateStorage("chain", 2, []IndexInfo{
-		{ReferencedCols: []int{0}}, // src
-		{ReferencedCols: []int{1}}, // dst
-	})
+	err = tx.CreateStorage("chain", 2,
+		IndexInfo{ReferencedCols: []int{0}}, // src
+		IndexInfo{ReferencedCols: []int{1}}, // dst
+	)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -522,11 +522,11 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 	chain, _ := readTx.StoredQuery("chain")
 
 	// reach(x, y)
-	qReach, _ := readTx.ClosureQuery(2, []IndexInfo{
-		{ReferencedCols: []int{0, 1}, IsUnique: true},
-		{ReferencedCols: []int{0}},
-		{ReferencedCols: []int{1}},
-	})
+	qReach, _ := readTx.ClosureQuery(2,
+		IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true},
+		IndexInfo{ReferencedCols: []int{0}},
+		IndexInfo{ReferencedCols: []int{1}},
+	)
 
 	base, _ := chain.Project(0, 1)
 	join, _ := qReach.Join(chain, JoinCondition{Left: 1, Right: 0, Operator: EQ})
@@ -569,7 +569,7 @@ func BenchmarkConcurrency(b *testing.B) {
 		b.Fatal(err)
 	}
 	// bench_concurrent: id(0), val(1)
-	err = initTx.CreateStorage("bench_concurrent", 2, []IndexInfo{{ReferencedCols: []int{0}}})
+	err = initTx.CreateStorage("bench_concurrent", 2, IndexInfo{ReferencedCols: []int{0}})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -669,7 +669,7 @@ func BenchmarkUpdateSequential(b *testing.B) {
 		b.Fatal(err)
 	}
 	// update_seq: id(0), val(1)
-	err = tx.CreateStorage("update_seq", 2, []IndexInfo{{ReferencedCols: []int{0}}})
+	err = tx.CreateStorage("update_seq", 2, IndexInfo{ReferencedCols: []int{0}})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -719,32 +719,32 @@ func BenchmarkJoinStrategies(b *testing.B) {
 			}
 
 			// Table with both sides indexed (for merge join)
-			err = tx.CreateStorage("orders_both_indexed", 3, []IndexInfo{
-				{ReferencedCols: []int{0}, IsUnique: true},  // id
-				{ReferencedCols: []int{1}, IsUnique: false}, // category (join key)
-			})
+			err = tx.CreateStorage("orders_both_indexed", 3,
+				IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+				IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // category (join key)
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
-			err = tx.CreateStorage("products_both_indexed", 3, []IndexInfo{
-				{ReferencedCols: []int{0}, IsUnique: true},  // id
-				{ReferencedCols: []int{1}, IsUnique: false}, // category (join key)
-			})
+			err = tx.CreateStorage("products_both_indexed", 3,
+				IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+				IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // category (join key)
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
 
 			// Tables with only one side indexed (for optimized nested loop)
-			err = tx.CreateStorage("orders_left_indexed", 3, []IndexInfo{
-				{ReferencedCols: []int{0}, IsUnique: true},  // id
-				{ReferencedCols: []int{1}, IsUnique: false}, // category (join key)
-			})
+			err = tx.CreateStorage("orders_left_indexed", 3,
+				IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+				IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // category (join key)
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
-			err = tx.CreateStorage("products_right_not_indexed", 3, []IndexInfo{
-				{ReferencedCols: []int{0}, IsUnique: true}, // id only, NO index on category
-			})
+			err = tx.CreateStorage("products_right_not_indexed", 3,
+				IndexInfo{ReferencedCols: []int{0}, IsUnique: true}, // id only, NO index on category
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -872,19 +872,19 @@ func BenchmarkMergeJoinComposite(b *testing.B) {
 		defer tx.Rollback()
 
 		// Table A: id(0), cat(1), subcat(2), value(3)
-		err = tx.CreateStorage("composite_a", 4, []IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},     // id
-			{ReferencedCols: []int{1, 2}, IsUnique: false}, // (cat, subcat) composite
-		})
+		err = tx.CreateStorage("composite_a", 4,
+			IndexInfo{ReferencedCols: []int{0}, IsUnique: true},     // id
+			IndexInfo{ReferencedCols: []int{1, 2}, IsUnique: false}, // (cat, subcat) composite
+		)
 		if err != nil {
 			b.Fatal(err)
 		}
 
 		// Table B: id(0), cat(1), subcat(2), value(3)
-		err = tx.CreateStorage("composite_b", 4, []IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},     // id
-			{ReferencedCols: []int{1, 2}, IsUnique: false}, // (cat, subcat) composite
-		})
+		err = tx.CreateStorage("composite_b", 4,
+			IndexInfo{ReferencedCols: []int{0}, IsUnique: true},     // id
+			IndexInfo{ReferencedCols: []int{1, 2}, IsUnique: false}, // (cat, subcat) composite
+		)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -979,7 +979,7 @@ func BenchmarkBatchConcurrent(b *testing.B) {
 		b.Fatal(err)
 	}
 	// bench_batch_concurrent: id(0), val(1)
-	err = initTx.CreateStorage("bench_batch_concurrent", 2, []IndexInfo{{ReferencedCols: []int{0}}})
+	err = initTx.CreateStorage("bench_batch_concurrent", 2, IndexInfo{ReferencedCols: []int{0}})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1079,10 +1079,10 @@ func BenchmarkRecursivePropagation(b *testing.B) {
 			}
 
 			nodesRel := "nodes"
-			err = tx.CreateStorage(nodesRel, 2, []IndexInfo{
-				{ReferencedCols: []int{0}, IsUnique: true},  // id index
-				{ReferencedCols: []int{1}, IsUnique: false}, // parent_id index
-			})
+			err = tx.CreateStorage(nodesRel, 2,
+				IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id index
+				IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // parent_id index
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -1121,9 +1121,9 @@ func BenchmarkRecursivePropagation(b *testing.B) {
 				}
 
 				// Create closure query: reachable(ancestor, descendant)
-				qReach, err := tx.ClosureQuery(2, []IndexInfo{
-					{ReferencedCols: []int{0, 1}, IsUnique: true},
-				})
+				qReach, err := tx.ClosureQuery(2,
+					IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true},
+				)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -1191,10 +1191,10 @@ func BenchmarkRecursivePropagationWide(b *testing.B) {
 			}
 
 			nodesRel := "nodes"
-			err = tx.CreateStorage(nodesRel, 2, []IndexInfo{
-				{ReferencedCols: []int{0}, IsUnique: true},  // id index
-				{ReferencedCols: []int{1}, IsUnique: false}, // parent_id index
-			})
+			err = tx.CreateStorage(nodesRel, 2,
+				IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id index
+				IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // parent_id index
+			)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -1248,9 +1248,9 @@ func BenchmarkRecursivePropagationWide(b *testing.B) {
 					b.Fatal(err)
 				}
 
-				qReach, err := tx.ClosureQuery(2, []IndexInfo{
-					{ReferencedCols: []int{0, 1}, IsUnique: true},
-				})
+				qReach, err := tx.ClosureQuery(2,
+					IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true},
+				)
 				if err != nil {
 					b.Fatal(err)
 				}

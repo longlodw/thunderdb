@@ -31,10 +31,10 @@ func Example() {
 	err = db.Update(func(tx *thunderdb.Tx) error {
 		// Create 'users' relation
 		usersRel := "users"
-		err := tx.CreateStorage(usersRel, 3, []thunderdb.IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: false},
-			{ReferencedCols: []int{1}, IsUnique: true},
-		})
+		err := tx.CreateStorage(usersRel, 3,
+			thunderdb.IndexInfo{ReferencedCols: []int{0}, IsUnique: false},
+			thunderdb.IndexInfo{ReferencedCols: []int{1}, IsUnique: true},
+		)
 		if err != nil {
 			return err
 		}
@@ -124,9 +124,9 @@ func Example_manualTx() {
 		defer tx.Rollback()
 
 		// 3. Define Schema
-		err = tx.CreateStorage("users", 2, []thunderdb.IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},
-		})
+		err = tx.CreateStorage("users", 2,
+			thunderdb.IndexInfo{ReferencedCols: []int{0}, IsUnique: true},
+		)
 		if err != nil {
 			panic(err)
 		}
@@ -196,10 +196,10 @@ func Example_recursive() {
 
 	// 2. Insert Hierarchy Data
 	err = db.Update(func(tx *thunderdb.Tx) error {
-		err := tx.CreateStorage("employees", 3, []thunderdb.IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},  // id
-			{ReferencedCols: []int{2}, IsUnique: false}, // manager_id
-		})
+		err := tx.CreateStorage("employees", 3,
+			thunderdb.IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+			thunderdb.IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // manager_id
+		)
 		if err != nil {
 			return err
 		}
@@ -231,10 +231,10 @@ func Example_recursive() {
 		// Create a recursive query named "path"
 		// Schema: ancestor, descendant
 		// recursive=true
-		qPath, err := tx.ClosureQuery(2, []thunderdb.IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: false}, // ancestor
-			{ReferencedCols: []int{1}, IsUnique: false}, // descendant
-		})
+		qPath, err := tx.ClosureQuery(2,
+			thunderdb.IndexInfo{ReferencedCols: []int{0}, IsUnique: false}, // ancestor
+			thunderdb.IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // descendant
+		)
 		if err != nil {
 			return err
 		}
@@ -331,10 +331,10 @@ func Example_stats() {
 
 	// Perform some operations
 	err = db.Update(func(tx *thunderdb.Tx) error {
-		err := tx.CreateStorage("products", 3, []thunderdb.IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},  // id
-			{ReferencedCols: []int{1}, IsUnique: false}, // category
-		})
+		err := tx.CreateStorage("products", 3,
+			thunderdb.IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+			thunderdb.IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // category
+		)
 		if err != nil {
 			return err
 		}
@@ -453,9 +453,9 @@ func Example_snapshot() {
 
 	// Create schema and insert data
 	err = db.Update(func(tx *thunderdb.Tx) error {
-		if err := tx.CreateStorage("users", 3, []thunderdb.IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},
-		}); err != nil {
+		if err := tx.CreateStorage("users", 3,
+			thunderdb.IndexInfo{ReferencedCols: []int{0}, IsUnique: true},
+		); err != nil {
 			return err
 		}
 		if err := tx.Insert("users", map[int]any{0: "1", 1: "alice", 2: "admin"}); err != nil {

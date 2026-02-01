@@ -36,17 +36,17 @@ type Query interface {
 // Example (finding all descendants in an org chart):
 //
 //	// Create recursive query with 2 columns: ancestor, descendant
-//	qPath, _ := tx.ClosureQuery(2, []thunderdb.IndexInfo{
-//	    {ReferencedCols: []int{0}, IsUnique: false},
-//	})
+//	qPath, _ := tx.ClosureQuery(2,
+//	    thunderdb.Index(0), // index on ancestor column
+//	)
 //
 //	// Base case: direct reports
 //	baseProj, _ := employees.Project(2, 0) // manager_id, id
 //
 //	// Recursive case: join employees with path
-//	joined, _ := employees.Join(qPath, thunderdb.JoinOn{
-//	    LeftField: 0, RightField: 0, Operator: thunderdb.EQ,
-//	})
+//	joined, _ := employees.Join(qPath,
+//	    thunderdb.OnEQ(0, 0), // employees.id = path.ancestor
+//	)
 //	recursiveProj, _ := joined.Project(2, 4)
 //
 //	// Bind both branches
@@ -187,11 +187,17 @@ const (
 // Example:
 //
 //	// Join users and orders where users.id = orders.user_id
+//	// Using JoinCondition struct directly:
 //	joined, _ := users.Join(orders, thunderdb.JoinCondition{
-//	    Left:  0,  // users.id (column 0 of left query)
-//	    Right: 2,  // orders.user_id (column 2 of right query)
-//	    Operator:   thunderdb.EQ,
+//	    Left:     0,  // users.id (column 0 of left query)
+//	    Right:    2,  // orders.user_id (column 2 of right query)
+//	    Operator: thunderdb.EQ,
 //	})
+//
+//	// Or using helper function:
+//	joined, _ = users.Join(orders,
+//	    thunderdb.OnEQ(0, 2), // users.id = orders.user_id
+//	)
 type JoinCondition struct {
 	Left     int // Column index in the left query
 	Right    int // Column index in the right query
@@ -329,9 +335,16 @@ func UniqueAllCols(count int) IndexInfo {
 // Example:
 //
 //	// Find users where role = "admin" AND age >= 18
+//	// Using SelectCondition struct directly:
 //	results, _ := tx.Select(users,
 //	    thunderdb.SelectCondition{Col: 2, Operator: thunderdb.EQ, Value: "admin"},
 //	    thunderdb.SelectCondition{Col: 3, Operator: thunderdb.GTE, Value: 18},
+//	)
+//
+//	// Or using helper functions:
+//	results, _ = tx.Select(users,
+//	    thunderdb.WhereEQ(2, "admin"),   // role = "admin"
+//	    thunderdb.WhereGTE(3, 18),       // age >= 18
 //	)
 type SelectCondition struct {
 	Col      int // Column index to filter on

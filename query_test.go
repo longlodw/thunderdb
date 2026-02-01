@@ -41,20 +41,20 @@ func TestQuery_Basic(t *testing.T) {
 
 	// Create 'users' relation
 	usersRel := "users"
-	err = tx.CreateStorage(usersRel, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true}, // id
-		{ReferencedCols: []int{1}, IsUnique: true}, // username
-		{ReferencedCols: []int{2}, IsUnique: true}, // department
-	})
+	err = tx.CreateStorage(usersRel, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true}, // id
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: true}, // username
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: true}, // department
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Create 'departments' relation
 	deptRel := "departments"
-	err = tx.CreateStorage(deptRel, 2, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true}, // department
-	})
+	err = tx.CreateStorage(deptRel, 2,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true}, // department
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,25 +151,25 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 
 	// Schema
 	// users: u_id(0), u_name(1), group_id(2)
-	err = tx.CreateStorage("users", 3, nil)
+	err = tx.CreateStorage("users", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// admins: u_id(0), u_name(1), group_id(2)
-	err = tx.CreateStorage("admins", 3, nil)
+	err = tx.CreateStorage("admins", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// groups: group_id(0), g_name(1), org_id(2)
-	err = tx.CreateStorage("groups", 3, nil)
+	err = tx.CreateStorage("groups", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// orgs: org_id(0), o_name(1), region(2)
-	err = tx.CreateStorage("orgs", 3, nil)
+	err = tx.CreateStorage("orgs", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	headQuery, err := tx.ClosureQuery(9, nil)
+	headQuery, err := tx.ClosureQuery(9)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,10 +319,10 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Graph: A -> B -> A (Cycle)
 	nodesRel := "nodes"
 	// 0: source, 1: target
-	err = tx.CreateStorage(nodesRel, 2, []IndexInfo{
-		{ReferencedCols: []int{0, 1}, IsUnique: true}, // (source, target) unique
-		{ReferencedCols: []int{0}, IsUnique: false},   // index on source
-	})
+	err = tx.CreateStorage(nodesRel, 2,
+		IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true}, // (source, target) unique
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: false},   // index on source
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,9 +357,9 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// reach(X, Z) :- reach(X, Y), nodes(Y, Z).
 
 	// Reach schema: source(0), target(1)
-	qReach, err := tx.ClosureQuery(2, []IndexInfo{
-		{ReferencedCols: []int{0, 1}, IsUnique: true},
-	})
+	qReach, err := tx.ClosureQuery(2,
+		IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,10 +466,10 @@ func TestQuery_Recursive(t *testing.T) {
 	// 1. Setup Schema: Employees (id, name, manager_id)
 	employeesRel := "employees"
 	// 0: id, 1: name, 2: manager_id
-	err = tx.CreateStorage(employeesRel, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: false}, // manager_id
-	})
+	err = tx.CreateStorage(employeesRel, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // manager_id
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,9 +514,9 @@ func TestQuery_Recursive(t *testing.T) {
 	//                         path(a, c) :- edge(a, b), path(b, c).
 
 	// Path schema: ancestor(0), descendant(1)
-	qPath, err := tx.ClosureQuery(2, []IndexInfo{
-		{ReferencedCols: []int{0, 1}, IsUnique: true},
-	})
+	qPath, err := tx.ClosureQuery(2,
+		IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,12 +628,12 @@ func TestQuery_MultiColumnIndex(t *testing.T) {
 	// Schema: products(id, category, subcategory, price, name)
 	// Composite index on (category, subcategory) to speed up category browsing
 	productsRel := "products"
-	err = tx.CreateStorage(productsRel, 5, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},     // id unique
-		{ReferencedCols: []int{1, 2}, IsUnique: false}, // (category, subcategory) composite
-		{ReferencedCols: []int{1}, IsUnique: false},    // category alone
-		{ReferencedCols: []int{3}, IsUnique: false},    // price for range queries
-	})
+	err = tx.CreateStorage(productsRel, 5,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},     // id unique
+		IndexInfo{ReferencedCols: []int{1, 2}, IsUnique: false}, // (category, subcategory) composite
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false},    // category alone
+		IndexInfo{ReferencedCols: []int{3}, IsUnique: false},    // price for range queries
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -761,11 +761,11 @@ func TestQuery_LessThanConditions(t *testing.T) {
 
 	// Schema: scores(id, player, score, level)
 	scoresRel := "scores"
-	err = tx.CreateStorage(scoresRel, 4, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: false}, // score index for range queries
-		{ReferencedCols: []int{3}, IsUnique: false}, // level index
-	})
+	err = tx.CreateStorage(scoresRel, 4,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // score index for range queries
+		IndexInfo{ReferencedCols: []int{3}, IsUnique: false}, // level index
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -896,11 +896,11 @@ func TestQuery_GreaterThanConditions(t *testing.T) {
 
 	// Schema: inventory(id, product, quantity, warehouse)
 	inventoryRel := "inventory"
-	err = tx.CreateStorage(inventoryRel, 4, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: false}, // quantity for range queries
-		{ReferencedCols: []int{3}, IsUnique: false}, // warehouse
-	})
+	err = tx.CreateStorage(inventoryRel, 4,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // quantity for range queries
+		IndexInfo{ReferencedCols: []int{3}, IsUnique: false}, // warehouse
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1031,11 +1031,11 @@ func TestQuery_CombinedRangeConditions(t *testing.T) {
 
 	// Schema: temperatures(id, city, temp, date)
 	tempsRel := "temperatures"
-	err = tx.CreateStorage(tempsRel, 4, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: false}, // temp for range queries
-		{ReferencedCols: []int{1}, IsUnique: false}, // city
-	})
+	err = tx.CreateStorage(tempsRel, 4,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // temp for range queries
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // city
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1191,21 +1191,20 @@ func TestQuery_JoinWithRangeConditions(t *testing.T) {
 
 	// Schema: orders(id, customer_id, total, status)
 	ordersRel := "orders"
-	err = tx.CreateStorage(ordersRel, 4, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{1}, IsUnique: false}, // customer_id for joins
-		{ReferencedCols: []int{2}, IsUnique: false}, // total for range queries
-	})
+	err = tx.CreateStorage(ordersRel, 4,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // customer_id for joins
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // total for range queries
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Schema: customers(id, name, tier)
 	customersRel := "customers"
-	err = tx.CreateStorage(customersRel, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: false}, // tier
-	})
+	err = tx.CreateStorage(customersRel, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true}, // id
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1341,11 +1340,11 @@ func TestQuery_NEQConditions(t *testing.T) {
 
 	// Schema: tasks(id, title, status, priority)
 	tasksRel := "tasks"
-	err = tx.CreateStorage(tasksRel, 4, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: false}, // status
-		{ReferencedCols: []int{3}, IsUnique: false}, // priority
-	})
+	err = tx.CreateStorage(tasksRel, 4,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // status
+		IndexInfo{ReferencedCols: []int{3}, IsUnique: false}, // priority
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1472,12 +1471,12 @@ func TestQuery_MultiColumnIndexWithRanges(t *testing.T) {
 	// Schema: events(id, year, month, day, description)
 	// Composite index on (year, month) for date range queries
 	eventsRel := "events"
-	err = tx.CreateStorage(eventsRel, 5, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},     // id
-		{ReferencedCols: []int{1, 2}, IsUnique: false}, // (year, month) composite
-		{ReferencedCols: []int{1}, IsUnique: false},    // year alone
-		{ReferencedCols: []int{2}, IsUnique: false},    // month alone
-	})
+	err = tx.CreateStorage(eventsRel, 5,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},     // id
+		IndexInfo{ReferencedCols: []int{1, 2}, IsUnique: false}, // (year, month) composite
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false},    // year alone
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false},    // month alone
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1609,20 +1608,20 @@ func TestQuery_MergeJoin(t *testing.T) {
 	// Create two tables with indexes on join columns
 	// Table A: id, value_a, join_key
 	tableA := "table_a"
-	err = tx.CreateStorage(tableA, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: false}, // join_key for merge join
-	})
+	err = tx.CreateStorage(tableA, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // join_key for merge join
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Table B: id, value_b, join_key
 	tableB := "table_b"
-	err = tx.CreateStorage(tableB, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: false}, // join_key for merge join
-	})
+	err = tx.CreateStorage(tableB, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // join_key for merge join
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1750,20 +1749,20 @@ func TestQuery_MergeJoinComposite(t *testing.T) {
 	// Create tables with composite indexes
 	// Table A: id, category, subcategory, value_a
 	tableA := "orders"
-	err = tx.CreateStorage(tableA, 4, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},     // id
-		{ReferencedCols: []int{1, 2}, IsUnique: false}, // (category, subcategory) composite
-	})
+	err = tx.CreateStorage(tableA, 4,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},     // id
+		IndexInfo{ReferencedCols: []int{1, 2}, IsUnique: false}, // (category, subcategory) composite
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Table B: id, category, subcategory, value_b
 	tableB := "inventory"
-	err = tx.CreateStorage(tableB, 4, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},     // id
-		{ReferencedCols: []int{1, 2}, IsUnique: false}, // (category, subcategory) composite
-	})
+	err = tx.CreateStorage(tableB, 4,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},     // id
+		IndexInfo{ReferencedCols: []int{1, 2}, IsUnique: false}, // (category, subcategory) composite
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1869,18 +1868,18 @@ func TestQuery_MergeJoinFallback(t *testing.T) {
 
 	// Create tables where left has index but right doesn't
 	tableA := "table_a"
-	err = tx.CreateStorage(tableA, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{2}, IsUnique: false}, // join_key indexed
-	})
+	err = tx.CreateStorage(tableA, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false}, // join_key indexed
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	tableB := "table_b"
-	err = tx.CreateStorage(tableB, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true}, // id only (no index on join_key)
-	})
+	err = tx.CreateStorage(tableB, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true}, // id only (no index on join_key)
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1950,19 +1949,19 @@ func TestQuery_MergeJoinNonEQOperator(t *testing.T) {
 
 	// Create tables with indexes
 	tableA := "table_a"
-	err = tx.CreateStorage(tableA, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},
-		{ReferencedCols: []int{2}, IsUnique: false},
-	})
+	err = tx.CreateStorage(tableA, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	tableB := "table_b"
-	err = tx.CreateStorage(tableB, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},
-		{ReferencedCols: []int{2}, IsUnique: false},
-	})
+	err = tx.CreateStorage(tableB, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},
+		IndexInfo{ReferencedCols: []int{2}, IsUnique: false},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2034,20 +2033,20 @@ func TestQuery_MergeJoinWithMixedOperators(t *testing.T) {
 
 	// Create orders table: id, category, price
 	orders := "orders"
-	err = tx.CreateStorage(orders, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{1}, IsUnique: false}, // category (indexed for merge join)
-	})
+	err = tx.CreateStorage(orders, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // category (indexed for merge join)
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Create products table: id, category, min_price
 	products := "products"
-	err = tx.CreateStorage(products, 3, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},  // id
-		{ReferencedCols: []int{1}, IsUnique: false}, // category (indexed for merge join)
-	})
+	err = tx.CreateStorage(products, 3,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // id
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // category (indexed for merge join)
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2204,11 +2203,11 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 	// edges: from, to (directed edges)
 	edgesRel := "edges"
 	// 0: from, 1: to
-	err = tx.CreateStorage(edgesRel, 2, []IndexInfo{
-		{ReferencedCols: []int{0, 1}, IsUnique: true}, // (from, to) unique
-		{ReferencedCols: []int{0}, IsUnique: false},   // index on from
-		{ReferencedCols: []int{1}, IsUnique: false},   // index on to
-	})
+	err = tx.CreateStorage(edgesRel, 2,
+		IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true}, // (from, to) unique
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: false},   // index on from
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false},   // index on to
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2253,16 +2252,16 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 	// odd_reach(X, Y) :- edges(X, Z), even_reach(Z, Y).
 
 	// Schema: from(0), to(1)
-	qEvenReach, err := tx.ClosureQuery(2, []IndexInfo{
-		{ReferencedCols: []int{0, 1}, IsUnique: true},
-	})
+	qEvenReach, err := tx.ClosureQuery(2,
+		IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	qOddReach, err := tx.ClosureQuery(2, []IndexInfo{
-		{ReferencedCols: []int{0, 1}, IsUnique: true},
-	})
+	qOddReach, err := tx.ClosureQuery(2,
+		IndexInfo{ReferencedCols: []int{0, 1}, IsUnique: true},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

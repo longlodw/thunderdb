@@ -103,9 +103,9 @@ func TestStats_OperationCounts(t *testing.T) {
 
 	// Create storage and insert rows
 	err = db.Update(func(tx *Tx) error {
-		err := tx.CreateStorage("users", 3, []IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},
-		})
+		err := tx.CreateStorage("users", 3,
+			IndexInfo{ReferencedCols: []int{0}, IsUnique: true},
+		)
 		if err != nil {
 			return err
 		}
@@ -181,9 +181,9 @@ func TestStats_QueryCounts(t *testing.T) {
 
 	// Setup: create storage with index and insert rows
 	err = db.Update(func(tx *Tx) error {
-		err := tx.CreateStorage("items", 2, []IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},
-		})
+		err := tx.CreateStorage("items", 2,
+			IndexInfo{ReferencedCols: []int{0}, IsUnique: true},
+		)
 		if err != nil {
 			return err
 		}
@@ -287,15 +287,15 @@ func TestStats_JoinCounts(t *testing.T) {
 
 	// Setup: create two storages
 	err = db.Update(func(tx *Tx) error {
-		err := tx.CreateStorage("users", 2, []IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},
-		})
+		err := tx.CreateStorage("users", 2,
+			IndexInfo{ReferencedCols: []int{0}, IsUnique: true},
+		)
 		if err != nil {
 			return err
 		}
-		err = tx.CreateStorage("orders", 2, []IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: false},
-		})
+		err = tx.CreateStorage("orders", 2,
+			IndexInfo{ReferencedCols: []int{0}, IsUnique: false},
+		)
 		if err != nil {
 			return err
 		}
@@ -355,7 +355,7 @@ func TestStats_Timing(t *testing.T) {
 
 	// Perform operations and verify timing is non-zero
 	err = db.Update(func(tx *Tx) error {
-		err := tx.CreateStorage("test", 2, nil)
+		err := tx.CreateStorage("test", 2)
 		if err != nil {
 			return err
 		}
@@ -401,7 +401,7 @@ func TestStats_Reset(t *testing.T) {
 
 	// Perform some operations
 	err = db.Update(func(tx *Tx) error {
-		tx.CreateStorage("test", 2, nil)
+		tx.CreateStorage("test", 2)
 		tx.Insert("test", map[int]any{0: 1, 1: "value"})
 		return nil
 	})
@@ -444,7 +444,7 @@ func TestStats_String(t *testing.T) {
 
 	// Perform some operations to have non-zero stats
 	err = db.Update(func(tx *Tx) error {
-		tx.CreateStorage("test", 2, nil)
+		tx.CreateStorage("test", 2)
 		tx.Insert("test", map[int]any{0: 1, 1: "value"})
 		return nil
 	})
@@ -482,7 +482,7 @@ func TestStats_Concurrent(t *testing.T) {
 
 	// Setup
 	err = db.Update(func(tx *Tx) error {
-		return tx.CreateStorage("test", 2, nil)
+		return tx.CreateStorage("test", 2)
 	})
 	if err != nil {
 		t.Fatalf("setup failed: %v", err)
@@ -545,7 +545,7 @@ func TestStats_BoltDBPassthrough(t *testing.T) {
 
 	// Perform some operations
 	err = db.Update(func(tx *Tx) error {
-		tx.CreateStorage("test", 2, nil)
+		tx.CreateStorage("test", 2)
 		for i := 0; i < 100; i++ {
 			tx.Insert("test", map[int]any{0: i, 1: "value"})
 		}

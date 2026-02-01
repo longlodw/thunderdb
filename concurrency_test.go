@@ -23,9 +23,9 @@ func TestConcurrentReadWrite(t *testing.T) {
 	}
 	// Create a persistent table "data"
 	// data: key(0), val(1)
-	err = initTx.CreateStorage("data", 2, []IndexInfo{
-		{ReferencedCols: []int{0}, IsUnique: true},
-	})
+	err = initTx.CreateStorage("data", 2,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: true},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -155,10 +155,18 @@ func (tx *Tx) wrapIteratorWithStats(it iter.Seq2[*Row, error]) iter.Seq2[*Row, e
 //
 // Example:
 //
+//	// Using IndexInfo struct directly:
 //	err := tx.CreateStorage("users", 3,
-//	    {ReferencedCols: []int{0}, IsUnique: true},  // unique index on column 0
-//	    {ReferencedCols: []int{1}, IsUnique: false}, // non-unique index on column 1
-//	    {ReferencedCols: []int{1, 2}, IsUnique: false}, // composite index on columns 1 and 2
+//	    IndexInfo{ReferencedCols: []int{0}, IsUnique: true},  // unique index on column 0
+//	    IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // non-unique index on column 1
+//	    IndexInfo{ReferencedCols: []int{1, 2}, IsUnique: false}, // composite index on columns 1 and 2
+//	)
+//
+//	// Or using helper functions:
+//	err = tx.CreateStorage("products", 3,
+//	    Unique(0),       // unique index on column 0 (ID)
+//	    Index(1),        // non-unique index on column 1 (category)
+//	    Index(1, 2),     // composite index on columns 1 and 2
 //	)
 func (tx *Tx) CreateStorage(
 	relation string,

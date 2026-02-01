@@ -38,9 +38,9 @@ func TestDB_View(t *testing.T) {
 	// Prepare data
 	err := db.Update(func(tx *Tx) error {
 		// id=0, name=1
-		err := tx.CreateStorage("users", 2, []IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true}, // id
-		})
+		err := tx.CreateStorage("users", 2,
+			IndexInfo{ReferencedCols: []int{0}, IsUnique: true}, // id
+		)
 		if err != nil {
 			return err
 		}
@@ -90,9 +90,9 @@ func TestDB_Update(t *testing.T) {
 
 	err := db.Update(func(tx *Tx) error {
 		// id=0
-		err := tx.CreateStorage("items", 1, []IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true}, // id
-		})
+		err := tx.CreateStorage("items", 1,
+			IndexInfo{ReferencedCols: []int{0}, IsUnique: true}, // id
+		)
 		if err != nil {
 			return err
 		}
@@ -134,9 +134,9 @@ func TestDB_Batch(t *testing.T) {
 	// Initialize schema first
 	err := db.Update(func(tx *Tx) error {
 		// ts=0, msg=1
-		return tx.CreateStorage("logs", 2, []IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true}, // ts
-		})
+		return tx.CreateStorage("logs", 2,
+			IndexInfo{ReferencedCols: []int{0}, IsUnique: true}, // ts
+		)
 	})
 	if err != nil {
 		t.Fatalf("failed to init schema: %v", err)
@@ -206,7 +206,7 @@ func TestDB_Batch_PanicProtection(t *testing.T) {
 	// 1. Setup Schema
 	db.Update(func(tx *Tx) error {
 		// val=0
-		return tx.CreateStorage("data", 1, nil)
+		return tx.CreateStorage("data", 1)
 	})
 
 	var wg sync.WaitGroup

@@ -33,9 +33,9 @@ func setupSnapshotTestDB(t *testing.T) (*DB, string, func()) {
 	// Populate some data
 	err = db.Update(func(tx *Tx) error {
 		relation := "users"
-		if err := tx.CreateStorage(relation, 3, []IndexInfo{
-			{ReferencedCols: []int{1}, IsUnique: true},
-		}); err != nil {
+		if err := tx.CreateStorage(relation, 3,
+			IndexInfo{ReferencedCols: []int{1}, IsUnique: true},
+		); err != nil {
 			return err
 		}
 		if err := tx.Insert(relation, map[int]any{0: "1", 1: "alice", 2: 30.0}); err != nil {

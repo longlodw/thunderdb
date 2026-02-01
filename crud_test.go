@@ -40,9 +40,9 @@ func TestBasicCRUD_Insert(t *testing.T) {
 	relation := "users"
 	// users: id(0), username(1), age(2)
 	// index on username(1)
-	err = tx.CreateStorage(relation, 3, []IndexInfo{
-		{ReferencedCols: []int{1}, IsUnique: true},
-	})
+	err = tx.CreateStorage(relation, 3,
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: true},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,9 +76,9 @@ func TestBasicCRUD_SelectAlice(t *testing.T) {
 		relation := "users"
 		// users: id(0), username(1), age(2)
 		// index on username(1)
-		err = tx.CreateStorage(relation, 3, []IndexInfo{
-			{ReferencedCols: []int{1}, IsUnique: true},
-		})
+		err = tx.CreateStorage(relation, 3,
+			IndexInfo{ReferencedCols: []int{1}, IsUnique: true},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -146,9 +146,9 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 		relation := "users"
 		// users: id(0), username(1), age(2)
 		// index on username(1)
-		err = tx.CreateStorage(relation, 3, []IndexInfo{
-			{ReferencedCols: []int{1}, IsUnique: true},
-		})
+		err = tx.CreateStorage(relation, 3,
+			IndexInfo{ReferencedCols: []int{1}, IsUnique: true},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -222,7 +222,7 @@ func TestNonIndexedSelect(t *testing.T) {
 
 		// items: id(0), price(1)
 		// No indexes provided -> scan
-		err = tx.CreateStorage(relation, 2, nil)
+		err = tx.CreateStorage(relation, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -285,9 +285,9 @@ func TestProjection(t *testing.T) {
 
 		relation := "users"
 		// users: id(0), username(1), age(2)
-		err = tx.CreateStorage(relation, 3, []IndexInfo{
-			{ReferencedCols: []int{1}, IsUnique: true},
-		})
+		err = tx.CreateStorage(relation, 3,
+			IndexInfo{ReferencedCols: []int{1}, IsUnique: true},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -367,7 +367,7 @@ func TestDifferentOperators(t *testing.T) {
 
 		relation := "products"
 		// products: id(0), price(1), stock(2)
-		err = tx.CreateStorage(relation, 3, nil)
+		err = tx.CreateStorage(relation, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -478,9 +478,9 @@ func TestCompositeIndex(t *testing.T) {
 		relation := "users"
 		// users: id(0), first(1), last(2), age(3)
 		// Composite index on (first, last) -> (1, 2)
-		err = tx.CreateStorage(relation, 4, []IndexInfo{
-			{ReferencedCols: []int{1, 2}, IsUnique: true},
-		})
+		err = tx.CreateStorage(relation, 4,
+			IndexInfo{ReferencedCols: []int{1, 2}, IsUnique: true},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
