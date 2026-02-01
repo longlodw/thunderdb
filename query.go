@@ -1293,118 +1293,72 @@ func (n *joinedQueryNode) chooseNestedLoopDirection() (isLeft, enforced bool) {
 }
 
 func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {
-	// fmt.Printf("DEBUG: JoinedNode %p propagate. Child: %p (Left: %p, Right: %p)\n", n, child, n.left, n.right)
-	switch child {
-	case n.left:
-		// Pre-allocate buffers for reuse (or just once here since this is likely not the tightest loop in some cases,
-		// but propagateToParents is called for each row insert/update).
-		// Note: Ideally, these should be pooled or reused if this is hot.
-		// For now, we adapt to the new API.
-		rowRightEquals := make(map[int]*Value)
-		rowRightRanges := make(map[int]*Range)
-		rowRightExclusions := make(map[int][]*Value)
-		equalsBytes := make(map[int][]byte)
-		exclusionBytes := make(map[int]map[string]bool)
-		rowBytes := make(map[int][]byte)
-
-		possible, err := n.ComputeContraintsForRight(
-			row,
-			rowRightEquals,
-			rowRightRanges,
-			rowRightExclusions,
-			equalsBytes,
-			exclusionBytes,
-			rowBytes,
-		)
-		if err != nil {
-			return err
-		}
-		if !possible {
-			// Constraints conflicted, no matches possible
-			return nil
-		}
-		bestIndexRight, bestRangesRight, err := n.right.metadata().bestIndex(rowRightEquals, rowRightRanges)
-		if err != nil {
-			return err
-		}
-		cols := make(map[int]bool)
-		for k := range n.right.metadata().ColumnsCount {
-			cols[k] = true
-		}
-		rightSeq, err := n.right.Find(bestIndexRight, bestRangesRight, rowRightEquals, rowRightRanges, rowRightExclusions, cols)
-		if err != nil {
-			return err
-		}
-
-		joinedRow := &Row{
-			values: make(map[int][]byte),
-		}
-
-		for rightRow, err := range rightSeq {
-			if err != nil {
-				return err
-			}
-			n.joinInto(joinedRow, row, rightRow)
-			// Propagate to JOIN's parents, not left's parents
-			for _, parent := range n.parents {
-				if err := parent.propagateToParents(joinedRow, n); err != nil {
-					return err
-				}
-			}
-		}
-	case n.right:
-		rowLeftEquals := make(map[int]*Value)
-		rowLeftRanges := make(map[int]*Range)
-		rowLeftExclusions := make(map[int][]*Value)
-		equalsBytes := make(map[int][]byte)
-		exclusionBytes := make(map[int]map[string]bool)
-		rowBytes := make(map[int][]byte)
-
-		possible, err := n.ComputeContraintsForLeft(
-			row,
-			rowLeftEquals,
-			rowLeftRanges,
-			rowLeftExclusions,
-			equalsBytes,
-			exclusionBytes,
-			rowBytes,
-		)
-		if err != nil {
-			return err
-		}
-		if !possible {
-			// Constraints conflicted, no matches possible
-			return nil
-		}
-		bestIndexLeft, bestRangesLeft, err := n.left.metadata().bestIndex(rowLeftEquals, rowLeftRanges)
-		cols := make(map[int]bool)
-		for k := range n.left.metadata().ColumnsCount {
-			cols[k] = true
-		}
-		leftSeq, err := n.left.Find(bestIndexLeft, bestRangesLeft, rowLeftEquals, rowLeftRanges, rowLeftExclusions, cols)
-		if err != nil {
-			return err
-		}
-
-		joinedRow := &Row{
-			values: make(map[int][]byte),
-		}
-
-		for leftRow, err := range leftSeq {
-			if err != nil {
-				return err
-			}
-			n.joinInto(joinedRow, leftRow, row)
-			// Propagate to JOIN's parents, not left's parents
-			for _, parent := range n.parents {
-				if err := parent.propagateToParents(joinedRow, n); err != nil {
-					return err
-				}
-			}
-		}
-	default:
+	// Determine which side the row came from
+	childIsLeft := child == n.left
+	if !childIsLeft && child != n.right {
 		panic("unknown child in joinedQueryNode.propagateToParents")
 	}
+
+	// Get the opposite side to query
+	otherSide := n.right
+	if !childIsLeft {
+		otherSide = n.left
+	}
+
+	// Pre-allocate constraint buffers
+	equals := make(map[int]*Value)
+	ranges := make(map[int]*Range)
+	exclusions := make(map[int][]*Value)
+	equalsBytes := make(map[int][]byte)
+	exclusionBytes := make(map[int]map[string]bool)
+	rowBytes := make(map[int][]byte)
+
+	// Compute constraints for the opposite side
+	possible, err := n.computeConstraints(row, childIsLeft, equals, ranges, exclusions, equalsBytes, exclusionBytes, rowBytes)
+	if err != nil {
+		return err
+	}
+	if !possible {
+		return nil
+	}
+
+	// Find best index and query the other side
+	bestIndex, bestRanges, err := otherSide.metadata().bestIndex(equals, ranges)
+	if err != nil {
+		return err
+	}
+
+	cols := make(map[int]bool)
+	for k := range otherSide.metadata().ColumnsCount {
+		cols[k] = true
+	}
+
+	matchSeq, err := otherSide.Find(bestIndex, bestRanges, equals, ranges, exclusions, cols)
+	if err != nil {
+		return err
+	}
+
+	// Join matching rows and propagate to parents
+	joinedRow := &Row{values: make(map[int][]byte)}
+	for matchRow, err := range matchSeq {
+		if err != nil {
+			return err
+		}
+
+		// Order arguments correctly: joinInto expects (dest, leftRow, rightRow)
+		if childIsLeft {
+			n.joinInto(joinedRow, row, matchRow)
+		} else {
+			n.joinInto(joinedRow, matchRow, row)
+		}
+
+		for _, parent := range n.parents {
+			if err := parent.propagateToParents(joinedRow, n); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
