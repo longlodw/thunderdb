@@ -1595,6 +1595,601 @@ func TestQuery_MultiColumnIndexWithRanges(t *testing.T) {
 	})
 }
 
+// TestQuery_MergeJoin tests that merge join is used when both sides have appropriate indexes
+func TestQuery_MergeJoin(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Create two tables with indexes on join columns
+	// Table A: id, value_a, join_key
+	tableA := "table_a"
+	err = tx.CreateStorage(tableA, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{2}, IsUnique: false}, // join_key for merge join
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Table B: id, value_b, join_key
+	tableB := "table_b"
+	err = tx.CreateStorage(tableB, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{2}, IsUnique: false}, // join_key for merge join
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert data with various join keys
+	testDataA := []map[int]any{
+		{0: "a1", 1: "value_a1", 2: "key1"},
+		{0: "a2", 1: "value_a2", 2: "key2"},
+		{0: "a3", 1: "value_a3", 2: "key2"}, // duplicate key
+		{0: "a4", 1: "value_a4", 2: "key3"},
+		{0: "a5", 1: "value_a5", 2: "key5"}, // no match in B
+	}
+	for _, data := range testDataA {
+		if err := tx.Insert(tableA, data); err != nil {
+			t.Fatalf("Failed to insert into table A: %v", err)
+		}
+	}
+
+	testDataB := []map[int]any{
+		{0: "b1", 1: "value_b1", 2: "key1"},
+		{0: "b2", 1: "value_b2", 2: "key2"},
+		{0: "b3", 1: "value_b3", 2: "key2"}, // duplicate key
+		{0: "b4", 1: "value_b4", 2: "key4"}, // no match in A
+	}
+	for _, data := range testDataB {
+		if err := tx.Insert(tableB, data); err != nil {
+			t.Fatalf("Failed to insert into table B: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query with merge join
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	tableAQ, err := tx.StoredQuery(tableA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tableBQ, err := tx.StoredQuery(tableB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Join on join_key: A.col2 == B.col2
+	joinedQ, err := tableAQ.Join(tableBQ, JoinOn{LeftField: 2, RightField: 2, Operator: EQ})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Execute join (should use merge join internally)
+	seq, err := tx.Select(joinedQ)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Collect results
+	results := make([]struct {
+		aValue  string
+		bValue  string
+		joinKey string
+	}, 0)
+
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		var aValue, bValue, joinKey string
+		if err := row.Get(1, &aValue); err != nil {
+			t.Fatal(err)
+		}
+		if err := row.Get(4, &bValue); err != nil {
+			t.Fatal(err)
+		}
+		if err := row.Get(2, &joinKey); err != nil {
+			t.Fatal(err)
+		}
+		results = append(results, struct {
+			aValue  string
+			bValue  string
+			joinKey string
+		}{aValue, bValue, joinKey})
+	}
+
+	// Verify results
+	// Expected matches:
+	// - key1: a1 x b1 = 1 match
+	// - key2: (a2, a3) x (b2, b3) = 4 matches
+	// Total: 5 matches
+	if len(results) != 5 {
+		t.Errorf("Expected 5 join results, got %d", len(results))
+	}
+
+	// Count matches by key
+	keyCount := make(map[string]int)
+	for _, r := range results {
+		keyCount[r.joinKey]++
+	}
+
+	if keyCount["key1"] != 1 {
+		t.Errorf("Expected 1 match for key1, got %d", keyCount["key1"])
+	}
+	if keyCount["key2"] != 4 {
+		t.Errorf("Expected 4 matches for key2, got %d", keyCount["key2"])
+	}
+}
+
+// TestQuery_MergeJoinComposite tests merge join with composite indexes
+func TestQuery_MergeJoinComposite(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Create tables with composite indexes
+	// Table A: id, category, subcategory, value_a
+	tableA := "orders"
+	err = tx.CreateStorage(tableA, 4, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},     // id
+		{ReferencedCols: []int{1, 2}, IsUnique: false}, // (category, subcategory) composite
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Table B: id, category, subcategory, value_b
+	tableB := "inventory"
+	err = tx.CreateStorage(tableB, 4, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},     // id
+		{ReferencedCols: []int{1, 2}, IsUnique: false}, // (category, subcategory) composite
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert test data
+	ordersData := []map[int]any{
+		{0: "o1", 1: "electronics", 2: "phones", 3: int64(100)},
+		{0: "o2", 1: "electronics", 2: "laptops", 3: int64(200)},
+		{0: "o3", 1: "clothing", 2: "shirts", 3: int64(50)},
+	}
+	for _, data := range ordersData {
+		if err := tx.Insert(tableA, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	inventoryData := []map[int]any{
+		{0: "i1", 1: "electronics", 2: "phones", 3: int64(500)},
+		{0: "i2", 1: "electronics", 2: "laptops", 3: int64(300)},
+		{0: "i3", 1: "clothing", 2: "pants", 3: int64(100)}, // no match
+	}
+	for _, data := range inventoryData {
+		if err := tx.Insert(tableB, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	ordersQ, err := tx.StoredQuery(tableA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventoryQ, err := tx.StoredQuery(tableB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Join on both category and subcategory
+	joinedQ, err := ordersQ.Join(inventoryQ,
+		JoinOn{LeftField: 1, RightField: 1, Operator: EQ}, // category
+		JoinOn{LeftField: 2, RightField: 2, Operator: EQ}, // subcategory
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seq, err := tx.Select(joinedQ)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	count := 0
+	matches := make(map[string]bool)
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		var category, subcategory string
+		if err := row.Get(1, &category); err != nil {
+			t.Fatal(err)
+		}
+		if err := row.Get(2, &subcategory); err != nil {
+			t.Fatal(err)
+		}
+		matches[category+":"+subcategory] = true
+		count++
+	}
+
+	// Expected: 2 matches (electronics:phones, electronics:laptops)
+	if count != 2 {
+		t.Errorf("Expected 2 composite key matches, got %d", count)
+	}
+
+	if !matches["electronics:phones"] {
+		t.Error("Expected match for electronics:phones")
+	}
+	if !matches["electronics:laptops"] {
+		t.Error("Expected match for electronics:laptops")
+	}
+}
+
+// TestQuery_MergeJoinFallback tests that merge join correctly falls back to nested loop
+// when indexes are not available or conditions are not suitable
+func TestQuery_MergeJoinFallback(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Create tables where left has index but right doesn't
+	tableA := "table_a"
+	err = tx.CreateStorage(tableA, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{2}, IsUnique: false}, // join_key indexed
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tableB := "table_b"
+	err = tx.CreateStorage(tableB, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true}, // id only (no index on join_key)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert data
+	if err := tx.Insert(tableA, map[int]any{0: "a1", 1: "val_a1", 2: "key1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(tableB, map[int]any{0: "b1", 1: "val_b1", 2: "key1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query - should fall back to nested loop since right table lacks index
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	tableAQ, err := tx.StoredQuery(tableA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tableBQ, err := tx.StoredQuery(tableB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joinedQ, err := tableAQ.Join(tableBQ, JoinOn{LeftField: 2, RightField: 2, Operator: EQ})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seq, err := tx.Select(joinedQ)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	count := 0
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+	}
+
+	// Should still get correct result via nested loop
+	if count != 1 {
+		t.Errorf("Expected 1 result from fallback join, got %d", count)
+	}
+}
+
+// TestQuery_MergeJoinNonEQOperator tests that merge join is not used when ONLY non-EQ operators exist
+func TestQuery_MergeJoinNonEQOperator(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Create tables with indexes
+	tableA := "table_a"
+	err = tx.CreateStorage(tableA, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},
+		{ReferencedCols: []int{2}, IsUnique: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tableB := "table_b"
+	err = tx.CreateStorage(tableB, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},
+		{ReferencedCols: []int{2}, IsUnique: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert data
+	if err := tx.Insert(tableA, map[int]any{0: "a1", 1: "val_a1", 2: int64(10)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(tableB, map[int]any{0: "b1", 1: "val_b1", 2: int64(5)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query with GT operator - should fall back to nested loop
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	tableAQ, err := tx.StoredQuery(tableA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tableBQ, err := tx.StoredQuery(tableB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Join with GT (greater than) operator
+	joinedQ, err := tableAQ.Join(tableBQ, JoinOn{LeftField: 2, RightField: 2, Operator: GT})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seq, err := tx.Select(joinedQ)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	count := 0
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+	}
+
+	// Should get correct result via nested loop (10 > 5 = true)
+	if count != 1 {
+		t.Errorf("Expected 1 result from GT join, got %d", count)
+	}
+}
+
+// TestQuery_MergeJoinWithMixedOperators tests that merge join can handle mixed EQ and non-EQ operators.
+// It should use merge join for the EQ condition and apply non-EQ conditions as post-filters.
+func TestQuery_MergeJoinWithMixedOperators(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Create orders table: id, category, price
+	orders := "orders"
+	err = tx.CreateStorage(orders, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{1}, IsUnique: false}, // category (indexed for merge join)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create products table: id, category, min_price
+	products := "products"
+	err = tx.CreateStorage(products, 3, []IndexInfo{
+		{ReferencedCols: []int{0}, IsUnique: true},  // id
+		{ReferencedCols: []int{1}, IsUnique: false}, // category (indexed for merge join)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert orders data
+	// Order 1: Electronics, price 1000
+	// Order 2: Electronics, price 500
+	// Order 3: Books, price 30
+	// Order 4: Books, price 50
+	if err := tx.Insert(orders, map[int]any{0: "o1", 1: "Electronics", 2: int64(1000)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(orders, map[int]any{0: "o2", 1: "Electronics", 2: int64(500)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(orders, map[int]any{0: "o3", 1: "Books", 2: int64(30)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(orders, map[int]any{0: "o4", 1: "Books", 2: int64(50)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert products data
+	// Product 1: Electronics, min_price 600
+	// Product 2: Books, min_price 40
+	if err := tx.Insert(products, map[int]any{0: "p1", 1: "Electronics", 2: int64(600)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Insert(products, map[int]any{0: "p2", 1: "Books", 2: int64(40)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test 1: EQ on category AND GT on price
+	// Should use merge join on category, then filter by price > min_price
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	ordersQ, err := tx.StoredQuery(orders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	productsQ, err := tx.StoredQuery(products)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Join: orders.category = products.category AND orders.price > products.min_price
+	joinedQ, err := ordersQ.Join(productsQ,
+		JoinOn{LeftField: 1, RightField: 1, Operator: EQ}, // category match
+		JoinOn{LeftField: 2, RightField: 2, Operator: GT}, // price > min_price
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seq, err := tx.Select(joinedQ)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Expected matches:
+	// o1 (Electronics, 1000) + p1 (Electronics, 600): 1000 > 600 = TRUE ✓
+	// o2 (Electronics, 500)  + p1 (Electronics, 600): 500 > 600 = FALSE ✗
+	// o3 (Books, 30)         + p2 (Books, 40):        30 > 40 = FALSE ✗
+	// o4 (Books, 50)         + p2 (Books, 40):        50 > 40 = TRUE ✓
+	expectedMatches := map[string]bool{
+		"o1": false, // Will be set to true when we see it
+		"o4": false,
+	}
+
+	count := 0
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+
+		// Get order ID
+		var orderID string
+		if err := row.Get(0, &orderID); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, expected := expectedMatches[orderID]; !expected {
+			t.Errorf("Unexpected order ID in results: %s", orderID)
+		}
+		expectedMatches[orderID] = true
+	}
+
+	// Should get 2 matches (o1 and o4)
+	if count != 2 {
+		t.Errorf("Expected 2 results from mixed operator join, got %d", count)
+	}
+
+	// Verify we saw all expected matches
+	for id, seen := range expectedMatches {
+		if !seen {
+			t.Errorf("Expected to see order %s but didn't", id)
+		}
+	}
+
+	// Test 2: Multiple non-EQ operators with EQ
+	// Join: orders.category = products.category AND orders.price >= products.min_price
+	joinedQ2, err := ordersQ.Join(productsQ,
+		JoinOn{LeftField: 1, RightField: 1, Operator: EQ},  // category match
+		JoinOn{LeftField: 2, RightField: 2, Operator: GTE}, // price >= min_price
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seq2, err := tx.Select(joinedQ2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Expected matches with GTE:
+	// o1 (Electronics, 1000) + p1 (Electronics, 600): 1000 >= 600 = TRUE ✓
+	// o2 (Electronics, 500)  + p1 (Electronics, 600): 500 >= 600 = FALSE ✗
+	// o3 (Books, 30)         + p2 (Books, 40):        30 >= 40 = FALSE ✗
+	// o4 (Books, 50)         + p2 (Books, 40):        50 >= 40 = TRUE ✓
+	count2 := 0
+	for _, err := range seq2 {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count2++
+	}
+
+	// Should still get 2 matches (o1 and o4)
+	if count2 != 2 {
+		t.Errorf("Expected 2 results from GTE join, got %d", count2)
+	}
+}
+
 func testQuery_MutualRecursion_Body(t *testing.T) {
 	db, cleanup := setupTestDBForQuery(t)
 	defer cleanup()

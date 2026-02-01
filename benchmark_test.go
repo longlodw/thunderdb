@@ -372,6 +372,8 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		// Query: reach(src, dst)
 		qReach, _ := readTx.ClosureQuery(2, []IndexInfo{
 			{ReferencedCols: []int{0, 1}, IsUnique: true},
+			{ReferencedCols: []int{0}}, // index on dst for faster joins
+			{ReferencedCols: []int{1}}, // index on dst for faster joins
 		})
 
 		// Base: chain(src, dst, payload) -> reach(src, dst)
@@ -445,6 +447,8 @@ func BenchmarkRecursion(b *testing.B) {
 	// reach(x, y)
 	qReach, _ := readTx.ClosureQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
+		{ReferencedCols: []int{0}}, // index on dst for faster joins
+		{ReferencedCols: []int{1}}, // index on dst for faster joins
 	})
 
 	// Base: chain(x, y) -> reach(x, y)
@@ -520,6 +524,8 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 	// reach(x, y)
 	qReach, _ := readTx.ClosureQuery(2, []IndexInfo{
 		{ReferencedCols: []int{0, 1}, IsUnique: true},
+		{ReferencedCols: []int{0}},
+		{ReferencedCols: []int{1}},
 	})
 
 	base, _ := chain.Project(0, 1)
@@ -691,6 +697,273 @@ func BenchmarkUpdateSequential(b *testing.B) {
 		})
 		if err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkJoinStrategies compares different join strategies: merge join vs optimized nested loop
+func BenchmarkJoinStrategies(b *testing.B) {
+	sizes := []int{100, 1000, 5000}
+
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("Size_%d", size), func(b *testing.B) {
+			db, cleanup := setupBenchmarkDB(b)
+			defer cleanup()
+
+			numCategories := max(size/10, 1) // 10% unique categories
+
+			// Setup data once for all sub-benchmarks
+			tx, err := db.Begin(true)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			// Table with both sides indexed (for merge join)
+			err = tx.CreateStorage("orders_both_indexed", 3, []IndexInfo{
+				{ReferencedCols: []int{0}, IsUnique: true},  // id
+				{ReferencedCols: []int{1}, IsUnique: false}, // category (join key)
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			err = tx.CreateStorage("products_both_indexed", 3, []IndexInfo{
+				{ReferencedCols: []int{0}, IsUnique: true},  // id
+				{ReferencedCols: []int{1}, IsUnique: false}, // category (join key)
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			// Tables with only one side indexed (for optimized nested loop)
+			err = tx.CreateStorage("orders_left_indexed", 3, []IndexInfo{
+				{ReferencedCols: []int{0}, IsUnique: true},  // id
+				{ReferencedCols: []int{1}, IsUnique: false}, // category (join key)
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			err = tx.CreateStorage("products_right_not_indexed", 3, []IndexInfo{
+				{ReferencedCols: []int{0}, IsUnique: true}, // id only, NO index on category
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			// Insert same data into all tables
+			for i := range size {
+				category := fmt.Sprintf("cat_%d", i%numCategories)
+				row := map[int]any{
+					0: fmt.Sprintf("id_%d", i),
+					1: category,
+					2: fmt.Sprintf("value_%d", i),
+				}
+
+				if err := tx.Insert("orders_both_indexed", row); err != nil {
+					b.Fatal(err)
+				}
+				if err := tx.Insert("products_both_indexed", row); err != nil {
+					b.Fatal(err)
+				}
+				if err := tx.Insert("orders_left_indexed", row); err != nil {
+					b.Fatal(err)
+				}
+				if err := tx.Insert("products_right_not_indexed", row); err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			if err := tx.Commit(); err != nil {
+				b.Fatal(err)
+			}
+
+			// Benchmark 1: Merge Join (both sides indexed)
+			b.Run("MergeJoin_BothIndexed", func(b *testing.B) {
+				readTx, err := db.Begin(false)
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer readTx.Rollback()
+
+				ordersQ, err := readTx.StoredQuery("orders_both_indexed")
+				if err != nil {
+					b.Fatal(err)
+				}
+				productsQ, err := readTx.StoredQuery("products_both_indexed")
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				joinedQ, err := ordersQ.Join(productsQ, JoinOn{
+					LeftField:  1,
+					RightField: 1,
+					Operator:   EQ,
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				b.ResetTimer()
+				for b.Loop() {
+					seq, err := readTx.Select(joinedQ)
+					if err != nil {
+						b.Fatal(err)
+					}
+					for range seq {
+						// drain
+					}
+				}
+			})
+
+			// Benchmark 2: Optimized Nested Loop (one side indexed)
+			b.Run("NestedLoop_OneIndexed", func(b *testing.B) {
+				readTx, err := db.Begin(false)
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer readTx.Rollback()
+
+				ordersQ, err := readTx.StoredQuery("orders_left_indexed")
+				if err != nil {
+					b.Fatal(err)
+				}
+				productsQ, err := readTx.StoredQuery("products_right_not_indexed")
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				// Should automatically choose: scan right (no index), lookup left (indexed)
+				joinedQ, err := ordersQ.Join(productsQ, JoinOn{
+					LeftField:  1,
+					RightField: 1,
+					Operator:   EQ,
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				b.ResetTimer()
+				for b.Loop() {
+					seq, err := readTx.Select(joinedQ)
+					if err != nil {
+						b.Fatal(err)
+					}
+					for range seq {
+						// drain
+					}
+				}
+			})
+		})
+	}
+}
+
+// BenchmarkMergeJoinComposite tests merge join with multi-column join keys
+func BenchmarkMergeJoinComposite(b *testing.B) {
+	db, cleanup := setupBenchmarkDB(b)
+	defer cleanup()
+
+	size := 1000
+
+	// Setup: Create tables with composite index on join columns
+	func() {
+		tx, err := db.Begin(true)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer tx.Rollback()
+
+		// Table A: id(0), cat(1), subcat(2), value(3)
+		err = tx.CreateStorage("composite_a", 4, []IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: true},     // id
+			{ReferencedCols: []int{1, 2}, IsUnique: false}, // (cat, subcat) composite
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		// Table B: id(0), cat(1), subcat(2), value(3)
+		err = tx.CreateStorage("composite_b", 4, []IndexInfo{
+			{ReferencedCols: []int{0}, IsUnique: true},     // id
+			{ReferencedCols: []int{1, 2}, IsUnique: false}, // (cat, subcat) composite
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		numCategories := 10
+		numSubcategories := 10
+
+		// Insert data with composite keys
+		for i := range size {
+			cat := fmt.Sprintf("cat_%d", i%numCategories)
+			subcat := fmt.Sprintf("sub_%d", (i/numCategories)%numSubcategories)
+
+			err = tx.Insert("composite_a", map[int]any{
+				0: fmt.Sprintf("a_%d", i),
+				1: cat,
+				2: subcat,
+				3: fmt.Sprintf("value_a_%d", i),
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			err = tx.Insert("composite_b", map[int]any{
+				0: fmt.Sprintf("b_%d", i),
+				1: cat,
+				2: subcat,
+				3: fmt.Sprintf("value_b_%d", i),
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}()
+
+	// Benchmark composite key join
+	readTx, err := db.Begin(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer readTx.Rollback()
+
+	aQ, err := readTx.StoredQuery("composite_a")
+	if err != nil {
+		b.Fatal(err)
+	}
+	bQ, err := readTx.StoredQuery("composite_b")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// Join on both cat and subcat
+	joinedQ, err := aQ.Join(bQ,
+		JoinOn{LeftField: 1, RightField: 1, Operator: EQ}, // cat
+		JoinOn{LeftField: 2, RightField: 2, Operator: EQ}, // subcat
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		seq, err := readTx.Select(joinedQ)
+		if err != nil {
+			b.Fatal(err)
+		}
+		count := 0
+		for _, err := range seq {
+			if err != nil {
+				b.Fatal(err)
+			}
+			count++
+		}
+		if count == 0 {
+			b.Fatal("Expected join results")
 		}
 	}
 }

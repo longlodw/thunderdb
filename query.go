@@ -140,9 +140,17 @@ func (n *closureNode) propagateToParents(row *Row, child queryNode) error {
 }
 
 type joinedQueryNode struct {
-	conditions []JoinOn
-	left       queryNode
-	right      queryNode
+	conditions            []JoinOn
+	left                  queryNode
+	right                 queryNode
+	preferredScanLeft     bool
+	mustUsePreferScanLeft bool
+	// Merge join decision made at initialization time
+	canUseMergeJoin       bool
+	mergeJoinLeftIndex    uint64
+	mergeJoinRightIndex   uint64
+	mergeJoinConditions   []JoinOn // EQ conditions for merge join
+	mergeJoinNonEQFilters []JoinOn // Non-EQ conditions to apply as post-filters
 	baseQueryNode
 }
 
@@ -155,6 +163,10 @@ func initJoinedQueryNode(result *joinedQueryNode, left, right queryNode, conditi
 	}
 	left.AddParent(result)
 	right.AddParent(result)
+	// Decide on preferred scan side based on conditions
+	result.preferredScanLeft, result.mustUsePreferScanLeft = result.chooseNestedLoopDirection()
+	// Determine if merge join is possible based on join conditions and available indexes
+	result.canUseMergeJoin, result.mergeJoinLeftIndex, result.mergeJoinRightIndex, result.mergeJoinConditions, result.mergeJoinNonEQFilters = result.determineMergeJoinCapability()
 	return nil
 }
 
@@ -182,8 +194,28 @@ func (n *joinedQueryNode) Find(
 	if err != nil {
 		return nil, err
 	}
-	if indexRange != nil && mainIndex < (uint64(1)<<n.left.metadata().ColumnsCount) {
-		leftSeq, err := n.left.Find(mainIndex, indexRange, leftEquals, leftRanges, leftExclusion, leftCols)
+
+	if seq, usedMergeJoin, err := n.tryMergeJoin(leftEquals, rightEquals, leftRanges, rightRanges, leftExclusion, rightExclusion, leftCols, rightCols); err != nil {
+		return nil, err
+	} else if usedMergeJoin {
+		return seq, nil
+	}
+
+	if (n.mustUsePreferScanLeft && n.preferredScanLeft) || mainIndex < (uint64(1)<<n.left.metadata().ColumnsCount) {
+		// Nested loop: scan left table, lookup in right table
+		var leftMainIndex uint64
+		var leftMainRanges *Range
+		if indexRange != nil && mainIndex < (uint64(1)<<n.left.metadata().ColumnsCount) {
+			leftMainIndex = mainIndex
+			leftMainRanges = indexRange
+		} else {
+			// No hint provided, use bestIndex
+			leftMainIndex, leftMainRanges, err = n.left.metadata().bestIndex(leftEquals, leftRanges)
+			if err != nil {
+				return nil, err
+			}
+		}
+		leftSeq, err := n.left.Find(leftMainIndex, leftMainRanges, leftEquals, leftRanges, leftExclusion, leftCols)
 		if err != nil {
 			return nil, err
 		}
@@ -287,10 +319,21 @@ func (n *joinedQueryNode) Find(
 			}
 		}, nil
 	}
+
+	// Nested loop: scan right table, lookup in left table
+	var rightMainIndex uint64
+	var rightMainRanges *Range
 	if indexRange != nil && mainIndex >= uint64(1)<<n.left.metadata().ColumnsCount {
-		mainIndex = mainIndex >> uint64(n.left.metadata().ColumnsCount)
+		rightMainIndex = mainIndex >> uint64(n.left.metadata().ColumnsCount)
+		rightMainRanges = indexRange
+	} else {
+		// No hint provided, use bestIndex
+		rightMainIndex, rightMainRanges, err = n.right.metadata().bestIndex(rightEquals, rightRanges)
+		if err != nil {
+			return nil, err
+		}
 	}
-	rightSeq, err := n.right.Find(mainIndex, indexRange, rightEquals, rightRanges, rightExclusion, rightCols)
+	rightSeq, err := n.right.Find(rightMainIndex, rightMainRanges, rightEquals, rightRanges, rightExclusion, rightCols)
 	if err != nil {
 		return nil, err
 	}
@@ -478,27 +521,31 @@ func (n *joinedQueryNode) ComputeContraintsForRight(
 				}
 			}
 		case LT:
-			var err error
-			curRange, err = NewRangeFromBytes(nil, key, false, false)
-			if err != nil {
-				return false, err
-			}
-
-		case LTE:
-			var err error
-			curRange, err = NewRangeFromBytes(nil, key, false, true)
-			if err != nil {
-				return false, err
-			}
-		case GT:
+			// Left < Right means Right > Left, so Right is in range (Left, nil)
 			var err error
 			curRange, err = NewRangeFromBytes(key, nil, false, false)
 			if err != nil {
 				return false, err
 			}
-		case GTE:
+
+		case LTE:
+			// Left <= Right means Right >= Left, so Right is in range [Left, nil)
 			var err error
 			curRange, err = NewRangeFromBytes(key, nil, true, false)
+			if err != nil {
+				return false, err
+			}
+		case GT:
+			// Left > Right means Right < Left, so Right is in range (nil, Left)
+			var err error
+			curRange, err = NewRangeFromBytes(nil, key, false, false)
+			if err != nil {
+				return false, err
+			}
+		case GTE:
+			// Left >= Right means Right <= Left, so Right is in range (nil, Left]
+			var err error
+			curRange, err = NewRangeFromBytes(nil, key, false, true)
 			if err != nil {
 				return false, err
 			}
@@ -689,6 +736,410 @@ func (n *joinedQueryNode) ComputeContraintsForLeft(
 		}
 	}
 	return true, nil
+}
+
+// determineMergeJoinCapability checks at initialization time if merge join is possible.
+// This decision is based solely on:
+// 1. Join conditions (must have at least one EQ condition)
+// 2. Available indexes on both tables (both must have indexes on EQ join columns)
+// Non-EQ conditions are separated and applied as post-filters after merge join.
+// Returns: canUseMergeJoin, leftIndex, rightIndex, eqConditions, nonEQConditions
+func (n *joinedQueryNode) determineMergeJoinCapability() (bool, uint64, uint64, []JoinOn, []JoinOn) {
+	if len(n.conditions) == 0 {
+		return false, 0, 0, nil, nil
+	}
+
+	// Separate EQ and non-EQ join conditions
+	var eqConditions []JoinOn
+	var nonEQConditions []JoinOn
+	for _, cond := range n.conditions {
+		if cond.Operator == EQ {
+			eqConditions = append(eqConditions, cond)
+		} else {
+			// Non-EQ operators will be applied as post-filters
+			nonEQConditions = append(nonEQConditions, cond)
+		}
+	}
+
+	if len(eqConditions) == 0 {
+		// No EQ conditions means we can't use merge join at all
+		return false, 0, 0, nil, nil
+	}
+
+	// Build join column bitmasks for EQ conditions only
+	leftJoinCols := uint64(0)
+	rightJoinCols := uint64(0)
+	for _, cond := range eqConditions {
+		leftJoinCols |= 1 << uint64(cond.LeftField)
+		rightJoinCols |= 1 << uint64(cond.RightField)
+	}
+
+	// Check if both sides have indexes that cover the join columns
+	// We check if there's an index where join columns form a prefix
+	leftIndex, leftFound := n.findJoinPrefixIndex(n.left.metadata(), leftJoinCols)
+	rightIndex, rightFound := n.findJoinPrefixIndex(n.right.metadata(), rightJoinCols)
+
+	if !leftFound || !rightFound {
+		return false, 0, 0, nil, nil
+	}
+
+	return true, leftIndex, rightIndex, eqConditions, nonEQConditions
+}
+
+// findJoinPrefixIndex finds an index where the join columns form a prefix.
+// This is used at initialization time, so it doesn't consider query-time filtering conditions.
+func (n *joinedQueryNode) findJoinPrefixIndex(meta *Metadata, joinBits uint64) (uint64, bool) {
+	// First, try exact match
+	if _, exists := meta.Indexes[joinBits]; exists {
+		return joinBits, true
+	}
+
+	// Try to find a composite index where join columns form a prefix
+	for indexBits := range meta.Indexes {
+		// Check if this index contains all join columns
+		if indexBits&joinBits != joinBits {
+			continue
+		}
+
+		// Check if join columns form a prefix of this index
+		refCols := ReferenceColumns(indexBits)
+		allJoinColsAtPrefix := true
+		seenNonJoinCol := false
+
+		for col := range refCols {
+			isJoinCol := (joinBits & (1 << uint64(col))) != 0
+
+			if !isJoinCol {
+				// This is not a join column, mark that we've seen a non-join column
+				seenNonJoinCol = true
+			} else if seenNonJoinCol {
+				// This is a join column, but we've already seen a non-join column
+				// So join columns don't form a prefix
+				allJoinColsAtPrefix = false
+				break
+			}
+		}
+
+		if allJoinColsAtPrefix {
+			return indexBits, true
+		}
+	}
+
+	return 0, false
+}
+
+// tryMergeJoin attempts to use a merge join optimization.
+// The decision of whether merge join is possible was made at initialization time.
+// This method just checks if it's still beneficial given the query-time filtering conditions.
+func (n *joinedQueryNode) tryMergeJoin(
+	leftEquals, rightEquals map[int]*Value,
+	leftRanges, rightRanges map[int]*Range,
+	leftExclusion, rightExclusion map[int][]*Value,
+	leftCols, rightCols map[int]bool,
+) (iter.Seq2[*Row, error], bool, error) {
+	// If merge join was determined to be impossible at init time, don't try
+	if !n.canUseMergeJoin {
+		return nil, false, nil
+	}
+
+	// Execute merge join using the pre-computed indexes
+	seq, err := n.executeMergeJoin(
+		leftEquals, rightEquals,
+		leftRanges, rightRanges,
+		leftExclusion, rightExclusion,
+		leftCols, rightCols,
+		n.mergeJoinConditions,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return seq, true, nil
+}
+
+// executeMergeJoin performs the actual merge join operation using pre-computed indexes
+func (n *joinedQueryNode) executeMergeJoin(
+	leftEquals, rightEquals map[int]*Value,
+	leftRanges, rightRanges map[int]*Range,
+	leftExclusion, rightExclusion map[int][]*Value,
+	leftCols, rightCols map[int]bool,
+	eqConditions []JoinOn,
+) (iter.Seq2[*Row, error], error) {
+	// Use the pre-computed merge join indexes
+	// For merge join, we scan both indexes in sorted order (no specific range constraint)
+
+	// Get sequences from both sides using the merge join indexes
+	leftSeq, err := n.left.Find(n.mergeJoinLeftIndex, nil, leftEquals, leftRanges, leftExclusion, leftCols)
+	if err != nil {
+		return nil, err
+	}
+
+	rightSeq, err := n.right.Find(n.mergeJoinRightIndex, nil, rightEquals, rightRanges, rightExclusion, rightCols)
+	if err != nil {
+		return nil, err
+	}
+
+	// Pre-calculate capacity for joined row map
+	joinedRowCap := n.left.metadata().ColumnsCount + n.right.metadata().ColumnsCount
+
+	return func(yield func(*Row, error) bool) {
+		// Buffer for storing rows from left and right sides that match current key
+		var leftBuffer []*Row
+		var rightBuffer []*Row
+		var currentLeftKey []byte
+		var currentRightKey []byte
+
+		leftNext, leftStop := iter.Pull2(leftSeq)
+		rightNext, rightStop := iter.Pull2(rightSeq)
+		defer leftStop()
+		defer rightStop()
+
+		// Pull initial rows
+		leftRow, leftErr, leftOk := leftNext()
+		rightRow, rightErr, rightOk := rightNext()
+
+		for leftOk && leftErr == nil && rightOk && rightErr == nil {
+			// Extract join key from left row
+			currentLeftKey, err = n.extractJoinKey(leftRow, eqConditions, true)
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				leftRow, leftErr, leftOk = leftNext()
+				continue
+			}
+
+			// Extract join key from right row
+			currentRightKey, err = n.extractJoinKey(rightRow, eqConditions, false)
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				rightRow, rightErr, rightOk = rightNext()
+				continue
+			}
+
+			// Compare keys
+			cmp := bytes.Compare(currentLeftKey, currentRightKey)
+
+			if cmp < 0 {
+				// Left key < right key, advance left
+				leftRow, leftErr, leftOk = leftNext()
+			} else if cmp > 0 {
+				// Left key > right key, advance right
+				rightRow, rightErr, rightOk = rightNext()
+			} else {
+				// Keys match! Collect all left rows with this key
+				leftBuffer = leftBuffer[:0]
+				leftBuffer = append(leftBuffer, &Row{values: maps.Clone(leftRow.values)})
+				matchKey := slices.Clone(currentLeftKey)
+
+				// Collect all left rows with same key
+				for {
+					nextLeftRow, nextLeftErr, nextLeftOk := leftNext()
+					if !nextLeftOk || nextLeftErr != nil {
+						leftRow, leftErr, leftOk = nextLeftRow, nextLeftErr, nextLeftOk
+						break
+					}
+
+					nextLeftKey, err := n.extractJoinKey(nextLeftRow, eqConditions, true)
+					if err != nil {
+						if !yield(nil, err) {
+							return
+						}
+						leftRow, leftErr, leftOk = nextLeftRow, nextLeftErr, nextLeftOk
+						break
+					}
+
+					if bytes.Equal(matchKey, nextLeftKey) {
+						leftBuffer = append(leftBuffer, &Row{values: maps.Clone(nextLeftRow.values)})
+					} else {
+						// Different key, save for next iteration
+						leftRow, leftErr, leftOk = nextLeftRow, nextLeftErr, nextLeftOk
+						break
+					}
+				}
+
+				// Collect all right rows with this key
+				rightBuffer = rightBuffer[:0]
+				rightBuffer = append(rightBuffer, &Row{values: maps.Clone(rightRow.values)})
+
+				for {
+					nextRightRow, nextRightErr, nextRightOk := rightNext()
+					if !nextRightOk || nextRightErr != nil {
+						rightRow, rightErr, rightOk = nextRightRow, nextRightErr, nextRightOk
+						break
+					}
+
+					nextRightKey, err := n.extractJoinKey(nextRightRow, eqConditions, false)
+					if err != nil {
+						if !yield(nil, err) {
+							return
+						}
+						rightRow, rightErr, rightOk = nextRightRow, nextRightErr, nextRightOk
+						break
+					}
+
+					if bytes.Equal(matchKey, nextRightKey) {
+						rightBuffer = append(rightBuffer, &Row{values: maps.Clone(nextRightRow.values)})
+					} else {
+						// Different key, save for next iteration
+						rightRow, rightErr, rightOk = nextRightRow, nextRightErr, nextRightOk
+						break
+					}
+				}
+
+				// Emit all combinations of buffered left and right rows
+				joinedRow := &Row{values: make(map[int][]byte, joinedRowCap)}
+				for _, bufferedLeft := range leftBuffer {
+					for _, bufferedRight := range rightBuffer {
+						n.joinInto(joinedRow, bufferedLeft, bufferedRight)
+
+						// Apply non-EQ filters if present
+						if len(n.mergeJoinNonEQFilters) > 0 {
+							passes, err := n.checkNonEQConditions(joinedRow, n.mergeJoinNonEQFilters)
+							if err != nil {
+								if !yield(nil, err) {
+									return
+								}
+								continue
+							}
+							if !passes {
+								// Row doesn't satisfy non-EQ conditions, skip it
+								continue
+							}
+						}
+
+						if !yield(joinedRow, nil) {
+							return
+						}
+					}
+				}
+			}
+		}
+
+		// Handle any errors from the final pulls
+		if leftErr != nil {
+			if !yield(nil, leftErr) {
+				return
+			}
+		}
+		if rightErr != nil {
+			if !yield(nil, rightErr) {
+				return
+			}
+		}
+	}, nil
+}
+
+// extractJoinKey creates a composite key from the join columns in a row
+func (n *joinedQueryNode) extractJoinKey(row *Row, conditions []JoinOn, isLeft bool) ([]byte, error) {
+	values := make([]*Value, len(conditions))
+	for i, cond := range conditions {
+		var col int
+		if isLeft {
+			col = cond.LeftField
+		} else {
+			col = cond.RightField
+		}
+
+		if valBytes, ok := row.values[col]; ok {
+			values[i] = ValueOfRaw(valBytes)
+		} else {
+			return nil, ErrFieldNotFound(col)
+		}
+	}
+
+	return ToKey(values...)
+}
+
+// checkNonEQConditions evaluates non-EQ join conditions on a joined row.
+// The row contains values from both left and right tables.
+// Returns true if all non-EQ conditions are satisfied, false otherwise.
+func (n *joinedQueryNode) checkNonEQConditions(row *Row, nonEQConditions []JoinOn) (bool, error) {
+	leftColCount := n.left.metadata().ColumnsCount
+
+	for _, cond := range nonEQConditions {
+		// Get left value bytes
+		leftBytes, ok := row.values[cond.LeftField]
+		if !ok {
+			return false, ErrFieldNotFound(cond.LeftField)
+		}
+
+		// Get right value bytes (offset by left column count)
+		rightCol := leftColCount + cond.RightField
+		rightBytes, ok := row.values[rightCol]
+		if !ok {
+			return false, ErrFieldNotFound(rightCol)
+		}
+
+		// Compare byte representations
+		cmp := bytes.Compare(leftBytes, rightBytes)
+
+		satisfied := false
+		switch cond.Operator {
+		case GT:
+			satisfied = cmp > 0
+		case GTE:
+			satisfied = cmp >= 0
+		case LT:
+			satisfied = cmp < 0
+		case LTE:
+			satisfied = cmp <= 0
+		case NEQ:
+			satisfied = cmp != 0
+		default:
+			return false, ErrUnsupportedOperator(cond.Operator)
+		}
+
+		if !satisfied {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// chooseNestedLoopDirection determines which table to scan (outer loop) for nested loop join.
+// Returns true if we should scan the left table, false if we should scan the right table.
+// Strategy: Scan the table WITHOUT an index on join columns (outer), and use the indexed
+// table for lookups (inner), to avoid full table scans on the inner loop.
+func (n *joinedQueryNode) chooseNestedLoopDirection() (isLeft, enforced bool) {
+	// Extract join columns from conditions
+	if len(n.conditions) == 0 {
+		return true, false
+	}
+
+	leftJoinCols := uint64(0)
+	rightJoinCols := uint64(0)
+	for _, cond := range n.conditions {
+		leftJoinCols |= 1 << uint64(cond.LeftField)
+		rightJoinCols |= 1 << uint64(cond.RightField)
+	}
+
+	if leftJoinCols == 0 || rightJoinCols == 0 {
+		return true, false
+	}
+
+	// Check if each side has an index on join columns
+	// Use the same logic as merge join determination
+	_, leftHasJoinIndex := n.findJoinPrefixIndex(n.left.metadata(), leftJoinCols)
+	_, rightHasJoinIndex := n.findJoinPrefixIndex(n.right.metadata(), rightJoinCols)
+
+	// Decision logic:
+	// - If only right has index on join cols: scan left, lookup right (return true)
+	// - If only left has index on join cols: scan right, lookup left (return false)
+	// - If both have indexes: default to scanning left (merge join should have been used)
+	// - If neither has indexes: default to scanning left (both are bad)
+
+	if leftHasJoinIndex && !rightHasJoinIndex {
+		return false, true
+	} else if !leftHasJoinIndex && rightHasJoinIndex {
+		return true, true
+	} else {
+		// Both have or both don't have join indexes
+		return true, false
+	}
 }
 
 func (n *joinedQueryNode) propagateToParents(row *Row, child queryNode) error {

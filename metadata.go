@@ -80,6 +80,28 @@ func initProjectedMetadata(result, child *Metadata, cols []int) error {
 	return nil
 }
 
+func (sm *Metadata) canLookupFromJoin(conditions []JoinOn, left bool) bool {
+	for _, op := range []Op{EQ, NEQ, LT, LTE, GT, GTE} {
+		bits := uint64(0)
+		for _, cond := range conditions {
+			if cond.Operator != op {
+				continue
+			}
+			if left {
+				bits |= (1 << uint64(cond.LeftField))
+			} else {
+				bits |= (1 << uint64(cond.RightField))
+			}
+		}
+		for idx := range sm.Indexes {
+			if idx&bits == idx {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*Range) (uint64, *Range, error) {
 	equBits := uint64(0)
 	for idx := range equals {
