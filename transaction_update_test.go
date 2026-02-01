@@ -50,13 +50,13 @@ func TestPersistent_Update(t *testing.T) {
 
 		// Update Bob's age to 26
 		updates := map[int]any{3: int64(26)}
-		if err := tx.Update(relation, updates, Condition{Field: 0, Operator: EQ, Value: "2"}); err != nil {
+		if err := tx.Update(relation, updates, SelectCondition{Col: 0, Operator: EQ, Value: "2"}); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify update
 		p, _ := tx.StoredQuery(relation)
-		seq, _ := tx.Select(p, Condition{Field: 0, Operator: EQ, Value: "2"})
+		seq, _ := tx.Select(p, SelectCondition{Col: 0, Operator: EQ, Value: "2"})
 		count := 0
 		for row, err := range seq {
 			if err != nil {
@@ -84,7 +84,7 @@ func TestPersistent_Update(t *testing.T) {
 		// Try to update Alice's email to Bob's email
 		updates := map[int]any{2: "bob@example.com"}
 
-		err := tx.Update(relation, updates, Condition{Field: 0, Operator: EQ, Value: "1"})
+		err := tx.Update(relation, updates, SelectCondition{Col: 0, Operator: EQ, Value: "1"})
 		if err == nil {
 			t.Fatal("Expected unique constraint violation error, got nil")
 		}
@@ -101,13 +101,13 @@ func TestPersistent_Update(t *testing.T) {
 
 		// Update Charlie's age (indexed)
 		updates := map[int]any{3: int64(36)}
-		if err := tx.Update(relation, updates, Condition{Field: 0, Operator: EQ, Value: "3"}); err != nil {
+		if err := tx.Update(relation, updates, SelectCondition{Col: 0, Operator: EQ, Value: "3"}); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify using the index
 		p, _ := tx.StoredQuery(relation)
-		seq, _ := tx.Select(p, Condition{Field: 3, Operator: EQ, Value: int64(36)})
+		seq, _ := tx.Select(p, SelectCondition{Col: 3, Operator: EQ, Value: int64(36)})
 		count := 0
 		for _, err := range seq {
 			if err != nil {
@@ -120,7 +120,7 @@ func TestPersistent_Update(t *testing.T) {
 		}
 
 		// Verify old index value is gone
-		seqOld, _ := tx.Select(p, Condition{Field: 3, Operator: EQ, Value: int64(35)})
+		seqOld, _ := tx.Select(p, SelectCondition{Col: 3, Operator: EQ, Value: int64(35)})
 		countOld := 0
 		for range seqOld {
 			countOld++
@@ -138,14 +138,14 @@ func TestPersistent_Update(t *testing.T) {
 		// Update all users with age > 20 to have "Updated" name
 		updates := map[int]any{1: "Updated"} // set name (col 1)
 
-		if err := tx.Update(relation, updates, Condition{Field: 3, Operator: GT, Value: int64(20)}); err != nil {
+		if err := tx.Update(relation, updates, SelectCondition{Col: 3, Operator: GT, Value: int64(20)}); err != nil {
 			t.Fatal(err)
 		}
 
 		// Verify
 		p, _ := tx.StoredQuery(relation)
 		// Select using same range to check results
-		seq, _ := tx.Select(p, Condition{Field: 3, Operator: GT, Value: int64(20)})
+		seq, _ := tx.Select(p, SelectCondition{Col: 3, Operator: GT, Value: int64(20)})
 		for row, err := range seq {
 			if err != nil {
 				t.Fatal(err)
@@ -167,7 +167,7 @@ func TestPersistent_Update(t *testing.T) {
 
 		updates := map[int]any{2: "alice@example.com"} // Same email
 
-		if err := tx.Update(relation, updates, Condition{Field: 0, Operator: EQ, Value: "1"}); err != nil {
+		if err := tx.Update(relation, updates, SelectCondition{Col: 0, Operator: EQ, Value: "1"}); err != nil {
 			t.Fatalf("Update with same unique value failed: %v", err)
 		}
 	})

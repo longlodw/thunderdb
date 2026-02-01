@@ -133,7 +133,7 @@ func TestStats_OperationCounts(t *testing.T) {
 
 	// Update rows
 	err = db.Update(func(tx *Tx) error {
-		return tx.Update("users", map[int]any{1: "updated"}, Condition{Field: 2, Operator: GTE, Value: 20})
+		return tx.Update("users", map[int]any{1: "updated"}, SelectCondition{Col: 2, Operator: GTE, Value: 20})
 	})
 	if err != nil {
 		t.Fatalf("update failed: %v", err)
@@ -146,7 +146,7 @@ func TestStats_OperationCounts(t *testing.T) {
 
 	// Delete rows
 	err = db.Update(func(tx *Tx) error {
-		return tx.Delete("users", Condition{Field: 0, Operator: LT, Value: 2})
+		return tx.Delete("users", SelectCondition{Col: 0, Operator: LT, Value: 2})
 	})
 	if err != nil {
 		t.Fatalf("delete failed: %v", err)
@@ -208,7 +208,7 @@ func TestStats_QueryCounts(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		results, err := tx.Select(q, Condition{Field: 0, Operator: EQ, Value: 5})
+		results, err := tx.Select(q, SelectCondition{Col: 0, Operator: EQ, Value: 5})
 		if err != nil {
 			return err
 		}
@@ -245,7 +245,7 @@ func TestStats_QueryCounts(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		results, err := tx.Select(q, Condition{Field: 1, Operator: EQ, Value: "item"})
+		results, err := tx.Select(q, SelectCondition{Col: 1, Operator: EQ, Value: "item"})
 		if err != nil {
 			return err
 		}
@@ -320,7 +320,7 @@ func TestStats_JoinCounts(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		joined, err := users.Join(orders, JoinOn{LeftField: 0, RightField: 0, Operator: EQ})
+		joined, err := users.Join(orders, JoinCondition{Left: 0, Right: 0, Operator: EQ})
 		if err != nil {
 			return err
 		}

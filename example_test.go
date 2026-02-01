@@ -62,8 +62,8 @@ func Example() {
 		}
 
 		// Execute Select
-		seq, err := tx.Select(users, thunderdb.Condition{
-			Field:    1,
+		seq, err := tx.Select(users, thunderdb.SelectCondition{
+			Col:      1,
 			Operator: thunderdb.EQ,
 			Value:    "alice",
 		})
@@ -251,10 +251,10 @@ func Example_recursive() {
 		// We join 'employees' (manager=a, id=b) with 'path' (ancestor=b, descendant=c)
 		// Join key is implicit 'b' (mapped to the same name "join_key")
 
-		joinedPathProj, err := employees.Join(qPath, thunderdb.JoinOn{
-			LeftField:  0, // employees.id -> b
-			RightField: 0, // path.ancestor -> b
-			Operator:   thunderdb.EQ,
+		joinedPathProj, err := employees.Join(qPath, thunderdb.JoinCondition{
+			Left:     0, // employees.id -> b
+			Right:    0, // path.ancestor -> b
+			Operator: thunderdb.EQ,
 		})
 		if err != nil {
 			return err
@@ -269,8 +269,8 @@ func Example_recursive() {
 		}
 
 		// Execute: Find all descendants of Alice (id=1)
-		seq, err := tx.Select(qPath, thunderdb.Condition{
-			Field:    0, // ancestor
+		seq, err := tx.Select(qPath, thunderdb.SelectCondition{
+			Col:      0, // ancestor
 			Operator: thunderdb.EQ,
 			Value:    "1", // Alice's ID
 		})
@@ -362,8 +362,8 @@ func Example_stats() {
 		if err != nil {
 			return err
 		}
-		results, err := tx.Select(products, thunderdb.Condition{
-			Field:    1, // category (indexed)
+		results, err := tx.Select(products, thunderdb.SelectCondition{
+			Col:      1, // category (indexed)
 			Operator: thunderdb.EQ,
 			Value:    "electronics",
 		})

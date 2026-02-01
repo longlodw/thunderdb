@@ -80,7 +80,7 @@ func initProjectedMetadata(result, child *Metadata, cols []int) error {
 	return nil
 }
 
-func (sm *Metadata) canLookupFromJoin(conditions []JoinOn, left bool) bool {
+func (sm *Metadata) canLookupFromJoin(conditions []JoinCondition, left bool) bool {
 	for _, op := range []Op{EQ, NEQ, LT, LTE, GT, GTE} {
 		bits := uint64(0)
 		for _, cond := range conditions {
@@ -88,9 +88,9 @@ func (sm *Metadata) canLookupFromJoin(conditions []JoinOn, left bool) bool {
 				continue
 			}
 			if left {
-				bits |= (1 << uint64(cond.LeftField))
+				bits |= (1 << uint64(cond.Left))
 			} else {
-				bits |= (1 << uint64(cond.RightField))
+				bits |= (1 << uint64(cond.Right))
 			}
 		}
 		for idx := range sm.Indexes {
@@ -102,7 +102,7 @@ func (sm *Metadata) canLookupFromJoin(conditions []JoinOn, left bool) bool {
 	return false
 }
 
-func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*Range) (uint64, *Range, error) {
+func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*interval) (uint64, *interval, error) {
 	equBits := uint64(0)
 	for idx := range equals {
 		equBits |= (1 << uint64(idx))
@@ -126,12 +126,12 @@ func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*Range) (uin
 			if err != nil {
 				continue
 			}
-			r := NewPointRangeFromBytes(keyBytes)
+			r := newPointIntervalFromBytes(keyBytes)
 			return idx, r, nil
 		}
 	}
 	shortestIndex := uint64(0)
-	var shortestRange *Range
+	var shortestRange *interval
 	for col, r := range ranges {
 		// This assumes 1-column indexes mainly?
 		idxBitsMap := uint64(1) << col
@@ -146,9 +146,9 @@ func (sm *Metadata) bestIndex(equals map[int]*Value, ranges map[int]*Range) (uin
 	return shortestIndex, shortestRange, nil
 }
 
-func splitRanges(left, right *Metadata, ranges map[int]*Range) (map[int]*Range, map[int]*Range, error) {
-	leftRanges := make(map[int]*Range, len(ranges))
-	rightRanges := make(map[int]*Range, len(ranges))
+func splitRanges(left, right *Metadata, ranges map[int]*interval) (map[int]*interval, map[int]*interval, error) {
+	leftRanges := make(map[int]*interval, len(ranges))
+	rightRanges := make(map[int]*interval, len(ranges))
 	for col, r := range ranges {
 		if col < left.ColumnsCount {
 			leftRanges[col] = r

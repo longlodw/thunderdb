@@ -155,15 +155,15 @@ func (tx *Tx) wrapIteratorWithStats(it iter.Seq2[*Row, error]) iter.Seq2[*Row, e
 //
 // Example:
 //
-//	err := tx.CreateStorage("users", 3, []thunderdb.IndexInfo{
+//	err := tx.CreateStorage("users", 3,
 //	    {ReferencedCols: []int{0}, IsUnique: true},  // unique index on column 0
 //	    {ReferencedCols: []int{1}, IsUnique: false}, // non-unique index on column 1
 //	    {ReferencedCols: []int{1, 2}, IsUnique: false}, // composite index on columns 1 and 2
-//	})
+//	)
 func (tx *Tx) CreateStorage(
 	relation string,
 	columnCount int,
-	indexInfos []IndexInfo,
+	indexInfos ...IndexInfo,
 ) error {
 	var metadataObj Metadata
 	if err := initStoredMetadata(&metadataObj, columnCount, indexInfos); err != nil {
@@ -232,7 +232,7 @@ func (tx *Tx) loadStorage(relation string) (*storage, error) {
 //	})
 func (tx *Tx) Delete(
 	relation string,
-	conditions ...Condition,
+	conditions ...SelectCondition,
 ) error {
 	start := time.Now()
 	equals, ranges, exclusion, possible, err := parseConditions(conditions)
@@ -271,7 +271,7 @@ func (tx *Tx) Delete(
 func (tx *Tx) Update(
 	relation string,
 	updates map[int]any,
-	conditions ...Condition,
+	conditions ...SelectCondition,
 ) error {
 	start := time.Now()
 	equals, ranges, exclusion, possible, err := parseConditions(conditions)
@@ -336,7 +336,7 @@ func (tx *Tx) StoredQuery(name string) (*StoredQuery, error) {
 // using ClosedUnder() before execution.
 //
 // The maximum number of columns is 64.
-func (tx *Tx) ClosureQuery(colsCount int, indexInfos []IndexInfo) (*Closure, error) {
+func (tx *Tx) ClosureQuery(colsCount int, indexInfos ...IndexInfo) (*Closure, error) {
 	if tx.tempTableID == ^uint64(0) {
 		return nil, ErrTooManyClosures()
 	}
@@ -408,7 +408,7 @@ func (tx *Tx) Metadata(relation string) (*Metadata, error) {
 //	}
 func (tx *Tx) Select(
 	body Query,
-	conditions ...Condition,
+	conditions ...SelectCondition,
 ) (iter.Seq2[*Row, error], error) {
 	start := time.Now()
 	if tx.db != nil {
@@ -473,7 +473,7 @@ func (tx *Tx) constructQueryGraph(
 	baseNodes *[]*backedQueryNode,
 	body Query,
 	equals map[int]*Value,
-	ranges map[int]*Range,
+	ranges map[int]*interval,
 	exclusion map[int][]*Value,
 	skipBase bool,
 ) (queryNode, error) {
@@ -541,7 +541,7 @@ func (tx *Tx) constructQueryGraph(
 				childEquals[b.cols[field]] = v
 			}
 		}
-		childRanges := make(map[int]*Range)
+		childRanges := make(map[int]*interval)
 		for field, r := range ranges {
 			if field < len(b.cols) {
 				childRanges[b.cols[field]] = r
@@ -630,7 +630,7 @@ type bodyFilter struct {
 	filter string
 }
 
-func rangesToString(ranges map[int]*Range) string {
+func rangesToString(ranges map[int]*interval) string {
 	keys := slices.Collect(maps.Keys(ranges))
 	slices.Sort(keys)
 	parts := make([]string, len(keys))

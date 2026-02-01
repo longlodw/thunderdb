@@ -101,7 +101,7 @@ func TestBasicCRUD_SelectAlice(t *testing.T) {
 	}
 
 	// Select where username(1) == "alice"
-	seq, err := tx.Select(p, Condition{Field: 1, Operator: EQ, Value: "alice"})
+	seq, err := tx.Select(p, SelectCondition{Col: 1, Operator: EQ, Value: "alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 		defer tx.Rollback()
 
 		// Delete where username(1) == "bob"
-		if err := tx.Delete("users", Condition{Field: 1, Operator: EQ, Value: "bob"}); err != nil {
+		if err := tx.Delete("users", SelectCondition{Col: 1, Operator: EQ, Value: "bob"}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -190,7 +190,7 @@ func TestBasicCRUD_DeleteBob(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		seq, err := tx.Select(p, Condition{Field: 1, Operator: EQ, Value: "bob"})
+		seq, err := tx.Select(p, SelectCondition{Col: 1, Operator: EQ, Value: "bob"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -247,7 +247,7 @@ func TestNonIndexedSelect(t *testing.T) {
 	}
 
 	// price is column 1
-	seq, err := tx.Select(p, Condition{Field: 1, Operator: EQ, Value: 20.0})
+	seq, err := tx.Select(p, SelectCondition{Col: 1, Operator: EQ, Value: 20.0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestProjection(t *testing.T) {
 
 		// Filter: username is now at index 2 in projected relation.
 		// username is at index 2.
-		seq, err := tx.Select(proj, Condition{Field: 2, Operator: EQ, Value: "alice"})
+		seq, err := tx.Select(proj, SelectCondition{Col: 2, Operator: EQ, Value: "alice"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -394,7 +394,7 @@ func TestDifferentOperators(t *testing.T) {
 	}
 
 	// Test Greater Than: price(1) > 15.0
-	seqGt, err := tx.Select(p, Condition{Field: 1, Operator: GT, Value: 15.0})
+	seqGt, err := tx.Select(p, SelectCondition{Col: 1, Operator: GT, Value: 15.0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func TestDifferentOperators(t *testing.T) {
 	}
 
 	// Test Less Than or Equal: stock(2) <= 20.0
-	seqLe, err := tx.Select(p, Condition{Field: 2, Operator: LTE, Value: 20.0})
+	seqLe, err := tx.Select(p, SelectCondition{Col: 2, Operator: LTE, Value: 20.0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,8 +438,8 @@ func TestDifferentOperators(t *testing.T) {
 
 	// Test Multiple Operators (AND): price(1) > 10 AND stock(2) > 0
 	seqMulti, err := tx.Select(p,
-		Condition{Field: 1, Operator: GT, Value: 10.0},
-		Condition{Field: 2, Operator: GT, Value: 0.0},
+		SelectCondition{Col: 1, Operator: GT, Value: 10.0},
+		SelectCondition{Col: 2, Operator: GT, Value: 0.0},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -525,8 +525,8 @@ func TestCompositeIndex(t *testing.T) {
 	// Test 1: Exact match on composite index
 	// We check if providing values for first(1) and last(2) hits the index
 	seq, err := tx.Select(p,
-		Condition{Field: 1, Operator: EQ, Value: "John"},
-		Condition{Field: 2, Operator: EQ, Value: "Doe"},
+		SelectCondition{Col: 1, Operator: EQ, Value: "John"},
+		SelectCondition{Col: 2, Operator: EQ, Value: "Doe"},
 	)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)
@@ -552,9 +552,9 @@ func TestCompositeIndex(t *testing.T) {
 	// Test 3: Composite + non-indexed filter
 	// John Doe (1, 2) AND Age=30(3) (Age is 30 in data)
 	seq2, err := tx.Select(p,
-		Condition{Field: 1, Operator: EQ, Value: "John"},
-		Condition{Field: 2, Operator: EQ, Value: "Doe"},
-		Condition{Field: 3, Operator: EQ, Value: 30.0},
+		SelectCondition{Col: 1, Operator: EQ, Value: "John"},
+		SelectCondition{Col: 2, Operator: EQ, Value: "Doe"},
+		SelectCondition{Col: 3, Operator: EQ, Value: 30.0},
 	)
 	if err != nil {
 		t.Fatalf("Select failed: %v", err)

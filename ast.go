@@ -20,7 +20,7 @@ type Query interface {
 	// The conditions specify how rows from the two queries should be matched.
 	// The resulting query has columns from both queries concatenated
 	// (left columns first, then right columns).
-	Join(other Query, conditions ...JoinOn) (Query, error)
+	Join(other Query, conditions ...JoinCondition) (Query, error)
 
 	// Metadata returns the query's metadata including column count and indexes.
 	Metadata() *Metadata
@@ -63,7 +63,7 @@ func (h *Closure) Project(cols ...int) (Query, error) {
 }
 
 // Join creates a joined query with another query.
-func (h *Closure) Join(other Query, conditions ...JoinOn) (Query, error) {
+func (h *Closure) Join(other Query, conditions ...JoinCondition) (Query, error) {
 	return newJoinedQuery(h, other, conditions)
 }
 
@@ -113,7 +113,7 @@ func (ph *ProjectedQuery) Project(cols ...int) (Query, error) {
 }
 
 // Join creates a joined query with another query.
-func (ph *ProjectedQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
+func (ph *ProjectedQuery) Join(other Query, conditions ...JoinCondition) (Query, error) {
 	return newJoinedQuery(ph, other, conditions)
 }
 
@@ -128,14 +128,14 @@ func (ph *ProjectedQuery) Metadata() *Metadata {
 type JoinedQuery struct {
 	left       Query
 	right      Query
-	conditions []JoinOn
+	conditions []JoinCondition
 	metadata   Metadata
 }
 
 func newJoinedQuery(
 	left Query,
 	right Query,
-	conditions []JoinOn,
+	conditions []JoinCondition,
 ) (*JoinedQuery, error) {
 	result := &JoinedQuery{
 		left:       left,
@@ -154,7 +154,7 @@ func (jh *JoinedQuery) Project(cols ...int) (Query, error) {
 }
 
 // Join creates a joined query with another query.
-func (jh *JoinedQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
+func (jh *JoinedQuery) Join(other Query, conditions ...JoinCondition) (Query, error) {
 	return newJoinedQuery(jh, other, conditions)
 }
 
@@ -181,21 +181,69 @@ const (
 	GTE
 )
 
-// JoinOn specifies a join condition between two queries. It defines how
+// JoinCondition specifies a join condition between two queries. It defines how
 // columns from the left and right queries should be compared.
 //
 // Example:
 //
 //	// Join users and orders where users.id = orders.user_id
-//	joined, _ := users.Join(orders, thunderdb.JoinOn{
-//	    LeftField:  0,  // users.id (column 0 of left query)
-//	    RightField: 2,  // orders.user_id (column 2 of right query)
+//	joined, _ := users.Join(orders, thunderdb.JoinCondition{
+//	    Left:  0,  // users.id (column 0 of left query)
+//	    Right: 2,  // orders.user_id (column 2 of right query)
 //	    Operator:   thunderdb.EQ,
 //	})
-type JoinOn struct {
-	LeftField  int // Column index in the left query
-	RightField int // Column index in the right query
-	Operator   Op  // Comparison operator
+type JoinCondition struct {
+	Left     int // Column index in the left query
+	Right    int // Column index in the right query
+	Operator Op  // Comparison operator
+}
+
+func OnEQ(leftCol, rightCol int) JoinCondition {
+	return JoinCondition{
+		Left:     leftCol,
+		Right:    rightCol,
+		Operator: EQ,
+	}
+}
+
+func OnNEQ(leftCol, rightCol int) JoinCondition {
+	return JoinCondition{
+		Left:     leftCol,
+		Right:    rightCol,
+		Operator: NEQ,
+	}
+}
+
+func OnLT(leftCol, rightCol int) JoinCondition {
+	return JoinCondition{
+		Left:     leftCol,
+		Right:    rightCol,
+		Operator: LT,
+	}
+}
+
+func OnLTE(leftCol, rightCol int) JoinCondition {
+	return JoinCondition{
+		Left:     leftCol,
+		Right:    rightCol,
+		Operator: LTE,
+	}
+}
+
+func OnGT(leftCol, rightCol int) JoinCondition {
+	return JoinCondition{
+		Left:     leftCol,
+		Right:    rightCol,
+		Operator: GT,
+	}
+}
+
+func OnGTE(leftCol, rightCol int) JoinCondition {
+	return JoinCondition{
+		Left:     leftCol,
+		Right:    rightCol,
+		Operator: GTE,
+	}
 }
 
 // StoredQuery represents a query backed by a persistent storage relation.
@@ -212,7 +260,7 @@ func (ph *StoredQuery) Project(cols ...int) (Query, error) {
 }
 
 // Join creates a joined query with another query.
-func (ph *StoredQuery) Join(other Query, conditions ...JoinOn) (Query, error) {
+func (ph *StoredQuery) Join(other Query, conditions ...JoinCondition) (Query, error) {
 	return newJoinedQuery(ph, other, conditions)
 }
 
@@ -254,7 +302,7 @@ func Index(cols ...int) IndexInfo {
 // IndexAllCols creates a non-unique index on all columns of the relation.
 func IndexAllCols(count int) IndexInfo {
 	cols := make([]int, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		cols[i] = i
 	}
 	return IndexInfo{
@@ -266,7 +314,7 @@ func IndexAllCols(count int) IndexInfo {
 // UniqueAllCols creates a unique index on all columns of the relation.
 func UniqueAllCols(count int) IndexInfo {
 	cols := make([]int, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		cols[i] = i
 	}
 	return IndexInfo{
@@ -275,25 +323,73 @@ func UniqueAllCols(count int) IndexInfo {
 	}
 }
 
-// Condition specifies a filter condition for Select, Delete, or Update operations.
+// SelectCondition specifies a filter condition for Select, Delete, or Update operations.
 // Multiple conditions are combined with AND logic.
 //
 // Example:
 //
 //	// Find users where role = "admin" AND age >= 18
 //	results, _ := tx.Select(users,
-//	    thunderdb.Condition{Field: 2, Operator: thunderdb.EQ, Value: "admin"},
-//	    thunderdb.Condition{Field: 3, Operator: thunderdb.GTE, Value: 18},
+//	    thunderdb.SelectCondition{Col: 2, Operator: thunderdb.EQ, Value: "admin"},
+//	    thunderdb.SelectCondition{Col: 3, Operator: thunderdb.GTE, Value: 18},
 //	)
-type Condition struct {
-	Field    int // Column index to filter on
+type SelectCondition struct {
+	Col      int // Column index to filter on
 	Operator Op  // Comparison operator
 	Value    any // Value to compare against
 }
 
-func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[int]*Range, exclusion map[int][]*Value, possible bool, err error) {
+func WhereEQ(col int, value any) SelectCondition {
+	return SelectCondition{
+		Col:      col,
+		Operator: EQ,
+		Value:    value,
+	}
+}
+
+func WhereNEQ(col int, value any) SelectCondition {
+	return SelectCondition{
+		Col:      col,
+		Operator: NEQ,
+		Value:    value,
+	}
+}
+
+func WhereLT(col int, value any) SelectCondition {
+	return SelectCondition{
+		Col:      col,
+		Operator: LT,
+		Value:    value,
+	}
+}
+
+func WhereLTE(col int, value any) SelectCondition {
+	return SelectCondition{
+		Col:      col,
+		Operator: LTE,
+		Value:    value,
+	}
+}
+
+func WhereGT(col int, value any) SelectCondition {
+	return SelectCondition{
+		Col:      col,
+		Operator: GT,
+		Value:    value,
+	}
+}
+
+func WhereGTE(col int, value any) SelectCondition {
+	return SelectCondition{
+		Col:      col,
+		Operator: GTE,
+		Value:    value,
+	}
+}
+
+func parseConditions(conditions []SelectCondition) (equals map[int]*Value, ranges map[int]*interval, exclusion map[int][]*Value, possible bool, err error) {
 	equals = make(map[int]*Value)
-	ranges = make(map[int]*Range)
+	ranges = make(map[int]*interval)
 	exclusion = make(map[int][]*Value)
 	possible = true
 	equalsBytes := make(map[int][]byte)
@@ -307,15 +403,15 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 		}
 		switch cond.Operator {
 		case EQ:
-			if existing, exists := equalsBytes[cond.Field]; exists {
+			if existing, exists := equalsBytes[cond.Col]; exists {
 				if !bytes.Equal(existing, valBytes) {
 					possible = false
 					return nil, nil, nil, false, nil
 				}
 			} else {
-				equalsBytes[cond.Field] = valBytes
+				equalsBytes[cond.Col] = valBytes
 			}
-			if rng, exists := ranges[cond.Field]; exists {
+			if rng, exists := ranges[cond.Col]; exists {
 				inRange, err := rng.Contains(val)
 				if err != nil {
 					return nil, nil, nil, false, err
@@ -324,32 +420,32 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 					possible = false
 					return nil, nil, nil, false, nil
 				}
-				delete(ranges, cond.Field)
+				delete(ranges, cond.Col)
 			}
-			if exclusions, exists := exclusionBytes[cond.Field]; exists {
+			if exclusions, exists := exclusionBytes[cond.Col]; exists {
 				if exclusions[string(valBytes)] {
 					possible = false
 					return nil, nil, nil, false, nil
 				}
 			}
-			equals[cond.Field] = val
+			equals[cond.Col] = val
 		case NEQ:
-			if existing, exists := equalsBytes[cond.Field]; exists {
+			if existing, exists := equalsBytes[cond.Col]; exists {
 				if bytes.Equal(existing, valBytes) {
 					possible = false
 					return nil, nil, nil, false, nil
 				}
 			}
-			if _, exists := exclusionBytes[cond.Field]; !exists {
-				exclusionBytes[cond.Field] = make(map[string]bool)
-				exclusion[cond.Field] = append(exclusion[cond.Field], val)
+			if _, exists := exclusionBytes[cond.Col]; !exists {
+				exclusionBytes[cond.Col] = make(map[string]bool)
+				exclusion[cond.Col] = append(exclusion[cond.Col], val)
 			}
 		case LT:
-			curRange, err := NewRangeFromValue(nil, val, false, false)
+			curRange, err := newIntervalFromValue(nil, val, false, false)
 			if err != nil {
 				return nil, nil, nil, false, err
 			}
-			if eqVal, exists := equals[cond.Field]; exists {
+			if eqVal, exists := equals[cond.Col]; exists {
 				inRange, err := curRange.Contains(eqVal)
 				if err != nil {
 					return nil, nil, nil, false, err
@@ -360,21 +456,21 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 				}
 				continue
 			}
-			rng, exists := ranges[cond.Field]
+			rng, exists := ranges[cond.Col]
 			if !exists {
-				ranges[cond.Field] = curRange
+				ranges[cond.Col] = curRange
 			} else {
-				ranges[cond.Field], err = rng.Merge(curRange)
+				ranges[cond.Col], err = rng.Merge(curRange)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
 			}
 		case LTE:
-			curRange, err := NewRangeFromValue(nil, val, false, true)
+			curRange, err := newIntervalFromValue(nil, val, false, true)
 			if err != nil {
 				return nil, nil, nil, false, err
 			}
-			if eqVal, exists := equals[cond.Field]; exists {
+			if eqVal, exists := equals[cond.Col]; exists {
 				inRange, err := curRange.Contains(eqVal)
 				if err != nil {
 					return nil, nil, nil, false, err
@@ -385,21 +481,21 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 				}
 				continue
 			}
-			rng, exists := ranges[cond.Field]
+			rng, exists := ranges[cond.Col]
 			if !exists {
-				ranges[cond.Field] = curRange
+				ranges[cond.Col] = curRange
 			} else {
-				ranges[cond.Field], err = rng.Merge(curRange)
+				ranges[cond.Col], err = rng.Merge(curRange)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
 			}
 		case GT:
-			curRange, err := NewRangeFromValue(val, nil, false, false)
+			curRange, err := newIntervalFromValue(val, nil, false, false)
 			if err != nil {
 				return nil, nil, nil, false, err
 			}
-			if eqVal, exists := equals[cond.Field]; exists {
+			if eqVal, exists := equals[cond.Col]; exists {
 				inRange, err := curRange.Contains(eqVal)
 				if err != nil {
 					return nil, nil, nil, false, err
@@ -410,21 +506,21 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 				}
 				continue
 			}
-			rng, exists := ranges[cond.Field]
+			rng, exists := ranges[cond.Col]
 			if !exists {
-				ranges[cond.Field] = curRange
+				ranges[cond.Col] = curRange
 			} else {
-				ranges[cond.Field], err = rng.Merge(curRange)
+				ranges[cond.Col], err = rng.Merge(curRange)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
 			}
 		case GTE:
-			curRange, err := NewRangeFromValue(val, nil, true, false)
+			curRange, err := newIntervalFromValue(val, nil, true, false)
 			if err != nil {
 				return nil, nil, nil, false, err
 			}
-			if eqVal, exists := equals[cond.Field]; exists {
+			if eqVal, exists := equals[cond.Col]; exists {
 				inRange, err := curRange.Contains(eqVal)
 				if err != nil {
 					return nil, nil, nil, false, err
@@ -435,11 +531,11 @@ func parseConditions(conditions []Condition) (equals map[int]*Value, ranges map[
 				}
 				continue
 			}
-			rng, exists := ranges[cond.Field]
+			rng, exists := ranges[cond.Col]
 			if !exists {
-				ranges[cond.Field] = curRange
+				ranges[cond.Col] = curRange
 			} else {
-				ranges[cond.Field], err = rng.Merge(curRange)
+				ranges[cond.Col], err = rng.Merge(curRange)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}

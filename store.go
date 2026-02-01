@@ -187,9 +187,9 @@ type scanResult struct {
 
 func (s *storage) scan(
 	forcedIndex uint64,
-	forcedRange *Range,
+	forcedRange *interval,
 	equals map[int]*Value,
-	ranges map[int]*Range,
+	ranges map[int]*interval,
 	excludes map[int][]*Value,
 	unmarshalCols map[int]bool,
 	rawCols map[int]bool,
@@ -437,7 +437,7 @@ func (s *storage) updateData(id []byte, updates map[int]any) error {
 
 func (s *storage) Update(
 	equals map[int]*Value,
-	ranges map[int]*Range,
+	ranges map[int]*interval,
 	excludes map[int][]*Value,
 	updates map[int]any,
 ) (int64, error) {
@@ -547,7 +547,7 @@ func (s *storage) insertIndexes(id []byte, values *map[int]*Value, skip map[uint
 	return nil
 }
 
-func (s *storage) Delete(equals map[int]*Value, ranges map[int]*Range, excludes map[int][]*Value) (int64, error) {
+func (s *storage) Delete(equals map[int]*Value, ranges map[int]*interval, excludes map[int][]*Value) (int64, error) {
 	shortestIndex, shortestRange, err := s.metadata.bestIndex(equals, ranges)
 	if err != nil {
 		return 0, err
@@ -580,9 +580,9 @@ func (s *storage) Delete(equals map[int]*Value, ranges map[int]*Range, excludes 
 
 func (s *storage) find(
 	mainIndex uint64,
-	indexRange *Range,
+	indexRange *interval,
 	equals map[int]*Value,
-	ranges map[int]*Range,
+	ranges map[int]*interval,
 	exclusion map[int][]*Value,
 	cols map[int]bool,
 ) (iter.Seq2[*Row, error], error) {

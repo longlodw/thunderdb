@@ -136,7 +136,7 @@ func BenchmarkSelect(b *testing.B) {
 		for b.Loop() {
 			// Search for random val (non-indexed)
 			target := float64(rand.Intn(count))
-			seq, _ := readTx.Select(pLoadNoIdx, Condition{Field: 1, Operator: EQ, Value: target})
+			seq, _ := readTx.Select(pLoadNoIdx, SelectCondition{Col: 1, Operator: EQ, Value: target})
 			for range seq {
 				// drain
 			}
@@ -147,7 +147,7 @@ func BenchmarkSelect(b *testing.B) {
 		for b.Loop() {
 			// Search for random val (indexed)
 			target := float64(rand.Intn(count))
-			seq, _ := readTx.Select(pLoadIdx, Condition{Field: 1, Operator: EQ, Value: target})
+			seq, _ := readTx.Select(pLoadIdx, SelectCondition{Col: 1, Operator: EQ, Value: target})
 			for range seq {
 				// drain
 			}
@@ -160,8 +160,8 @@ func BenchmarkSelect(b *testing.B) {
 			start := float64(rand.Intn(count - 100))
 			end := start + 50.0
 			seq, _ := readTx.Select(pLoadNoIdx,
-				Condition{Field: 1, Operator: GTE, Value: start},
-				Condition{Field: 1, Operator: LT, Value: end},
+				SelectCondition{Col: 1, Operator: GTE, Value: start},
+				SelectCondition{Col: 1, Operator: LT, Value: end},
 			)
 			for range seq {
 				// drain
@@ -175,8 +175,8 @@ func BenchmarkSelect(b *testing.B) {
 			start := float64(rand.Intn(count - 100))
 			end := start + 50.0
 			seq, _ := readTx.Select(pLoadIdx,
-				Condition{Field: 1, Operator: GTE, Value: start},
-				Condition{Field: 1, Operator: LT, Value: end},
+				SelectCondition{Col: 1, Operator: GTE, Value: start},
+				SelectCondition{Col: 1, Operator: LT, Value: end},
 			)
 			for range seq {
 				// drain
@@ -292,7 +292,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		}
 		// Nested Query: qGroupsOrgs (Groups + Orgs)
 		// groups(0,1,2,3) join orgs(0,1,2,3) on groups.org_id(2) == orgs.org_id(0)
-		qGroupsOrgs, err := groups.Join(orgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
+		qGroupsOrgs, err := groups.Join(orgs, JoinCondition{Left: 2, Right: 0, Operator: EQ})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -303,7 +303,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		// JoinedQuery columns: left cols... then right cols...
 		// groups has 4 cols. orgs has 4 cols.
 		// So in qGroupsOrgs, groups.group_id is at index 0.
-		qAll, err := users.Join(qGroupsOrgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
+		qAll, err := users.Join(qGroupsOrgs, JoinCondition{Left: 2, Right: 0, Operator: EQ})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -315,7 +315,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 			// orgs.region is col 2 in orgs, so 4+2 = 6 in qGroupsOrgs.
 			// In qAll, users is on left (cols 0-3). qGroupsOrgs is on right.
 			// So orgs.region is 4 + 6 = 10 in qAll.
-			seq, err := readTx.Select(qAll, Condition{Field: 10, Operator: EQ, Value: "North"})
+			seq, err := readTx.Select(qAll, SelectCondition{Col: 10, Operator: EQ, Value: "North"})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -381,7 +381,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 
 		// Recursive: reach(x, y) JOIN chain(y, z, p) -> reach(x, z)
 		// Join: reach.dst(1) == chain.src(0)
-		join, _ := qReach.Join(chain, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
+		join, _ := qReach.Join(chain, JoinCondition{Left: 1, Right: 0, Operator: EQ})
 
 		// Join Cols:
 		// 0: reach.src
@@ -397,7 +397,7 @@ func BenchmarkDeeplyNestedLargeRows(b *testing.B) {
 		b.ResetTimer()
 		for b.Loop() {
 			// Find all reachable from 0
-			seq, _ := readTx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: 0})
+			seq, _ := readTx.Select(qReach, SelectCondition{Col: 0, Operator: EQ, Value: 0})
 			count := 0
 			for range seq {
 				count++
@@ -455,7 +455,7 @@ func BenchmarkRecursion(b *testing.B) {
 	base, _ := chain.Project(0, 1)
 
 	// Rec: reach(x, y) JOIN chain(y, z) -> reach(x, z)
-	join, _ := qReach.Join(chain, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
+	join, _ := qReach.Join(chain, JoinCondition{Left: 1, Right: 0, Operator: EQ})
 	// Join result: r.src(0), r.dst(1), c.src(2), c.dst(3)
 	// Project: 0, 3
 	rec, _ := join.Project(0, 3)
@@ -464,7 +464,7 @@ func BenchmarkRecursion(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		seq, _ := readTx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: 0})
+		seq, _ := readTx.Select(qReach, SelectCondition{Col: 0, Operator: EQ, Value: 0})
 		count := 0
 		for range seq {
 			count++
@@ -529,14 +529,14 @@ func BenchmarkRecursionWithNoise(b *testing.B) {
 	})
 
 	base, _ := chain.Project(0, 1)
-	join, _ := qReach.Join(chain, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
+	join, _ := qReach.Join(chain, JoinCondition{Left: 1, Right: 0, Operator: EQ})
 	rec, _ := join.Project(0, 3)
 
 	qReach.ClosedUnder(base, rec)
 
 	b.ResetTimer()
 	for b.Loop() {
-		seq, _ := readTx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: 0})
+		seq, _ := readTx.Select(qReach, SelectCondition{Col: 0, Operator: EQ, Value: 0})
 		for range seq {
 		}
 	}
@@ -639,7 +639,7 @@ func BenchmarkConcurrency(b *testing.B) {
 						targetID := rng.Intn(initialCount)
 						targetKey := fmt.Sprintf("item-%d", targetID)
 
-						seq, _ := tx.Select(p, Condition{Field: 0, Operator: EQ, Value: targetKey})
+						seq, _ := tx.Select(p, SelectCondition{Col: 0, Operator: EQ, Value: targetKey})
 						count := 0
 						for range seq {
 							count++
@@ -692,7 +692,7 @@ func BenchmarkUpdateSequential(b *testing.B) {
 			// Update the record
 			return tx.Update("update_seq",
 				map[int]any{1: i}, // updates
-				Condition{Field: 0, Operator: EQ, Value: "1"}, // conditions
+				SelectCondition{Col: 0, Operator: EQ, Value: "1"}, // conditions
 			)
 		})
 		if err != nil {
@@ -793,10 +793,10 @@ func BenchmarkJoinStrategies(b *testing.B) {
 					b.Fatal(err)
 				}
 
-				joinedQ, err := ordersQ.Join(productsQ, JoinOn{
-					LeftField:  1,
-					RightField: 1,
-					Operator:   EQ,
+				joinedQ, err := ordersQ.Join(productsQ, JoinCondition{
+					Left:     1,
+					Right:    1,
+					Operator: EQ,
 				})
 				if err != nil {
 					b.Fatal(err)
@@ -832,10 +832,10 @@ func BenchmarkJoinStrategies(b *testing.B) {
 				}
 
 				// Should automatically choose: scan right (no index), lookup left (indexed)
-				joinedQ, err := ordersQ.Join(productsQ, JoinOn{
-					LeftField:  1,
-					RightField: 1,
-					Operator:   EQ,
+				joinedQ, err := ordersQ.Join(productsQ, JoinCondition{
+					Left:     1,
+					Right:    1,
+					Operator: EQ,
 				})
 				if err != nil {
 					b.Fatal(err)
@@ -942,8 +942,8 @@ func BenchmarkMergeJoinComposite(b *testing.B) {
 
 	// Join on both cat and subcat
 	joinedQ, err := aQ.Join(bQ,
-		JoinOn{LeftField: 1, RightField: 1, Operator: EQ}, // cat
-		JoinOn{LeftField: 2, RightField: 2, Operator: EQ}, // subcat
+		JoinCondition{Left: 1, Right: 1, Operator: EQ}, // cat
+		JoinCondition{Left: 2, Right: 2, Operator: EQ}, // subcat
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -1038,7 +1038,7 @@ func BenchmarkBatchConcurrent(b *testing.B) {
 							targetID := rng.Intn(initialCount)
 							targetKey := fmt.Sprintf("item-%d", targetID)
 
-							seq, _ := tx.Select(p, Condition{Field: 0, Operator: EQ, Value: targetKey})
+							seq, _ := tx.Select(p, SelectCondition{Col: 0, Operator: EQ, Value: targetKey})
 							count := 0
 							for range seq {
 								count++
@@ -1135,7 +1135,7 @@ func BenchmarkRecursivePropagation(b *testing.B) {
 				}
 
 				// Recursive case: reachable(a, c) :- nodes(b, a), reachable(b, c)
-				recJoin, err := nodes.Join(qReach, JoinOn{LeftField: 0, RightField: 0, Operator: EQ})
+				recJoin, err := nodes.Join(qReach, JoinCondition{Left: 0, Right: 0, Operator: EQ})
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -1149,7 +1149,7 @@ func BenchmarkRecursivePropagation(b *testing.B) {
 				}
 
 				// Execute: Find all descendants of node 0
-				seq, err := tx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: "0"})
+				seq, err := tx.Select(qReach, SelectCondition{Col: 0, Operator: EQ, Value: "0"})
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -1260,7 +1260,7 @@ func BenchmarkRecursivePropagationWide(b *testing.B) {
 					b.Fatal(err)
 				}
 
-				recJoin, err := nodes.Join(qReach, JoinOn{LeftField: 0, RightField: 0, Operator: EQ})
+				recJoin, err := nodes.Join(qReach, JoinCondition{Left: 0, Right: 0, Operator: EQ})
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -1274,7 +1274,7 @@ func BenchmarkRecursivePropagationWide(b *testing.B) {
 				}
 
 				// Execute: Find all descendants of node 0 (root)
-				seq, err := tx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: "0"})
+				seq, err := tx.Select(qReach, SelectCondition{Col: 0, Operator: EQ, Value: "0"})
 				if err != nil {
 					b.Fatal(err)
 				}

@@ -89,14 +89,14 @@ func TestQuery_Basic(t *testing.T) {
 	// Users: id(0), username(1), department(2)
 	// Depts: department(0), location(1)
 	// Join condition: users.department (2) == depts.department (0)
-	q, err := users.Join(depts, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
+	q, err := users.Join(depts, JoinCondition{Left: 2, Right: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Execute Select on the Query
 	// Filter by username 'alice'. Username is col 1 in users.
-	seq, err := tx.Select(q, Condition{Field: 1, Operator: EQ, Value: "alice"})
+	seq, err := tx.Select(q, SelectCondition{Col: 1, Operator: EQ, Value: "alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// Groups: 0:group_id, 1:g_name, 2:org_id
 	// Orgs: 0:org_id, 1:o_name, 2:region
 	// Join condition: groups.org_id (2) == orgs.org_id (0)
-	qGroupsOrgs, err := groups.Join(orgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
+	qGroupsOrgs, err := groups.Join(orgs, JoinCondition{Left: 2, Right: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// Users: 0:u_id, 1:u_name, 2:group_id
 	// qGroupsOrgs: 0-2 (groups), 3-5 (orgs) -> will become 3-8 in final
 	// Join condition: users.group_id (2) == groups.group_id (0 from right side)
-	branch1, err := users.Join(qGroupsOrgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
+	branch1, err := users.Join(qGroupsOrgs, JoinCondition{Left: 2, Right: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 	// Branch 2: Admins + qGroupsOrgs
 	// Admins: 0:u_id, 1:u_name, 2:group_id
 	// Same structure.
-	branch2, err := admins.Join(qGroupsOrgs, JoinOn{LeftField: 2, RightField: 0, Operator: EQ})
+	branch2, err := admins.Join(qGroupsOrgs, JoinCondition{Left: 2, Right: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestQuery_DeeplyNestedAndMultipleBodies(t *testing.T) {
 
 	// 3. Select Region="North"
 	// Should return Alice (user) and Charlie (admin)
-	seq, err := tx.Select(headQuery, Condition{Field: 8, Operator: EQ, Value: "North"})
+	seq, err := tx.Select(headQuery, SelectCondition{Col: 8, Operator: EQ, Value: "North"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Join on Y: reach.target (1) == nodes.source (0)
 
 	// Join condition: qReach.col1 == nodes.col0
-	recJoin, err := qReach.Join(nodes, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
+	recJoin, err := qReach.Join(nodes, JoinCondition{Left: 1, Right: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func testQuery_Recursive_Cycle_Body(t *testing.T) {
 	// Find all reachable nodes from A.
 	// Expected: A -> B, B -> A, so reachable: B, A.
 	// If cycle is not handled, this will loop A->B->A->B...
-	seq, err := tx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: "A"})
+	seq, err := tx.Select(qReach, SelectCondition{Col: 0, Operator: EQ, Value: "A"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,7 +534,7 @@ func TestQuery_Recursive(t *testing.T) {
 	// Join on b: employees.id (0) == path.ancestor (0)
 
 	// Join condition: employees.col0 == qPath.col0
-	recJoin, err := employees.Join(qPath, JoinOn{LeftField: 0, RightField: 0, Operator: EQ})
+	recJoin, err := employees.Join(qPath, JoinCondition{Left: 0, Right: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +560,7 @@ func TestQuery_Recursive(t *testing.T) {
 	// 4. Execution
 	// Find all descendants of Alice (id=1).
 	// query: path(ancestor=1, descendant=X).
-	seq, err := tx.Select(qPath, Condition{Field: 0, Operator: EQ, Value: "1"})
+	seq, err := tx.Select(qPath, SelectCondition{Col: 0, Operator: EQ, Value: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,8 +673,8 @@ func TestQuery_MultiColumnIndex(t *testing.T) {
 	// Test 1: Query with both columns of composite index (category=electronics, subcategory=phones)
 	t.Run("CompositeIndexBothColumns", func(t *testing.T) {
 		seq, err := tx.Select(products,
-			Condition{Field: 1, Operator: EQ, Value: "electronics"},
-			Condition{Field: 2, Operator: EQ, Value: "phones"},
+			SelectCondition{Col: 1, Operator: EQ, Value: "electronics"},
+			SelectCondition{Col: 2, Operator: EQ, Value: "phones"},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -700,7 +700,7 @@ func TestQuery_MultiColumnIndex(t *testing.T) {
 	// Test 2: Query with first column of composite index only
 	t.Run("CompositeIndexFirstColumnOnly", func(t *testing.T) {
 		seq, err := tx.Select(products,
-			Condition{Field: 1, Operator: EQ, Value: "electronics"},
+			SelectCondition{Col: 1, Operator: EQ, Value: "electronics"},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -722,9 +722,9 @@ func TestQuery_MultiColumnIndex(t *testing.T) {
 	// Test 3: Query combining composite index with another condition
 	t.Run("CompositeIndexWithAdditionalFilter", func(t *testing.T) {
 		seq, err := tx.Select(products,
-			Condition{Field: 1, Operator: EQ, Value: "electronics"},
-			Condition{Field: 2, Operator: EQ, Value: "laptops"},
-			Condition{Field: 3, Operator: GT, Value: int64(900)},
+			SelectCondition{Col: 1, Operator: EQ, Value: "electronics"},
+			SelectCondition{Col: 2, Operator: EQ, Value: "laptops"},
+			SelectCondition{Col: 3, Operator: GT, Value: int64(900)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -803,7 +803,7 @@ func TestQuery_LessThanConditions(t *testing.T) {
 	// Test LT: scores < 200
 	t.Run("LessThan", func(t *testing.T) {
 		seq, err := tx.Select(scores,
-			Condition{Field: 2, Operator: LT, Value: int64(200)},
+			SelectCondition{Col: 2, Operator: LT, Value: int64(200)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -830,7 +830,7 @@ func TestQuery_LessThanConditions(t *testing.T) {
 	// Test LTE: scores <= 200
 	t.Run("LessThanOrEqual", func(t *testing.T) {
 		seq, err := tx.Select(scores,
-			Condition{Field: 2, Operator: LTE, Value: int64(200)},
+			SelectCondition{Col: 2, Operator: LTE, Value: int64(200)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -857,8 +857,8 @@ func TestQuery_LessThanConditions(t *testing.T) {
 	// Test LT with additional EQ condition
 	t.Run("LessThanWithEquality", func(t *testing.T) {
 		seq, err := tx.Select(scores,
-			Condition{Field: 2, Operator: LT, Value: int64(350)},
-			Condition{Field: 3, Operator: EQ, Value: int64(2)}, // level = 2
+			SelectCondition{Col: 2, Operator: LT, Value: int64(350)},
+			SelectCondition{Col: 3, Operator: EQ, Value: int64(2)}, // level = 2
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -938,7 +938,7 @@ func TestQuery_GreaterThanConditions(t *testing.T) {
 	// Test GT: quantity > 100
 	t.Run("GreaterThan", func(t *testing.T) {
 		seq, err := tx.Select(inventory,
-			Condition{Field: 2, Operator: GT, Value: int64(100)},
+			SelectCondition{Col: 2, Operator: GT, Value: int64(100)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -965,7 +965,7 @@ func TestQuery_GreaterThanConditions(t *testing.T) {
 	// Test GTE: quantity >= 100
 	t.Run("GreaterThanOrEqual", func(t *testing.T) {
 		seq, err := tx.Select(inventory,
-			Condition{Field: 2, Operator: GTE, Value: int64(100)},
+			SelectCondition{Col: 2, Operator: GTE, Value: int64(100)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -992,8 +992,8 @@ func TestQuery_GreaterThanConditions(t *testing.T) {
 	// Test GT with warehouse filter
 	t.Run("GreaterThanWithEquality", func(t *testing.T) {
 		seq, err := tx.Select(inventory,
-			Condition{Field: 2, Operator: GT, Value: int64(25)},
-			Condition{Field: 3, Operator: EQ, Value: "warehouse1"},
+			SelectCondition{Col: 2, Operator: GT, Value: int64(25)},
+			SelectCondition{Col: 3, Operator: EQ, Value: "warehouse1"},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1075,8 +1075,8 @@ func TestQuery_CombinedRangeConditions(t *testing.T) {
 	// Test: 10 <= temp <= 25 (range query)
 	t.Run("BetweenRangeInclusive", func(t *testing.T) {
 		seq, err := tx.Select(temps,
-			Condition{Field: 2, Operator: GTE, Value: int64(10)},
-			Condition{Field: 2, Operator: LTE, Value: int64(25)},
+			SelectCondition{Col: 2, Operator: GTE, Value: int64(10)},
+			SelectCondition{Col: 2, Operator: LTE, Value: int64(25)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1103,8 +1103,8 @@ func TestQuery_CombinedRangeConditions(t *testing.T) {
 	// Test: 10 < temp < 25 (exclusive range)
 	t.Run("BetweenRangeExclusive", func(t *testing.T) {
 		seq, err := tx.Select(temps,
-			Condition{Field: 2, Operator: GT, Value: int64(10)},
-			Condition{Field: 2, Operator: LT, Value: int64(25)},
+			SelectCondition{Col: 2, Operator: GT, Value: int64(10)},
+			SelectCondition{Col: 2, Operator: LT, Value: int64(25)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1131,9 +1131,9 @@ func TestQuery_CombinedRangeConditions(t *testing.T) {
 	// Test: range + equality filter on city
 	t.Run("RangeWithCityFilter", func(t *testing.T) {
 		seq, err := tx.Select(temps,
-			Condition{Field: 2, Operator: GTE, Value: int64(0)},
-			Condition{Field: 2, Operator: LT, Value: int64(30)},
-			Condition{Field: 1, Operator: EQ, Value: "CityB"},
+			SelectCondition{Col: 2, Operator: GTE, Value: int64(0)},
+			SelectCondition{Col: 2, Operator: LT, Value: int64(30)},
+			SelectCondition{Col: 1, Operator: EQ, Value: "CityB"},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1156,8 +1156,8 @@ func TestQuery_CombinedRangeConditions(t *testing.T) {
 	// Test: multiple conditions that result in empty set
 	t.Run("EmptyResultRange", func(t *testing.T) {
 		seq, err := tx.Select(temps,
-			Condition{Field: 2, Operator: GT, Value: int64(100)},
-			Condition{Field: 2, Operator: LT, Value: int64(50)},
+			SelectCondition{Col: 2, Operator: GT, Value: int64(100)},
+			SelectCondition{Col: 2, Operator: LT, Value: int64(50)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1259,7 +1259,7 @@ func TestQuery_JoinWithRangeConditions(t *testing.T) {
 	// Join orders with customers on customer_id
 	// orders: id(0), customer_id(1), total(2), status(3)
 	// customers: id(4), name(5), tier(6)
-	joinedQ, err := ordersQ.Join(customersQ, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
+	joinedQ, err := ordersQ.Join(customersQ, JoinCondition{Left: 1, Right: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1267,8 +1267,8 @@ func TestQuery_JoinWithRangeConditions(t *testing.T) {
 	// Test: Find all gold tier customers with orders > 200
 	t.Run("JoinWithRangeAndEquality", func(t *testing.T) {
 		seq, err := tx.Select(joinedQ,
-			Condition{Field: 6, Operator: EQ, Value: "gold"},     // tier = gold
-			Condition{Field: 2, Operator: GT, Value: int64(200)}, // total > 200
+			SelectCondition{Col: 6, Operator: EQ, Value: "gold"},     // tier = gold
+			SelectCondition{Col: 2, Operator: GT, Value: int64(200)}, // total > 200
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1305,9 +1305,9 @@ func TestQuery_JoinWithRangeConditions(t *testing.T) {
 	// Test: Orders between 100 and 400 for silver customers
 	t.Run("JoinWithRangeBetween", func(t *testing.T) {
 		seq, err := tx.Select(joinedQ,
-			Condition{Field: 6, Operator: EQ, Value: "silver"},
-			Condition{Field: 2, Operator: GTE, Value: int64(100)},
-			Condition{Field: 2, Operator: LTE, Value: int64(400)},
+			SelectCondition{Col: 6, Operator: EQ, Value: "silver"},
+			SelectCondition{Col: 2, Operator: GTE, Value: int64(100)},
+			SelectCondition{Col: 2, Operator: LTE, Value: int64(400)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1383,7 +1383,7 @@ func TestQuery_NEQConditions(t *testing.T) {
 	// Test: status != "closed"
 	t.Run("NotEqualString", func(t *testing.T) {
 		seq, err := tx.Select(tasksQ,
-			Condition{Field: 2, Operator: NEQ, Value: "closed"},
+			SelectCondition{Col: 2, Operator: NEQ, Value: "closed"},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1406,8 +1406,8 @@ func TestQuery_NEQConditions(t *testing.T) {
 	// Test: priority != 1 AND status != "closed"
 	t.Run("MultipleNEQConditions", func(t *testing.T) {
 		seq, err := tx.Select(tasksQ,
-			Condition{Field: 3, Operator: NEQ, Value: int64(1)},
-			Condition{Field: 2, Operator: NEQ, Value: "closed"},
+			SelectCondition{Col: 3, Operator: NEQ, Value: int64(1)},
+			SelectCondition{Col: 2, Operator: NEQ, Value: "closed"},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1435,8 +1435,8 @@ func TestQuery_NEQConditions(t *testing.T) {
 	// Test: NEQ combined with range
 	t.Run("NEQWithRange", func(t *testing.T) {
 		seq, err := tx.Select(tasksQ,
-			Condition{Field: 2, Operator: NEQ, Value: "closed"},
-			Condition{Field: 3, Operator: LTE, Value: int64(2)},
+			SelectCondition{Col: 2, Operator: NEQ, Value: "closed"},
+			SelectCondition{Col: 3, Operator: LTE, Value: int64(2)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1516,9 +1516,9 @@ func TestQuery_MultiColumnIndexWithRanges(t *testing.T) {
 	// Test: year = 2024 AND month >= 3 AND month <= 9
 	t.Run("CompositeIndexWithYearEqMonthRange", func(t *testing.T) {
 		seq, err := tx.Select(eventsQ,
-			Condition{Field: 1, Operator: EQ, Value: int64(2024)},
-			Condition{Field: 2, Operator: GTE, Value: int64(3)},
-			Condition{Field: 2, Operator: LTE, Value: int64(9)},
+			SelectCondition{Col: 1, Operator: EQ, Value: int64(2024)},
+			SelectCondition{Col: 2, Operator: GTE, Value: int64(3)},
+			SelectCondition{Col: 2, Operator: LTE, Value: int64(9)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1545,9 +1545,9 @@ func TestQuery_MultiColumnIndexWithRanges(t *testing.T) {
 	// Test: year range with month filter
 	t.Run("YearRangeWithMonthEq", func(t *testing.T) {
 		seq, err := tx.Select(eventsQ,
-			Condition{Field: 1, Operator: GTE, Value: int64(2023)},
-			Condition{Field: 1, Operator: LTE, Value: int64(2024)},
-			Condition{Field: 2, Operator: EQ, Value: int64(6)},
+			SelectCondition{Col: 1, Operator: GTE, Value: int64(2023)},
+			SelectCondition{Col: 1, Operator: LTE, Value: int64(2024)},
+			SelectCondition{Col: 2, Operator: EQ, Value: int64(6)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1574,7 +1574,7 @@ func TestQuery_MultiColumnIndexWithRanges(t *testing.T) {
 	// Test: only year range (using partial composite index)
 	t.Run("YearRangeOnly", func(t *testing.T) {
 		seq, err := tx.Select(eventsQ,
-			Condition{Field: 1, Operator: GT, Value: int64(2023)},
+			SelectCondition{Col: 1, Operator: GT, Value: int64(2023)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -1674,7 +1674,7 @@ func TestQuery_MergeJoin(t *testing.T) {
 	}
 
 	// Join on join_key: A.col2 == B.col2
-	joinedQ, err := tableAQ.Join(tableBQ, JoinOn{LeftField: 2, RightField: 2, Operator: EQ})
+	joinedQ, err := tableAQ.Join(tableBQ, JoinCondition{Left: 2, Right: 2, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1813,8 +1813,8 @@ func TestQuery_MergeJoinComposite(t *testing.T) {
 
 	// Join on both category and subcategory
 	joinedQ, err := ordersQ.Join(inventoryQ,
-		JoinOn{LeftField: 1, RightField: 1, Operator: EQ}, // category
-		JoinOn{LeftField: 2, RightField: 2, Operator: EQ}, // subcategory
+		JoinCondition{Left: 1, Right: 1, Operator: EQ}, // category
+		JoinCondition{Left: 2, Right: 2, Operator: EQ}, // subcategory
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1913,7 +1913,7 @@ func TestQuery_MergeJoinFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	joinedQ, err := tableAQ.Join(tableBQ, JoinOn{LeftField: 2, RightField: 2, Operator: EQ})
+	joinedQ, err := tableAQ.Join(tableBQ, JoinCondition{Left: 2, Right: 2, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1996,7 +1996,7 @@ func TestQuery_MergeJoinNonEQOperator(t *testing.T) {
 	}
 
 	// Join with GT (greater than) operator
-	joinedQ, err := tableAQ.Join(tableBQ, JoinOn{LeftField: 2, RightField: 2, Operator: GT})
+	joinedQ, err := tableAQ.Join(tableBQ, JoinCondition{Left: 2, Right: 2, Operator: GT})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2103,8 +2103,8 @@ func TestQuery_MergeJoinWithMixedOperators(t *testing.T) {
 
 	// Join: orders.category = products.category AND orders.price > products.min_price
 	joinedQ, err := ordersQ.Join(productsQ,
-		JoinOn{LeftField: 1, RightField: 1, Operator: EQ}, // category match
-		JoinOn{LeftField: 2, RightField: 2, Operator: GT}, // price > min_price
+		JoinCondition{Left: 1, Right: 1, Operator: EQ}, // category match
+		JoinCondition{Left: 2, Right: 2, Operator: GT}, // price > min_price
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2159,8 +2159,8 @@ func TestQuery_MergeJoinWithMixedOperators(t *testing.T) {
 	// Test 2: Multiple non-EQ operators with EQ
 	// Join: orders.category = products.category AND orders.price >= products.min_price
 	joinedQ2, err := ordersQ.Join(productsQ,
-		JoinOn{LeftField: 1, RightField: 1, Operator: EQ},  // category match
-		JoinOn{LeftField: 2, RightField: 2, Operator: GTE}, // price >= min_price
+		JoinCondition{Left: 1, Right: 1, Operator: EQ},  // category match
+		JoinCondition{Left: 2, Right: 2, Operator: GTE}, // price >= min_price
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2275,7 +2275,7 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 
 	// even_reach recursive case: even_reach(X, Z) :- odd_reach(X, Y), edges(Y, Z)
 	// Join on Y: odd_reach.to (1) == edges.from (0)
-	evenRecJoin, err := qOddReach.Join(edges, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
+	evenRecJoin, err := qOddReach.Join(edges, JoinCondition{Left: 1, Right: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2288,7 +2288,7 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 
 	// odd_reach case: odd_reach(X, Y) :- edges(X, Z), even_reach(Z, Y)
 	// Join on Z: edges.to (1) == even_reach.from (0)
-	oddRecJoin, err := edges.Join(qEvenReach, JoinOn{LeftField: 1, RightField: 0, Operator: EQ})
+	oddRecJoin, err := edges.Join(qEvenReach, JoinCondition{Left: 1, Right: 0, Operator: EQ})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2310,7 +2310,7 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 	// 4. Execution
 	// Find all nodes reachable from A in even number of steps
 	// Expected: B (1 step), E (2 steps: A->D->E), A (3 steps: A->B->C->A)
-	seq, err := tx.Select(qEvenReach, Condition{Field: 0, Operator: EQ, Value: "A"})
+	seq, err := tx.Select(qEvenReach, SelectCondition{Col: 0, Operator: EQ, Value: "A"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2353,7 +2353,7 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 	// 5. Test odd_reach as well
 	// Find all nodes reachable from A in odd number of steps
 	// Expected: D (1 step), C (2 steps: A->B->C)
-	seqOdd, err := tx.Select(qOddReach, Condition{Field: 0, Operator: EQ, Value: "A"})
+	seqOdd, err := tx.Select(qOddReach, SelectCondition{Col: 0, Operator: EQ, Value: "A"})
 	if err != nil {
 		t.Fatal(err)
 	}

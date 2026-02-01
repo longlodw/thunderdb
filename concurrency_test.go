@@ -95,8 +95,8 @@ func TestConcurrentReadWrite(t *testing.T) {
 				targetID := rng.Intn(numWriters)
 				targetKey := fmt.Sprintf("key-%d-%d", targetID, j)
 
-				seq, err := tx.Select(p, Condition{
-					Field:    0,
+				seq, err := tx.Select(p, SelectCondition{
+					Col:      0,
 					Operator: EQ,
 					Value:    targetKey,
 				})
@@ -157,8 +157,8 @@ func TestConcurrentReadWrite(t *testing.T) {
 		for j := range writeIterations {
 			targetKey := fmt.Sprintf("key-%d-%d", i, j)
 
-			seq, err := verifyTx.Select(p, Condition{
-				Field:    0,
+			seq, err := verifyTx.Select(p, SelectCondition{
+				Col:      0,
 				Operator: EQ,
 				Value:    targetKey,
 			})

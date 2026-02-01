@@ -8,9 +8,9 @@ import (
 	"slices"
 )
 
-// Range represents a range of values for index-based queries.
+// interval represents a range of values for index-based queries.
 // It is used internally for range scans and query optimization.
-type Range struct {
+type interval struct {
 	includeStart bool
 	includeEnd   bool
 	start        *Value
@@ -18,35 +18,7 @@ type Range struct {
 	distance     []byte
 }
 
-// ToKey creates a tuple-encoded key from one or more Values.
-// It concatenates the single-value encoded bytes from each Value
-// and wraps them in tuple markers.
-func ToKey(values ...*Value) ([]byte, error) {
-	// Calculate total size needed
-	totalSize := 2 // tagTuple + tagTupleEnd
-	parts := make([][]byte, len(values))
-	for i, v := range values {
-		singleRaw, err := v.GetSingleRaw()
-		if err != nil {
-			return nil, err
-		}
-		parts[i] = singleRaw
-		totalSize += len(singleRaw)
-	}
-
-	// Build the tuple
-	buf := make([]byte, totalSize)
-	buf[0] = tagTuple
-	pos := 1
-	for _, part := range parts {
-		copy(buf[pos:], part)
-		pos += len(part)
-	}
-	buf[pos] = tagTupleEnd
-	return buf, nil
-}
-
-func NewRangeFromBytes(startKey, endKey []byte, includeStart, includeEnd bool) (*Range, error) {
+func newIntervalFromBytes(startKey, endKey []byte, includeStart, includeEnd bool) (*interval, error) {
 	var start *Value
 	if startKey != nil {
 		start = ValueOfRaw(startKey)
@@ -55,14 +27,14 @@ func NewRangeFromBytes(startKey, endKey []byte, includeStart, includeEnd bool) (
 	if endKey != nil {
 		end = ValueOfRaw(endKey)
 	}
-	return NewRangeFromValue(start, end, includeStart, includeEnd)
+	return newIntervalFromValue(start, end, includeStart, includeEnd)
 }
 
-// NewPointRangeFromBytes creates a range for a single point (start == end).
+// newPointIntervalFromBytes creates a range for a single point (start == end).
 // This is optimized to avoid allocations for distance computation since distance is always zero.
-func NewPointRangeFromBytes(key []byte) *Range {
+func newPointIntervalFromBytes(key []byte) *interval {
 	val := ValueOfRaw(key)
-	return &Range{
+	return &interval{
 		start:        val,
 		end:          val,
 		includeStart: true,
@@ -71,12 +43,8 @@ func NewPointRangeFromBytes(key []byte) *Range {
 	}
 }
 
-func NewRangeFromLiteral(startVals, endVals any, includeStart, includeEnd bool) (*Range, error) {
-	return NewRangeFromValue(ValueOfLiteral(startVals), ValueOfLiteral(endVals), includeStart, includeEnd)
-}
-
-func NewRangeFromValue(start, end *Value, includeStart, includeEnd bool) (*Range, error) {
-	res := &Range{
+func newIntervalFromValue(start, end *Value, includeStart, includeEnd bool) (*interval, error) {
+	res := &interval{
 		start:        start,
 		end:          end,
 		includeStart: includeStart,
@@ -90,7 +58,7 @@ func NewRangeFromValue(start, end *Value, includeStart, includeEnd bool) (*Range
 	return res, nil
 }
 
-func (ir *Range) Merge(other *Range) (*Range, error) {
+func (ir *interval) Merge(other *interval) (*interval, error) {
 	newStart := ir.start
 	newIncludeStart := ir.includeStart
 	if other.start != nil {
@@ -141,10 +109,10 @@ func (ir *Range) Merge(other *Range) (*Range, error) {
 			newIncludeEnd = newIncludeEnd && other.includeEnd
 		}
 	}
-	return NewRangeFromValue(newStart, newEnd, newIncludeStart, newIncludeEnd)
+	return newIntervalFromValue(newStart, newEnd, newIncludeStart, newIncludeEnd)
 }
 
-func (ir *Range) Contains(key *Value) (bool, error) {
+func (ir *interval) Contains(key *Value) (bool, error) {
 	keyRaw, err := key.GetRaw()
 	if err != nil {
 		return false, err
@@ -153,7 +121,7 @@ func (ir *Range) Contains(key *Value) (bool, error) {
 }
 
 // ContainsBytes checks if raw bytes are within the range without allocating a Value
-func (ir *Range) ContainsBytes(keyRaw []byte) (bool, error) {
+func (ir *interval) ContainsBytes(keyRaw []byte) (bool, error) {
 	if ir.start != nil {
 		irStart, err := ir.start.GetRaw()
 		if err != nil {
@@ -177,7 +145,7 @@ func (ir *Range) ContainsBytes(keyRaw []byte) (bool, error) {
 	return true, nil
 }
 
-func (ir *Range) ToString() string {
+func (ir *interval) ToString() string {
 	return fmt.Sprintf("%v|%v|%v|%v",
 		ir.start,
 		ir.end,
@@ -186,7 +154,7 @@ func (ir *Range) ToString() string {
 	)
 }
 
-func (ir *Range) computeDistance() ([]byte, error) {
+func (ir *interval) computeDistance() ([]byte, error) {
 	var irStart []byte
 	if ir.start != nil {
 		var err error
@@ -224,7 +192,7 @@ func (ir *Range) computeDistance() ([]byte, error) {
 	return distance, nil
 }
 
-func MergeRangesMap(result *map[int]*Range, a, b map[int]*Range) error {
+func MergeRangesMap(result *map[int]*interval, a, b map[int]*interval) error {
 	clear(*result)
 	maps.Copy(*result, a)
 	for k, v := range b {
@@ -241,7 +209,7 @@ func MergeRangesMap(result *map[int]*Range, a, b map[int]*Range) error {
 	return nil
 }
 
-func inRanges(vals map[int]*Value, equals map[int]*Value, ranges map[int]*Range, exclusions map[int][]*Value) (bool, error) {
+func inRanges(vals map[int]*Value, equals map[int]*Value, ranges map[int]*interval, exclusions map[int][]*Value) (bool, error) {
 	comparableBytesCache := make(map[int][]byte)
 	for idx, val := range equals {
 		var kBytes []byte

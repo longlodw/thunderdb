@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"math"
+	"slices"
 	"time"
 )
 
@@ -30,6 +31,34 @@ const (
 	escapeNull byte = 0xFF // 0x00 -> 0x00 0xFF
 	escapeEnd  byte = 0x00 // Terminator: 0x00 0x00
 )
+
+// ToKey creates a tuple-encoded key from one or more Values.
+// It concatenates the single-value encoded bytes from each Value
+// and wraps them in tuple markers.
+func ToKey(values ...*Value) ([]byte, error) {
+	// Calculate total size needed
+	totalSize := 2 // tagTuple + tagTupleEnd
+	parts := make([][]byte, len(values))
+	for i, v := range values {
+		singleRaw, err := v.GetSingleRaw()
+		if err != nil {
+			return nil, err
+		}
+		parts[i] = singleRaw
+		totalSize += len(singleRaw)
+	}
+
+	// Build the tuple
+	buf := make([]byte, totalSize)
+	buf[0] = tagTuple
+	pos := 1
+	for _, part := range parts {
+		copy(buf[pos:], part)
+		pos += len(part)
+	}
+	buf[pos] = tagTupleEnd
+	return buf, nil
+}
 
 var orderedMaUn = &orderedCodec{}
 
