@@ -274,8 +274,7 @@ func (s *storage) scan(
 						val = ValueOfRaw(v)
 						valueCache[col] = val
 					} else {
-						val.value = nil
-						val.raw = v
+						val.SetRaw(v) // Use SetRaw to properly clear caches
 					}
 					vals[col] = val
 				}
@@ -378,8 +377,7 @@ func (s *storage) scan(
 							val = ValueOfRaw(dv)
 							valueCache[col] = val
 						} else {
-							val.value = nil
-							val.raw = dv
+							val.SetRaw(dv) // Use SetRaw to properly clear caches
 						}
 						vals[col] = val
 					}

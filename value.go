@@ -8,8 +8,9 @@ import (
 // Value represents a column value that can be lazily marshaled/unmarshaled.
 // Values are returned by Row.Iter() and can be converted to Go types using GetValue().
 type Value struct {
-	value any
-	raw   []byte
+	value     any
+	raw       []byte
+	singleRaw []byte // Cached single-value encoding (without tuple wrapper)
 }
 
 // ValueOfLiteral creates a Value from a Go value. The value will be
@@ -44,6 +45,7 @@ func (v *Value) GetValue() (any, error) {
 }
 
 // GetRaw returns the raw byte representation, marshaling if necessary.
+// The result is cached to avoid repeated marshaling.
 func (v *Value) GetRaw() ([]byte, error) {
 	if v.raw != nil {
 		return v.raw, nil
@@ -61,7 +63,7 @@ func (v *Value) GetRaw() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		v.raw = b
+		v.raw = b // Cache the result
 		return v.raw, nil
 	}
 	return nil, nil
@@ -70,29 +72,41 @@ func (v *Value) GetRaw() ([]byte, error) {
 // GetSingleRaw returns the single-value encoded bytes (without tuple wrapping).
 // This is used for building composite index keys where multiple values are
 // combined into a single tuple.
+// The result is cached to avoid repeated encoding when value is from a literal.
 func (v *Value) GetSingleRaw() ([]byte, error) {
+	// Return cached value if available
+	if v.singleRaw != nil {
+		return v.singleRaw, nil
+	}
+
 	if v.value != nil {
-		// Encode the value directly without tuple wrapping
-		return encodeSingle(v.value)
+		// Encode the value directly without tuple wrapping and cache it
+		// We can safely cache this because v.value is stable
+		encoded, err := encodeSingle(v.value)
+		if err != nil {
+			return nil, err
+		}
+		v.singleRaw = encoded
+		return encoded, nil
 	}
 	if v.raw != nil {
 		// raw is tuple-encoded, need to unwrap it
 		// Tuple format: [tagTuple][...single-encoded values...][tagTupleEnd]
 		if len(v.raw) >= 2 && v.raw[0] == tagTuple {
-			// Find the content between tagTuple and tagTupleEnd
-			// For a single-element tuple, this is just the single-encoded value
+			// Return slice view - DON'T cache because v.raw may be reused
 			return v.raw[1 : len(v.raw)-1], nil
 		}
-		// Already single-encoded (shouldn't normally happen)
+		// Already single-encoded
 		return v.raw, nil
 	}
 	return nil, nil
 }
 
-// SetRaw updates the raw byte representation and clears the cached value.
+// SetRaw updates the raw byte representation and clears all caches.
 func (v *Value) SetRaw(b []byte) {
 	v.raw = b
 	v.value = nil
+	v.singleRaw = nil // Clear cached single encoding
 }
 
 func mergeEquals(result *map[int]*Value, equalsLeft, equalsRight map[int]*Value) (bool, error) {
