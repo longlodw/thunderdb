@@ -154,6 +154,25 @@ type joinedQueryNode struct {
 	baseQueryNode
 }
 
+// joinSide encapsulates one side of a join operation (outer or inner)
+type joinSide struct {
+	node      queryNode
+	equals    map[int]*Value
+	ranges    map[int]*Range
+	exclusion map[int][]*Value
+	cols      map[int]bool
+	isLeft    bool // true if this is the left side of the join
+}
+
+// nestedLoopJoin encapsulates the state and logic for nested loop join execution
+type nestedLoopJoin struct {
+	parent     *joinedQueryNode
+	outer      *joinSide // Table to scan
+	inner      *joinSide // Table to lookup
+	mainIndex  uint64
+	indexRange *Range
+}
+
 func initJoinedQueryNode(result *joinedQueryNode, left, right queryNode, conditions []JoinOn) error {
 	result.left = left
 	result.right = right
@@ -178,6 +197,7 @@ func (n *joinedQueryNode) Find(
 	exclusion map[int][]*Value,
 	cols map[int]bool,
 ) (iter.Seq2[*Row, error], error) {
+	// Split constraints by left and right tables
 	leftRanges, rightRanges, err := splitRanges(n.left.metadata(), n.right.metadata(), ranges)
 	if err != nil {
 		return nil, err
@@ -195,145 +215,68 @@ func (n *joinedQueryNode) Find(
 		return nil, err
 	}
 
+	// Try merge join first if it's been determined to be possible
 	if seq, usedMergeJoin, err := n.tryMergeJoin(leftEquals, rightEquals, leftRanges, rightRanges, leftExclusion, rightExclusion, leftCols, rightCols); err != nil {
 		return nil, err
 	} else if usedMergeJoin {
 		return seq, nil
 	}
 
-	if (n.mustUsePreferScanLeft && n.preferredScanLeft) || mainIndex < (uint64(1)<<n.left.metadata().ColumnsCount) {
-		// Nested loop: scan left table, lookup in right table
-		var leftMainIndex uint64
-		var leftMainRanges *Range
-		if indexRange != nil && mainIndex < (uint64(1)<<n.left.metadata().ColumnsCount) {
-			leftMainIndex = mainIndex
-			leftMainRanges = indexRange
-		} else {
-			// No hint provided, use bestIndex
-			leftMainIndex, leftMainRanges, err = n.left.metadata().bestIndex(leftEquals, leftRanges)
-			if err != nil {
-				return nil, err
-			}
-		}
-		leftSeq, err := n.left.Find(leftMainIndex, leftMainRanges, leftEquals, leftRanges, leftExclusion, leftCols)
-		if err != nil {
-			return nil, err
-		}
-		// Pre-calculate capacity for joined row map
-		joinedRowCap := n.left.metadata().ColumnsCount + n.right.metadata().ColumnsCount
+	// Fall back to nested loop join
+	// Determine which side to scan based on preferences and index hints
+	scanLeft := n.shouldScanLeft(mainIndex)
 
-		return func(yield func(*Row, error) bool) {
-			mergedRightEquals := make(map[int]*Value)
-			mergedRightExclusion := make(map[int][]*Value)
-			mergedRightRanges := make(map[int]*Range)
-
-			// Scratch buffers for constraint computation
-			rowRightEquals := make(map[int]*Value)
-			rowRightRanges := make(map[int]*Range)
-			rowRightExclusion := make(map[int][]*Value)
-			equalsBytes := make(map[int][]byte)
-			exclusionBytes := make(map[int]map[string]bool)
-			rowBytes := make(map[int][]byte)
-
-			// Reusable row for joining - moved outside loop
-			joinedRow := &Row{
-				values: make(map[int][]byte, joinedRowCap),
-			}
-
-			for leftRow, err := range leftSeq {
-				if err != nil {
-					if !yield(nil, err) {
-						return
-					}
-					continue
-				}
-				possible, err := n.ComputeContraintsForRight(
-					leftRow,
-					rowRightEquals,
-					rowRightRanges,
-					rowRightExclusion,
-					equalsBytes,
-					exclusionBytes,
-					rowBytes,
-				)
-				if err != nil {
-					if !yield(nil, err) {
-						return
-					}
-					continue
-				}
-				if !possible {
-					// Constraints conflicted, skip this left row
-					continue
-				}
-
-				ok, err := mergeEquals(&mergedRightEquals, rightEquals, rowRightEquals)
-				if err != nil {
-					if !yield(nil, err) {
-						return
-					}
-					continue
-				}
-				if !ok {
-					// Constraints conflicted (e.g. x=1 AND x=2), skip this combination
-					continue
-				}
-
-				if err := MergeRangesMap(&mergedRightRanges, rightRanges, rowRightRanges); err != nil {
-					if !yield(nil, err) {
-						return
-					}
-					continue
-				}
-
-				// mergedRightEquals is already done above
-
-				mergeNotEquals(&mergedRightExclusion, leftExclusion, rowRightExclusion)
-				rightMainIndex, rightMainRanges, err := n.right.metadata().bestIndex(mergedRightEquals, mergedRightRanges)
-				if err != nil {
-					if !yield(nil, err) {
-						return
-					}
-					continue
-				}
-				rightSeq, err := n.right.Find(rightMainIndex, rightMainRanges, mergedRightEquals, mergedRightRanges, mergedRightExclusion, rightCols)
-				if err != nil {
-					if !yield(nil, err) {
-						return
-					}
-					continue
-				}
-
-				for rightRow, err := range rightSeq {
-					if err != nil {
-						if !yield(nil, err) {
-							return
-						}
-						continue
-					}
-					n.joinInto(joinedRow, leftRow, rightRow)
-					if !yield(joinedRow, nil) {
-						return
-					}
-				}
-			}
-		}, nil
+	if scanLeft {
+		outer := &joinSide{n.left, leftEquals, leftRanges, leftExclusion, leftCols, true}
+		inner := &joinSide{n.right, rightEquals, rightRanges, rightExclusion, rightCols, false}
+		return n.executeNestedLoop(outer, inner, mainIndex, indexRange)
+	} else {
+		outer := &joinSide{n.right, rightEquals, rightRanges, rightExclusion, rightCols, false}
+		inner := &joinSide{n.left, leftEquals, leftRanges, leftExclusion, leftCols, true}
+		return n.executeNestedLoop(outer, inner, mainIndex, indexRange)
 	}
+}
 
-	// Nested loop: scan right table, lookup in left table
-	var rightMainIndex uint64
-	var rightMainRanges *Range
-	if indexRange != nil && mainIndex >= uint64(1)<<n.left.metadata().ColumnsCount {
-		rightMainIndex = mainIndex >> uint64(n.left.metadata().ColumnsCount)
-		rightMainRanges = indexRange
+// shouldScanLeft determines which table to use as the outer loop
+func (n *joinedQueryNode) shouldScanLeft(mainIndex uint64) bool {
+	// If we have a strong preference, use it
+	if n.mustUsePreferScanLeft {
+		return n.preferredScanLeft
+	}
+	// If mainIndex suggests a specific side, honor it
+	if mainIndex < (uint64(1) << n.left.metadata().ColumnsCount) {
+		return true
+	}
+	// Otherwise use our preferred direction
+	return n.preferredScanLeft
+}
+
+// executeNestedLoop performs a nested loop join with the given outer and inner sides
+// This unified function works for both left-outer and right-outer configurations
+func (n *joinedQueryNode) executeNestedLoop(
+	outer, inner *joinSide,
+	mainIndex uint64,
+	indexRange *Range,
+) (iter.Seq2[*Row, error], error) {
+	// Determine the main index for the outer table
+	var outerMainIndex uint64
+	var outerMainRanges *Range
+	var err error
+
+	// Check if we have an index hint for the outer side
+	if indexRange != nil && n.isIndexForSide(mainIndex, outer.isLeft) {
+		outerMainIndex = n.extractIndexForSide(mainIndex, outer.isLeft)
+		outerMainRanges = indexRange
 	} else {
 		// No hint provided, use bestIndex
-		rightMainIndex, rightMainRanges, err = n.right.metadata().bestIndex(rightEquals, rightRanges)
+		outerMainIndex, outerMainRanges, err = outer.node.metadata().bestIndex(outer.equals, outer.ranges)
 		if err != nil {
 			return nil, err
 		}
 	}
-	rightSeq, err := n.right.Find(rightMainIndex, rightMainRanges, rightEquals, rightRanges, rightExclusion, rightCols)
+
+	// Start scanning the outer table
+	outerSeq, err := outer.node.Find(outerMainIndex, outerMainRanges, outer.equals, outer.ranges, outer.exclusion, outer.cols)
 	if err != nil {
 		return nil, err
 	}
@@ -342,14 +285,15 @@ func (n *joinedQueryNode) Find(
 	joinedRowCap := n.left.metadata().ColumnsCount + n.right.metadata().ColumnsCount
 
 	return func(yield func(*Row, error) bool) {
-		mergedLeftEquals := make(map[int]*Value)
-		mergedLeftExclusion := make(map[int][]*Value)
-		mergedLeftRanges := make(map[int]*Range)
+		// Buffers for merging constraints
+		mergedInnerEquals := make(map[int]*Value)
+		mergedInnerExclusion := make(map[int][]*Value)
+		mergedInnerRanges := make(map[int]*Range)
 
 		// Scratch buffers for constraint computation
-		rowLeftEquals := make(map[int]*Value)
-		rowLeftRanges := make(map[int]*Range)
-		rowLeftExclusions := make(map[int][]*Value)
+		rowInnerEquals := make(map[int]*Value)
+		rowInnerRanges := make(map[int]*Range)
+		rowInnerExclusion := make(map[int][]*Value)
 		equalsBytes := make(map[int][]byte)
 		exclusionBytes := make(map[int]map[string]bool)
 		rowBytes := make(map[int][]byte)
@@ -359,23 +303,25 @@ func (n *joinedQueryNode) Find(
 			values: make(map[int][]byte, joinedRowCap),
 		}
 
-		for rightRow, err := range rightSeq {
+		for outerRow, err := range outerSeq {
 			if err != nil {
 				if !yield(nil, err) {
 					return
 				}
 				continue
 			}
-			possible, err := n.ComputeContraintsForLeft(
-				rightRow,
-				rowLeftEquals,
-				rowLeftRanges,
-				rowLeftExclusions,
+
+			// Compute constraints for inner table based on outer row
+			possible, err := n.computeConstraints(
+				outerRow,
+				outer.isLeft, // direction: true if outer is left
+				rowInnerEquals,
+				rowInnerRanges,
+				rowInnerExclusion,
 				equalsBytes,
 				exclusionBytes,
 				rowBytes,
 			)
-
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -383,10 +329,12 @@ func (n *joinedQueryNode) Find(
 				continue
 			}
 			if !possible {
-				// Constraints conflicted, skip this right row
+				// Constraints conflicted, skip this outer row
 				continue
 			}
-			ok, err := mergeEquals(&mergedLeftEquals, leftEquals, rowLeftEquals)
+
+			// Merge row-derived constraints with existing constraints
+			ok, err := mergeEquals(&mergedInnerEquals, inner.equals, rowInnerEquals)
 			if err != nil {
 				if !yield(nil, err) {
 					return
@@ -394,44 +342,76 @@ func (n *joinedQueryNode) Find(
 				continue
 			}
 			if !ok {
+				// Constraints conflicted (e.g. x=1 AND x=2), skip
 				continue
 			}
-			mergeNotEquals(&mergedLeftExclusion, leftExclusion, rowLeftExclusions)
 
-			if err := MergeRangesMap(&mergedLeftRanges, leftRanges, rowLeftRanges); err != nil {
+			if err := MergeRangesMap(&mergedInnerRanges, inner.ranges, rowInnerRanges); err != nil {
 				if !yield(nil, err) {
 					return
 				}
 				continue
 			}
-			leftMainIndex, leftMainRanges, err := n.left.metadata().bestIndex(mergedLeftEquals, mergedLeftRanges)
+
+			mergeNotEquals(&mergedInnerExclusion, inner.exclusion, rowInnerExclusion)
+
+			// Find best index for inner table with merged constraints
+			innerMainIndex, innerMainRanges, err := inner.node.metadata().bestIndex(mergedInnerEquals, mergedInnerRanges)
 			if err != nil {
 				if !yield(nil, err) {
 					return
 				}
 				continue
 			}
-			leftSeq, err := n.left.Find(leftMainIndex, leftMainRanges, mergedLeftEquals, mergedLeftRanges, mergedLeftExclusion, leftCols)
+
+			// Lookup matching rows in inner table
+			innerSeq, err := inner.node.Find(innerMainIndex, innerMainRanges, mergedInnerEquals, mergedInnerRanges, mergedInnerExclusion, inner.cols)
 			if err != nil {
 				if !yield(nil, err) {
 					return
 				}
 				continue
 			}
-			for leftRow, err := range leftSeq {
+
+			// Join outer row with each matching inner row
+			for innerRow, err := range innerSeq {
 				if err != nil {
 					if !yield(nil, err) {
 						return
 					}
 					continue
 				}
-				n.joinInto(joinedRow, leftRow, rightRow)
+
+				// Join rows based on which side is which
+				if outer.isLeft {
+					n.joinInto(joinedRow, outerRow, innerRow)
+				} else {
+					n.joinInto(joinedRow, innerRow, outerRow)
+				}
+
 				if !yield(joinedRow, nil) {
 					return
 				}
 			}
 		}
 	}, nil
+}
+
+// isIndexForSide checks if the given mainIndex refers to the specified side
+func (n *joinedQueryNode) isIndexForSide(mainIndex uint64, isLeft bool) bool {
+	leftMaxIndex := uint64(1) << n.left.metadata().ColumnsCount
+	if isLeft {
+		return mainIndex < leftMaxIndex
+	}
+	return mainIndex >= leftMaxIndex
+}
+
+// extractIndexForSide extracts the actual index bits for the specified side
+func (n *joinedQueryNode) extractIndexForSide(mainIndex uint64, isLeft bool) uint64 {
+	if isLeft {
+		return mainIndex
+	}
+	return mainIndex >> uint64(n.left.metadata().ColumnsCount)
 }
 
 func (n *joinedQueryNode) joinInto(dest *Row, leftRow, rightRow *Row) {
@@ -441,6 +421,176 @@ func (n *joinedQueryNode) joinInto(dest *Row, leftRow, rightRow *Row) {
 	for k, v := range rightRow.values {
 		dest.values[k+offset] = v
 	}
+}
+
+// computeConstraints is a unified function that computes constraints for the target side based on values from the source row
+// If outerIsLeft is true: source=left row, target=right; otherwise source=right row, target=left
+func (n *joinedQueryNode) computeConstraints(
+	sourceRow *Row,
+	outerIsLeft bool,
+	resultEquals map[int]*Value,
+	resultRanges map[int]*Range,
+	resultExclusion map[int][]*Value,
+	equalsBytes map[int][]byte,
+	exclusionBytes map[int]map[string]bool,
+	rowBytes map[int][]byte,
+) (bool, error) {
+	clear(resultRanges)
+	clear(resultEquals)
+	clear(resultExclusion)
+	clear(equalsBytes)
+	clear(exclusionBytes)
+	clear(rowBytes)
+
+	for _, cond := range n.conditions {
+		// Determine which fields to read from and write to
+		var sourceField, targetField int
+		if outerIsLeft {
+			sourceField = cond.LeftField
+			targetField = cond.RightField
+		} else {
+			sourceField = cond.RightField
+			targetField = cond.LeftField
+		}
+
+		// Get value from source row
+		var key []byte
+		var sourceVal any
+		if rowByte, ok := rowBytes[sourceField]; ok {
+			key = rowByte
+		} else {
+			err := sourceRow.Get(sourceField, &sourceVal)
+			if err != nil {
+				return false, err
+			}
+			key, err = ToKey(ValueOfLiteral(sourceVal))
+			if err != nil {
+				return false, err
+			}
+			rowBytes[sourceField] = key
+		}
+
+		var curRange *Range
+		operator := cond.Operator
+
+		// For right-to-left computation, need to invert comparison operators
+		if !outerIsLeft {
+			switch operator {
+			case LT:
+				operator = GT
+			case LTE:
+				operator = GTE
+			case GT:
+				operator = LT
+			case GTE:
+				operator = LTE
+			}
+		}
+
+		switch operator {
+		case EQ:
+			if excs, err := exclusionBytes[targetField]; err {
+				if excs[string(key)] {
+					return false, nil
+				}
+			}
+			if rng, ok := resultRanges[targetField]; ok {
+				valCheck := &Value{raw: key}
+				contains, err := rng.Contains(valCheck)
+				if err != nil {
+					return false, err
+				}
+				if !contains {
+					return false, nil
+				}
+				delete(resultRanges, targetField)
+			}
+			if existing, exists := equalsBytes[targetField]; exists {
+				if !bytes.Equal(existing, key) {
+					return false, nil
+				}
+			} else {
+				equalsBytes[targetField] = key
+				if val, exists := resultEquals[targetField]; exists {
+					val.SetRaw(key)
+				} else {
+					if sourceVal == nil {
+						sourceRow.Get(sourceField, &sourceVal)
+					}
+					resultEquals[targetField] = ValueOfLiteral(sourceVal)
+				}
+			}
+		case LT:
+			// Source < Target means Target > Source, so Target is in range (Source, nil)
+			var err error
+			curRange, err = NewRangeFromBytes(key, nil, false, false)
+			if err != nil {
+				return false, err
+			}
+		case LTE:
+			// Source <= Target means Target >= Source, so Target is in range [Source, nil)
+			var err error
+			curRange, err = NewRangeFromBytes(key, nil, true, false)
+			if err != nil {
+				return false, err
+			}
+		case GT:
+			// Source > Target means Target < Source, so Target is in range (nil, Source)
+			var err error
+			curRange, err = NewRangeFromBytes(nil, key, false, false)
+			if err != nil {
+				return false, err
+			}
+		case GTE:
+			// Source >= Target means Target <= Source, so Target is in range (nil, Source]
+			var err error
+			curRange, err = NewRangeFromBytes(nil, key, false, true)
+			if err != nil {
+				return false, err
+			}
+		case NEQ:
+			if eqb, ok := equalsBytes[targetField]; ok {
+				if bytes.Equal(eqb, key) {
+					return false, nil
+				}
+			}
+			if excs, exists := exclusionBytes[targetField]; !exists {
+				exclusionBytes[targetField] = make(map[string]bool)
+				curValue := ValueOfRaw(key)
+				resultExclusion[targetField] = append(resultExclusion[targetField], curValue)
+				exclusionBytes[targetField][string(key)] = true
+			} else if !excs[string(key)] {
+				curValue := ValueOfRaw(key)
+				resultExclusion[targetField] = append(resultExclusion[targetField], curValue)
+				excs[string(key)] = true
+			}
+		default:
+			return false, ErrUnsupportedOperator(cond.Operator)
+		}
+
+		if curRange != nil {
+			if existingEquals, exists := resultEquals[targetField]; exists {
+				contains, err := curRange.Contains(existingEquals)
+				if err != nil {
+					return false, err
+				}
+				if !contains {
+					return false, nil
+				}
+				continue
+			}
+			if existingRange, ok := resultRanges[targetField]; ok {
+				var err error
+				resultRanges[targetField], err = existingRange.Merge(curRange)
+				if err != nil {
+					return false, err
+				}
+			} else {
+				resultRanges[targetField] = curRange
+			}
+		}
+	}
+	return true, nil
 }
 
 func (n *joinedQueryNode) ComputeContraintsForRight(
