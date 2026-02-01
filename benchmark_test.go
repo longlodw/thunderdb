@@ -1061,3 +1061,234 @@ func BenchmarkBatchConcurrent(b *testing.B) {
 	runWorkload(b, "Mixed_90_10", 10) // 10% writes
 	runWorkload(b, "Mixed_50_50", 50) // 50% writes
 }
+
+// BenchmarkRecursivePropagation tests the performance of recursive queries with batching
+func BenchmarkRecursivePropagation(b *testing.B) {
+	sizes := []int{10, 50, 100}
+
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("TreeDepth_%d", size), func(b *testing.B) {
+			db, cleanup := setupBenchmarkDB(b)
+			defer cleanup()
+
+			// Setup: Create a deep tree structure
+			// Tree: 0 -> 1 -> 2 -> 3 -> ... -> size-1
+			tx, err := db.Begin(true)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			nodesRel := "nodes"
+			err = tx.CreateStorage(nodesRel, 2, []IndexInfo{
+				{ReferencedCols: []int{0}, IsUnique: true},  // id index
+				{ReferencedCols: []int{1}, IsUnique: false}, // parent_id index
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			// Insert nodes: id=i, parent_id=i-1
+			for i := 0; i < size; i++ {
+				parentID := ""
+				if i > 0 {
+					parentID = fmt.Sprintf("%d", i-1)
+				}
+				err = tx.Insert(nodesRel, map[int]any{
+					0: fmt.Sprintf("%d", i),
+					1: parentID,
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			if err := tx.Commit(); err != nil {
+				b.Fatal(err)
+			}
+
+			b.ResetTimer()
+
+			// Benchmark: Run transitive closure query
+			for i := 0; i < b.N; i++ {
+				tx, err := db.Begin(false)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				nodes, err := tx.StoredQuery(nodesRel)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				// Create closure query: reachable(ancestor, descendant)
+				qReach, err := tx.ClosureQuery(2, []IndexInfo{
+					{ReferencedCols: []int{0, 1}, IsUnique: true},
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				// Base case: reachable(parent, child) :- nodes(child, parent)
+				baseProj, err := nodes.Project(1, 0)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				// Recursive case: reachable(a, c) :- nodes(b, a), reachable(b, c)
+				recJoin, err := nodes.Join(qReach, JoinOn{LeftField: 0, RightField: 0, Operator: EQ})
+				if err != nil {
+					b.Fatal(err)
+				}
+				recProj, err := recJoin.Project(1, 3)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				if err := qReach.ClosedUnder(baseProj, recProj); err != nil {
+					b.Fatal(err)
+				}
+
+				// Execute: Find all descendants of node 0
+				seq, err := tx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: "0"})
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				count := 0
+				for _, err := range seq {
+					if err != nil {
+						b.Fatal(err)
+					}
+					count++
+				}
+
+				tx.Rollback()
+			}
+		})
+	}
+}
+
+// BenchmarkRecursivePropagationWide tests batching with wide fanout (many children per node)
+func BenchmarkRecursivePropagationWide(b *testing.B) {
+	configs := []struct {
+		depth  int
+		fanout int
+	}{
+		{3, 5},  // 3 levels, 5 children each = 1+5+25 = 31 nodes
+		{3, 10}, // 3 levels, 10 children each = 1+10+100 = 111 nodes
+		{4, 5},  // 4 levels, 5 children each = 1+5+25+125 = 156 nodes
+	}
+
+	for _, cfg := range configs {
+		b.Run(fmt.Sprintf("Depth%d_Fanout%d", cfg.depth, cfg.fanout), func(b *testing.B) {
+			db, cleanup := setupBenchmarkDB(b)
+			defer cleanup()
+
+			// Setup: Create a wide tree
+			tx, err := db.Begin(true)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			nodesRel := "nodes"
+			err = tx.CreateStorage(nodesRel, 2, []IndexInfo{
+				{ReferencedCols: []int{0}, IsUnique: true},  // id index
+				{ReferencedCols: []int{1}, IsUnique: false}, // parent_id index
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			// Insert root
+			nodeID := 0
+			err = tx.Insert(nodesRel, map[int]any{
+				0: fmt.Sprintf("%d", nodeID),
+				1: "",
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			nodeID++
+
+			// Insert tree level by level
+			parentIDs := []int{0}
+			for level := 1; level < cfg.depth; level++ {
+				nextParentIDs := []int{}
+				for _, parentID := range parentIDs {
+					for child := 0; child < cfg.fanout; child++ {
+						err = tx.Insert(nodesRel, map[int]any{
+							0: fmt.Sprintf("%d", nodeID),
+							1: fmt.Sprintf("%d", parentID),
+						})
+						if err != nil {
+							b.Fatal(err)
+						}
+						nextParentIDs = append(nextParentIDs, nodeID)
+						nodeID++
+					}
+				}
+				parentIDs = nextParentIDs
+			}
+
+			if err := tx.Commit(); err != nil {
+				b.Fatal(err)
+			}
+
+			b.ResetTimer()
+
+			// Benchmark: Run transitive closure query
+			for i := 0; i < b.N; i++ {
+				tx, err := db.Begin(false)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				nodes, err := tx.StoredQuery(nodesRel)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				qReach, err := tx.ClosureQuery(2, []IndexInfo{
+					{ReferencedCols: []int{0, 1}, IsUnique: true},
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				baseProj, err := nodes.Project(1, 0)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				recJoin, err := nodes.Join(qReach, JoinOn{LeftField: 0, RightField: 0, Operator: EQ})
+				if err != nil {
+					b.Fatal(err)
+				}
+				recProj, err := recJoin.Project(1, 3)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				if err := qReach.ClosedUnder(baseProj, recProj); err != nil {
+					b.Fatal(err)
+				}
+
+				// Execute: Find all descendants of node 0 (root)
+				seq, err := tx.Select(qReach, Condition{Field: 0, Operator: EQ, Value: "0"})
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				count := 0
+				for _, err := range seq {
+					if err != nil {
+						b.Fatal(err)
+					}
+					count++
+				}
+
+				tx.Rollback()
+			}
+		})
+	}
+}
