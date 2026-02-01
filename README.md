@@ -52,10 +52,10 @@ func main() {
 		// 3. Define Schema (Create a Relation)
 		// Columns: 0=id, 1=username, 2=role
 		// Index on column 1 (username), with unique constraint on column 0 (id)
-		err := tx.CreateStorage("users", 3, []thunderdb.IndexInfo{
-			{ReferencedCols: []int{0}, IsUnique: true},  // id (unique)
-			{ReferencedCols: []int{1}, IsUnique: false}, // username (indexed)
-		})
+		err := tx.CreateStorage("users", 3,
+			thunderdb.Unique(0),  // id (unique)
+			thunderdb.Index(1),   // username (indexed)
+		)
 		if err != nil {
 			return err
 		}
@@ -76,11 +76,9 @@ func main() {
 		}
 
 		// Execute Select with filter for username "alice"
-		results, err := tx.Select(users, thunderdb.Condition{
-			Field:    1, // username column
-			Operator: thunderdb.EQ,
-			Value:    "alice",
-		})
+		results, err := tx.Select(users,
+			thunderdb.WhereEQ(1, "alice"), // username = "alice"
+		)
 		if err != nil {
 			return err
 		}
@@ -138,9 +136,9 @@ if err != nil {
 defer tx.Rollback()
 
 // Define schema: 2 columns, unique index on column 0
-err = tx.CreateStorage("users", 2, []thunderdb.IndexInfo{
-    {ReferencedCols: []int{0}, IsUnique: true},
-})
+err = tx.CreateStorage("users", 2,
+    thunderdb.Unique(0), // unique constraint on column 0
+)
 if err != nil {
     panic(err)
 }
@@ -166,20 +164,18 @@ A **Unique Constraint** ensures that all values in a column (or a set of columns
 ```go
 // Define Schema with Unique and Composite Index
 // Columns: 0=id, 1=username, 2=first, 3=last
-err := tx.CreateStorage("users", 4, []thunderdb.IndexInfo{
-    {ReferencedCols: []int{0}, IsUnique: true},     // Unique constraint on id
-    {ReferencedCols: []int{1}, IsUnique: false},    // Index on username
-    {ReferencedCols: []int{2, 3}, IsUnique: false}, // Composite index on (first, last)
-    {ReferencedCols: []int{1, 2}, IsUnique: true},  // Composite unique on (username, first)
-})
+err := tx.CreateStorage("users", 4,
+    thunderdb.Unique(0),       // Unique constraint on id
+    thunderdb.Index(1),        // Index on username
+    thunderdb.Index(2, 3),     // Composite index on (first, last)
+    thunderdb.Unique(1, 2),    // Composite unique on (username, first)
+)
 
 // Querying using a condition
 users, _ := tx.StoredQuery("users")
-results, _ := tx.Select(users, thunderdb.Condition{
-    Field:    1, // username column
-    Operator: thunderdb.EQ,
-    Value:    "alice",
-})
+results, _ := tx.Select(users,
+    thunderdb.WhereEQ(1, "alice"), // username = "alice"
+)
 ```
 
 ### Recursive Queries
@@ -198,10 +194,10 @@ err = db.Update(func(tx *thunderdb.Tx) error {
 
     // Create a recursive query for path traversal
     // Schema: 0=ancestor, 1=descendant
-    qPath, err := tx.ClosureQuery(2, []thunderdb.IndexInfo{
-        {ReferencedCols: []int{0}, IsUnique: false}, // ancestor
-        {ReferencedCols: []int{1}, IsUnique: false}, // descendant
-    })
+    qPath, err := tx.ClosureQuery(2,
+        thunderdb.Index(0), // ancestor
+        thunderdb.Index(1), // descendant
+    )
     if err != nil {
         return err
     }
@@ -216,11 +212,9 @@ err = db.Update(func(tx *thunderdb.Tx) error {
     // Rule 2 (Recursive Step): Indirect reports
     // path(a, c) :- employees(b, ..., a), path(b, c)
     // Join employees with path on employees.id = path.ancestor
-    joinedPathProj, err := employees.Join(qPath, thunderdb.JoinOn{
-        LeftField:  0, // employees.id
-        RightField: 0, // path.ancestor
-        Operator:   thunderdb.EQ,
-    })
+    joinedPathProj, err := employees.Join(qPath,
+        thunderdb.OnEQ(0, 0), // employees.id = path.ancestor
+    )
     if err != nil {
         return err
     }
@@ -235,11 +229,9 @@ err = db.Update(func(tx *thunderdb.Tx) error {
     }
 
     // Execute: Find all descendants of ID "1"
-    seq, err := tx.Select(qPath, thunderdb.Condition{
-        Field:    0, // ancestor
-        Operator: thunderdb.EQ,
-        Value:    "1",
-    })
+    seq, err := tx.Select(qPath,
+        thunderdb.WhereEQ(0, "1"), // ancestor = "1"
+    )
     if err != nil {
         return err
     }
