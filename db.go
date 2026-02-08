@@ -3,6 +3,7 @@ package thunderdb
 import (
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -14,9 +15,10 @@ import (
 //
 // A DB is safe for concurrent use by multiple goroutines.
 type DB struct {
-	db       *boltdb.DB
-	stats    internalStats
-	openedAt time.Time
+	db         *boltdb.DB
+	stats      internalStats
+	openedAt   time.Time
+	storedMeta sync.Map
 }
 
 // DBOptions configures the database behavior. It is an alias for boltdb.Options.

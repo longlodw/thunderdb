@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"iter"
+	"sync"
 
 	"github.com/openkvlab/boltdb"
 	boltdb_errors "github.com/openkvlab/boltdb/errors"
@@ -104,7 +105,12 @@ func loadMetadata(
 	tx *boltdb.Tx,
 	name string,
 	metadata *Metadata,
+	storedMeta *sync.Map,
 ) error {
+	if v, ok := storedMeta.Load(name); ok {
+		*metadata = *v.(*Metadata)
+		return nil
+	}
 	bucket := tx.Bucket([]byte(name))
 	if bucket == nil {
 		return boltdb_errors.ErrBucketNotFound
@@ -116,12 +122,14 @@ func loadMetadata(
 	if err := gobCodec.Unmarshal(metadataBytes, metadata); err != nil {
 		return err
 	}
+	storedMeta.Store(name, metadata)
 	return nil
 }
 
 func loadStorage(
 	tx *boltdb.Tx,
 	name string,
+	storedMeta *sync.Map,
 ) (*storage, error) {
 	bucket := tx.Bucket([]byte(name))
 	if bucket == nil {
@@ -131,7 +139,7 @@ func loadStorage(
 		bucket: bucket,
 		name:   name,
 	}
-	if err := loadMetadata(tx, name, &s.metadata); err != nil {
+	if err := loadMetadata(tx, name, &s.metadata, storedMeta); err != nil {
 		return nil, err
 	}
 	return s, nil

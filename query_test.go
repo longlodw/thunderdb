@@ -2383,3 +2383,244 @@ func testQuery_MutualRecursion_Body(t *testing.T) {
 		}
 	}
 }
+
+// TestQuery_MergeJoinMultiTableNonCorrelatedColumns tests a three-way join where:
+// - t0 JOIN t1 ON t0.b = t1.a
+// - t1 JOIN t2 ON t1.b = t2.a
+// All tables have 2 columns with indexes on both columns.
+// The values are intentionally non-correlated (if col_a increases, col_b does not).
+//
+// This test is designed to expose potential issues where merge join might incorrectly
+// assume that join keys follow the same ordering as the index being scanned.
+func TestQuery_MergeJoinMultiTableNonCorrelatedColumns(t *testing.T) {
+	db, cleanup := setupTestDBForQuery(t)
+	defer cleanup()
+
+	tx, err := db.Begin(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	// Create t0 with 2 columns: col_a, col_b
+	// Both columns have indexes
+	t0 := "t0"
+	err = tx.CreateStorage(t0, 2,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: false}, // index on col_a
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // index on col_b
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create t1 with 2 columns: col_a, col_b
+	// Both columns have indexes
+	t1 := "t1"
+	err = tx.CreateStorage(t1, 2,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: false}, // index on col_a
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // index on col_b
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create t2 with 2 columns: col_a, col_b
+	// Both columns have indexes
+	t2 := "t2"
+	err = tx.CreateStorage(t2, 2,
+		IndexInfo{ReferencedCols: []int{0}, IsUnique: false}, // index on col_a
+		IndexInfo{ReferencedCols: []int{1}, IsUnique: false}, // index on col_b
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert data into t0
+	// col_a is increasing, col_b is decreasing (non-correlated)
+	t0Data := []map[int]any{
+		{0: 1, 1: 50}, // col_a=1, col_b=50
+		{0: 2, 1: 40}, // col_a=2, col_b=40
+		{0: 3, 1: 30}, // col_a=3, col_b=30
+		{0: 4, 1: 20}, // col_a=4, col_b=20
+		{0: 5, 1: 10}, // col_a=5, col_b=10
+	}
+	for _, data := range t0Data {
+		if err := tx.Insert(t0, data); err != nil {
+			t.Fatalf("Failed to insert into t0: %v", err)
+		}
+	}
+
+	// Insert data into t1
+	// col_a should match t0.col_b values
+	// col_b is randomly ordered (non-correlated with col_a)
+	t1Data := []map[int]any{
+		{0: 10, 1: 100}, // col_a=10 (matches t0.col_b=10), col_b=100
+		{0: 20, 1: 80},  // col_a=20 (matches t0.col_b=20), col_b=80
+		{0: 30, 1: 60},  // col_a=30 (matches t0.col_b=30), col_b=60
+		{0: 40, 1: 90},  // col_a=40 (matches t0.col_b=40), col_b=90
+		{0: 50, 1: 70},  // col_a=50 (matches t0.col_b=50), col_b=70
+	}
+	for _, data := range t1Data {
+		if err := tx.Insert(t1, data); err != nil {
+			t.Fatalf("Failed to insert into t1: %v", err)
+		}
+	}
+
+	// Insert data into t2
+	// col_a should match t1.col_b values
+	// col_b is randomly ordered (non-correlated with col_a)
+	t2Data := []map[int]any{
+		{0: 60, 1: 600},   // col_a=60 (matches t1.col_b=60), col_b=600
+		{0: 70, 1: 700},   // col_a=70 (matches t1.col_b=70), col_b=700
+		{0: 80, 1: 800},   // col_a=80 (matches t1.col_b=80), col_b=800
+		{0: 90, 1: 900},   // col_a=90 (matches t1.col_b=90), col_b=900
+		{0: 100, 1: 1000}, // col_a=100 (matches t1.col_b=100), col_b=1000
+	}
+	for _, data := range t2Data {
+		if err := tx.Insert(t2, data); err != nil {
+			t.Fatalf("Failed to insert into t2: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now query the three-way join
+	tx, err = db.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	t0Q, err := tx.StoredQuery(t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t1Q, err := tx.StoredQuery(t1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t2Q, err := tx.StoredQuery(t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First join: t0 JOIN t1 ON t0.col_b = t1.col_a
+	// t0.col_b is at index 1, t1.col_a is at index 0
+	join01, err := t0Q.Join(t1Q, JoinCondition{Left: 1, Right: 0, Operator: EQ})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// After t0 JOIN t1, the schema is:
+	// [t0.col_a, t0.col_b, t1.col_a, t1.col_b]
+	// Positions: [0, 1, 2, 3]
+	// t1.col_b is now at position 3
+
+	// Second join: (t0 JOIN t1) JOIN t2 ON t1.col_b = t2.col_a
+	// t1.col_b is at position 3 in the joined result
+	// t2.col_a is at position 0 in t2
+	join012, err := join01.Join(t2Q, JoinCondition{Left: 3, Right: 0, Operator: EQ})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Execute the three-way join
+	seq, err := tx.Select(join012)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Expected results:
+	// The join chain should follow:
+	// t0.col_b -> t1.col_a, then t1.col_b -> t2.col_a
+	//
+	// For example:
+	// t0: (col_a=5, col_b=10) joins with t1: (col_a=10, col_b=100)
+	// which joins with t2: (col_a=100, col_b=1000)
+	// Result: (5, 10, 10, 100, 100, 1000)
+
+	type Result struct {
+		t0_col_a int
+		t0_col_b int
+		t1_col_a int
+		t1_col_b int
+		t2_col_a int
+		t2_col_b int
+	}
+
+	results := make([]Result, 0)
+	for row, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var r Result
+		if err := row.Get(0, &r.t0_col_a); err != nil {
+			t.Fatalf("Failed to get t0.col_a: %v", err)
+		}
+		if err := row.Get(1, &r.t0_col_b); err != nil {
+			t.Fatalf("Failed to get t0.col_b: %v", err)
+		}
+		if err := row.Get(2, &r.t1_col_a); err != nil {
+			t.Fatalf("Failed to get t1.col_a: %v", err)
+		}
+		if err := row.Get(3, &r.t1_col_b); err != nil {
+			t.Fatalf("Failed to get t1.col_b: %v", err)
+		}
+		if err := row.Get(4, &r.t2_col_a); err != nil {
+			t.Fatalf("Failed to get t2.col_a: %v", err)
+		}
+		if err := row.Get(5, &r.t2_col_b); err != nil {
+			t.Fatalf("Failed to get t2.col_b: %v", err)
+		}
+
+		results = append(results, r)
+	}
+
+	// Verify we got the expected 5 results (one for each row in t0)
+	if len(results) != 5 {
+		t.Errorf("Expected 5 joined rows, got %d", len(results))
+	}
+
+	// Verify each result maintains the join relationships
+	for i, r := range results {
+		// Check first join: t0.col_b = t1.col_a
+		if r.t0_col_b != r.t1_col_a {
+			t.Errorf("Result %d: t0.col_b (%d) != t1.col_a (%d)", i, r.t0_col_b, r.t1_col_a)
+		}
+
+		// Check second join: t1.col_b = t2.col_a
+		if r.t1_col_b != r.t2_col_a {
+			t.Errorf("Result %d: t1.col_b (%d) != t2.col_a (%d)", i, r.t1_col_b, r.t2_col_a)
+		}
+	}
+
+	// Verify specific expected results
+	expectedResults := []Result{
+		{t0_col_a: 5, t0_col_b: 10, t1_col_a: 10, t1_col_b: 100, t2_col_a: 100, t2_col_b: 1000},
+		{t0_col_a: 4, t0_col_b: 20, t1_col_a: 20, t1_col_b: 80, t2_col_a: 80, t2_col_b: 800},
+		{t0_col_a: 3, t0_col_b: 30, t1_col_a: 30, t1_col_b: 60, t2_col_a: 60, t2_col_b: 600},
+		{t0_col_a: 2, t0_col_b: 40, t1_col_a: 40, t1_col_b: 90, t2_col_a: 90, t2_col_b: 900},
+		{t0_col_a: 1, t0_col_b: 50, t1_col_a: 50, t1_col_b: 70, t2_col_a: 70, t2_col_b: 700},
+	}
+
+	for _, expected := range expectedResults {
+		found := false
+		for _, actual := range results {
+			if actual.t0_col_a == expected.t0_col_a &&
+				actual.t0_col_b == expected.t0_col_b &&
+				actual.t1_col_a == expected.t1_col_a &&
+				actual.t1_col_b == expected.t1_col_b &&
+				actual.t2_col_a == expected.t2_col_a &&
+				actual.t2_col_b == expected.t2_col_b {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected result not found: %+v", expected)
+		}
+	}
+}

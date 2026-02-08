@@ -177,12 +177,13 @@ func (tx *Tx) CreateStorage(
 	if err := initStoredMetadata(&metadataObj, columnCount, indexInfos); err != nil {
 		return err
 	}
-	if _, err := newStorage(tx.tx, relation, metadataObj.ColumnsCount, metadataObj.Indexes); err != nil {
+	if s, err := newStorage(tx.tx, relation, metadataObj.ColumnsCount, metadataObj.Indexes); err != nil {
 		return err
+	} else {
+		tx.stores[relation] = s
 	}
-	if tx.db != nil {
-		atomic.AddInt64(&tx.db.stats.storagesCreated, 1)
-	}
+	atomic.AddInt64(&tx.db.stats.storagesCreated, 1)
+	tx.db.storedMeta.Store(relation, &metadataObj)
 	return nil
 }
 
@@ -219,7 +220,7 @@ func (tx *Tx) loadStorage(relation string) (*storage, error) {
 	if ok {
 		return s, nil
 	}
-	s, err := loadStorage(tx.tx, relation)
+	s, err := loadStorage(tx.tx, relation, &tx.db.storedMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +331,7 @@ func (tx *Tx) DeleteStorage(relation string) error {
 //	})
 func (tx *Tx) StoredQuery(name string) (*StoredQuery, error) {
 	var metadataObj Metadata
-	if err := loadMetadata(tx.tx, name, &metadataObj); err != nil {
+	if err := loadMetadata(tx.tx, name, &metadataObj, &tx.db.storedMeta); err != nil {
 		return nil, err
 	}
 	return &StoredQuery{
@@ -381,7 +382,7 @@ func (tx *Tx) ClosureQuery(colsCount int, indexInfos ...IndexInfo) (*Closure, er
 // and index information.
 func (tx *Tx) Metadata(relation string) (*Metadata, error) {
 	var metadataObj Metadata
-	if err := loadMetadata(tx.tx, relation, &metadataObj); err != nil {
+	if err := loadMetadata(tx.tx, relation, &metadataObj, &tx.db.storedMeta); err != nil {
 		return nil, err
 	}
 	return &metadataObj, nil
@@ -617,7 +618,7 @@ func (tx *Tx) constructQueryGraph(
 	case *StoredQuery:
 		result := &backedQueryNode{}
 		explored[bf] = result
-		storage, err := loadStorage(tx.tx, b.storageName)
+		storage, err := loadStorage(tx.tx, b.storageName, &tx.db.storedMeta)
 		if err != nil {
 			return nil, err
 		}
