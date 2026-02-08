@@ -10,18 +10,20 @@ import (
 
 // Type tags for lexicographic ordering
 // Ordered so: nil < false < true < negative ints < positive ints < floats < strings < bytes < time < tuples
+// Note: tagTupleEnd is 0x00 so that empty tuples sort before non-empty tuples
+// (empty tuple [0x0A][0x00] < tuple with elements [0x0A][0x01...])
 const (
-	tagNil      byte = 0x00
-	tagFalse    byte = 0x01
-	tagTrue     byte = 0x02
-	tagInt64    byte = 0x03
-	tagUint64   byte = 0x04
-	tagFloat64  byte = 0x05
-	tagString   byte = 0x06
-	tagBytes    byte = 0x07
-	tagTime     byte = 0x08
-	tagTuple    byte = 0x09
-	tagTupleEnd byte = 0x0A
+	tagTupleEnd byte = 0x00 // Must be 0x00 for correct tuple ordering
+	tagNil      byte = 0x01
+	tagFalse    byte = 0x02
+	tagTrue     byte = 0x03
+	tagInt64    byte = 0x04
+	tagUint64   byte = 0x05
+	tagFloat64  byte = 0x06
+	tagString   byte = 0x07
+	tagBytes    byte = 0x08
+	tagTime     byte = 0x09
+	tagTuple    byte = 0x0A
 )
 
 // Escape sequences for strings/bytes (to allow embedded 0x00)
